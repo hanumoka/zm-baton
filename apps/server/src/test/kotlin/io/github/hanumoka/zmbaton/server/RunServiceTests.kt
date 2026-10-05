@@ -32,6 +32,10 @@ class RunServiceTests @Autowired constructor(
 	private fun event(gen: Long, seq: Long, kind: String = "answer", payload: Map<String, Any?> = mapOf("text" to "hi")) =
 		EventIn(eventId = "evt_" + UUID.randomUUID(), generation = gen, seq = seq, kind = kind, payload = payload)
 
+	private fun workRow(workId: String): Map<String, Any?> =
+		jdbc.sql("select stage, wait_reasons::text as wait_reasons, generation, version, updated_at from work_items where id = :id")
+			.param("id", workId).query().singleRow()
+
 	private fun runRow(runId: String): Map<String, Any?> =
 		jdbc.sql("select state, end_reason, generation, late_reports from runs where id = :id")
 			.param("id", runId).query().singleRow()
@@ -92,13 +96,48 @@ class RunServiceTests @Autowired constructor(
 		val genB = service.claim(runB, "dev_2").generation
 		assertEquals(genA + 1, genB)
 
+		val workBefore = workRow(workId)
+		val runBBefore = runRow(runB)
+
 		// The old executor reports late, and even claims it ended successfully.
-		val late = service.ingest(runA, EventBatch(1, listOf(event(genA, 3, "lifecycle", mapOf("phase" to "ended", "end_reason" to "submitted")))))
+		val lateEvent = event(genA, 3, "lifecycle", mapOf("phase" to "ended", "end_reason" to "submitted"))
+		val late = service.ingest(runA, EventBatch(1, listOf(lateEvent)))
 		assertEquals(EventResult(stored = 1, duplicates = 0, late = 1, rejected = 0), late)
 		val a = runRow(runA)
 		assertEquals("replaced", a["end_reason"])
 		assertEquals(true, a["late_reports"])
-		assertEquals("claimed", runRow(runB)["state"])
+		assertEquals(runBBefore, runRow(runB))
+		assertEquals(workBefore, workRow(workId))
+		val stored = jdbc.sql("select generation, kind from run_events where event_id = :id")
+			.param("id", lateEvent.eventId).query().singleRow()
+		assertEquals(genA, stored["generation"])
+		assertEquals("lifecycle", stored["kind"])
+	}
+
+	@Test
+	fun `an ended report without a contract end reason is refused and changes nothing`() {
+		val (_, runId) = newRun()
+		val gen = service.claim(runId, "dev_1").generation
+		service.ingest(runId, EventBatch(1, listOf(event(gen, 1, "lifecycle", mapOf("phase" to "started")))))
+		val bad = listOf(
+			mapOf("phase" to "ended"),
+			mapOf("phase" to "ended", "end_reason" to "faild"),
+			mapOf("phase" to "ended", "end_reason" to 3),
+			mapOf("phase" to "ended", "end_reason" to null),
+			mapOf("phase" to "paused"),
+		)
+		bad.forEachIndexed { i, payload ->
+			val result = service.ingest(runId, EventBatch(1, listOf(event(gen, 10L + i, "lifecycle", payload))))
+			assertEquals(EventResult(0, 0, 0, 1), result, "payload $payload")
+		}
+		assertEquals("running", runRow(runId)["state"])
+		assertEquals(0L, jdbc.sql("select count(*) from run_events where run_id = :id and seq >= 10")
+			.param("id", runId).query(Long::class.javaObjectType).single())
+
+		service.ingest(runId, EventBatch(1, listOf(event(gen, 20, "lifecycle", mapOf("phase" to "ended", "end_reason" to "failed")))))
+		val row = runRow(runId)
+		assertEquals("ended", row["state"])
+		assertEquals("failed", row["end_reason"])
 	}
 
 	@Test

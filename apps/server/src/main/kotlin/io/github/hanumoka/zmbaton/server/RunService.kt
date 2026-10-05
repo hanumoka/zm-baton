@@ -78,9 +78,10 @@ class RunService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
 	@Transactional
 	fun ingest(runId: String, batch: EventBatch): EventResult {
 		if (batch.protocolVersion != 1) throw BadRequestException("unsupported protocol_version ${batch.protocolVersion}")
-		// Lock the run so batches for one run apply in order; read the work item's current generation.
+		// Lock the run and its work item: batches for one run apply in order, and a concurrent claim
+		// cannot bump the generation between this read and the late-report decision.
 		val current = jdbc.sql(
-			"select w.generation from runs r join work_items w on w.id = r.work_item_id where r.id = :runId for update of r",
+			"select w.generation from runs r join work_items w on w.id = r.work_item_id where r.id = :runId for update of r, w",
 		).param("runId", runId).query(Long::class.javaObjectType).optional()
 			.orElseThrow { NotFoundException("no run $runId") }
 
@@ -89,7 +90,7 @@ class RunService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
 		var late = 0
 		var rejected = 0
 		for (event in batch.events.sortedBy { it.seq }) {
-			if (event.kind !in KINDS || event.generation > current) {
+			if (event.kind !in KINDS || event.generation > current || !validLifecycle(event)) {
 				rejected++
 				continue
 			}
@@ -123,6 +124,16 @@ class RunService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
 		return EventResult(stored, duplicates, late, rejected)
 	}
 
+	/** A lifecycle event must be `started`, or `ended` with a contract end reason. Never infer success. */
+	private fun validLifecycle(event: EventIn): Boolean {
+		if (event.kind != "lifecycle") return true
+		return when (event.payload["phase"]) {
+			"started" -> true
+			"ended" -> event.payload["end_reason"] in END_REASONS
+			else -> false
+		}
+	}
+
 	private fun applyLifecycle(runId: String, payload: Map<String, Any?>) {
 		when (payload["phase"]) {
 			"started" -> jdbc.sql(
@@ -134,7 +145,7 @@ class RunService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
 			).param("sessionId", payload["session_id"] as? String).param("runId", runId).update()
 
 			"ended" -> {
-				val reason = (payload["end_reason"] as? String)?.takeIf { it in END_REASONS } ?: "submitted"
+				val reason = payload["end_reason"] as String // checked by validLifecycle
 				jdbc.sql(
 					"""
 					update runs set state = 'ended', end_reason = :reason, ended_at = now(), lease_expires_at = null
