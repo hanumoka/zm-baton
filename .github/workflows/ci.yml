@@ -51,7 +51,7 @@ jobs:
         shell: bash
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: go vet ./...
-      - run: go test -count=1 ./...
+      - run: go test -count=1 -v ./... # -v: the log names each test, so a skipped stop test is visible
 
   web:
     name: web (React, TypeScript, Vitest)
