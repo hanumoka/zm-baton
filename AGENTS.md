@@ -15,7 +15,7 @@
 |---|---|---|
 | 협업 계약 v1 | `../zm-docs/docs/research/2026-10-04-ai-team-collaboration/contract-v1.md` | 확정 |
 | 데이터 모델 | `../zm-docs/docs/research/2026-10-04-ai-team-collaboration/data-model.md` | 확정 |
-| 검토 기준 v0.1 | `docs/review-standard.md`(이 저장소) | 정본. 적용 중 |
+| 검토 기준 v0.2 | `docs/review-standard.md`(이 저장소) | 정본. 적용 중 |
 | 질문 경로 | `../zm-docs/docs/research/2026-10-04-ai-team-collaboration/question-path.md` | 초안 |
 | 과금 표시 | `../zm-docs/docs/research/2026-10-04-ai-team-collaboration/billing-signals.md` | 초안 |
 | 위협 모델 | `../zm-docs/docs/research/2026-10-04-ai-team-collaboration/threat-model.md` | 초안 |
@@ -37,8 +37,8 @@ AI 에이전트가 구현하고 소유자는 설계 확정·검토·병합 승�
 3. 작업 브랜치를 push하고 초안 PR을 연다.
 4. 검증을 마치고 PR 본문(`.github/pull_request_template.md` 양식)의 일곱 가지를 채운 뒤 검토 요청으로 바꾼다. 검토자는 빈 항목이 있으면 내용을 보기 전에 돌려보낸다.
 5. 작성 세션과 다른 세션이 검토한다. 작성 세션이 띄운 하위 에이전트는 세션 번호가 같으므로 다른 세션이 아니다. 기본 검토자는 다른 실행기인 Codex이고, Orca 오케스트레이션으로 띄운다. Codex에게는 검토만 맡기고 구현은 맡기지 않는다.
-6. 검토 기록에는 검토자의 실행기·버전·세션 번호, 적용한 기준(검토 기준 v0.1), 검토한 커밋, 확인한 것, 확인하지 않은 것, 「병합 막음」 지적을 적는다. 파일로 남길 때 이름은 `docs/reviews/YYYY-MM-DD-<브랜치 이름>.md`이고, 브랜치 이름의 `/`는 `-`로 바꾼다.
-7. 지적을 고치면 다시 검토받는다. 검토 뒤에 새 커밋이 생겨도 다시 검토받는다.
+6. 검토 기록에는 검토자의 실행기·버전·세션 번호, 적용한 기준(검토 기준 v0.2), 검토한 커밋, 확인한 것, 확인하지 않은 것, 「병합 막음」 지적을 적는다. 파일로 남길 때 이름은 `docs/reviews/YYYY-MM-DD-<브랜치 이름>.md`이고, 브랜치 이름의 `/`는 `-`로 바꾼다.
+7. 지적을 고치면 다시 검토받는다. 검토 뒤에 새 커밋이 생겨도 다시 검토받는다. 다만 검토 뒤 바뀐 것이 `docs/reviews/`의 검토 기록 파일뿐이면 그 검토가 지금 커밋에도 적용된다(검토 기준 v0.2).
 8. 사람 필수 변경이면 소유자가 PR에 판단 이유를 한 줄 이상 남긴다. 소유자가 GitHub에서 squash 병합한다. AI는 PR을 병합하지 않는다.
 
 ## 4. 병합하지 않는 조건
