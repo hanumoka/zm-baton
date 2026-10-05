@@ -3,31 +3,30 @@ import type { Run, RunEvent } from './api';
 /**
  * Report status (contract v1 "보고 상태"). The run's lifecycle state and end reason come
  * from the server, which decided them; this only adds what the events say on top.
+ *
+ * Two contract rules are not judged in this compat screen, and it says so instead of guessing:
+ * - 입력 필요 needs to know whether a question is still open; the question path is not built.
+ * - 응답 없음 within the first response window is measured from the claim, and the claim
+ *   time is not stored (data model "runs"), so a claimed run without events is shown as
+ *   waiting for its first event.
  */
 export type ReportStatus =
-  | 'claim_pending' // not claimed yet (before the contract's table applies)
+  | 'claim_pending' // not claimed yet, before the contract's table applies
+  | 'first_event_pending' // claimed, no event yet; the first response window is not judged
   | 'working' // 작업 중
-  | 'needs_input' // 입력 필요
   | 'done' // 완료
   | 'error' // 오류
-  | 'no_response' // 응답 없음
-  | 'cancelled'
-  | 'replaced';
+  | 'no_response' // 응답 없음, after a long silence
+  | 'cancelled' // outside the contract's table, shown with the lifecycle
+  | 'replaced'; // outside the contract's table, shown with the lifecycle
 
-/** Defaults from the contract: first response within 60 s, then events at least every 10 min. */
-export const FIRST_RESPONSE_MS = 60_000;
+/** From the contract: events at least every 10 minutes. */
 export const SILENCE_MS = 10 * 60_000;
 
-/**
- * The run's last activity event, skipping usage reports so a trailing rate-limit or
- * cost line does not hide an error or a question.
- */
-function lastActivity(events: readonly RunEvent[]): RunEvent | undefined {
+/** The run's last event in seq order, of any kind (contract: the error is the last event). */
+function lastEvent(events: readonly RunEvent[]): RunEvent | undefined {
   let last: RunEvent | undefined;
-  for (const e of events) {
-    if (e.kind === 'usage') continue;
-    if (!last || e.seq > last.seq) last = e;
-  }
+  for (const e of events) if (!last || e.seq > last.seq) last = e;
   return last;
 }
 
@@ -45,25 +44,21 @@ export function reportStatus(run: Run, events: readonly RunEvent[], now: number)
         return 'error'; // failed, lost
     }
   }
-  const last = lastActivity(events);
-  if (last?.kind === 'question') return 'needs_input';
-  if (last?.kind === 'error') return 'error';
-  if (events.length === 0) {
-    // The claim time is not stored, so the first-response window starts at the run's creation.
-    return now - Date.parse(run.created_at) > FIRST_RESPONSE_MS ? 'no_response' : 'working';
-  }
-  const lastAt = Date.parse(run.last_event_at ?? events.at(-1)!.received_at);
-  return now - lastAt > SILENCE_MS ? 'no_response' : 'working';
+  if (lastEvent(events)?.kind === 'error') return 'error';
+  // last_event_at comes from the server, so "no event yet" does not depend on whether this
+  // screen has fetched the events already.
+  if (run.last_event_at === null) return 'first_event_pending';
+  return now - Date.parse(run.last_event_at) > SILENCE_MS ? 'no_response' : 'working';
 }
 
 export function statusLabel(s: ReportStatus): string {
   switch (s) {
     case 'claim_pending':
       return '청구 대기';
+    case 'first_event_pending':
+      return '첫 사건 대기';
     case 'working':
       return '작업 중';
-    case 'needs_input':
-      return '입력 필요';
     case 'done':
       return '완료';
     case 'error':
@@ -107,13 +102,39 @@ export function applyPolled(held: HeldEvents, runId: string, polled: readonly Ru
   return { runId, events };
 }
 
-/**
- * The poll cursor: the largest k such that seqs 1..k are all held. The server may store a
- * smaller seq after a larger one, so polling after the largest seq held could miss it.
- */
-export function contiguousPrefix(events: readonly RunEvent[]): number {
+/** Fetches events with seq > after, at most limit of them, in seq order. */
+export type FetchEvents = (after: number, limit: number) => Promise<RunEvent[]>;
+
+export const PAGE = 200;
+const MAX_FORWARD_PAGES = 10;
+const MAX_GAPS = 5;
+
+/** Seqs missing below the largest held seq, lowest first, at most max of them. */
+export function missingSeqs(events: readonly RunEvent[], max = MAX_GAPS): number[] {
   const seqs = new Set(events.map((e) => e.seq));
-  let k = 0;
-  while (seqs.has(k + 1)) k++;
-  return k;
+  const top = events.reduce((m, e) => Math.max(m, e.seq), 0);
+  const out: number[] = [];
+  for (let s = 1; s < top && out.length < max; s++) if (!seqs.has(s)) out.push(s);
+  return out;
+}
+
+/**
+ * One poll: moves forward after the largest held seq, then asks once for each of the first
+ * few missing seqs. The server may store a smaller seq after a larger one, so the gaps are
+ * asked again on every poll until they fill; the forward cursor never waits for them.
+ */
+export async function pollEvents(fetch: FetchEvents, held: readonly RunEvent[]): Promise<RunEvent[]> {
+  const got: RunEvent[] = [];
+  let after = held.reduce((m, e) => Math.max(m, e.seq), 0);
+  for (let page = 0; page < MAX_FORWARD_PAGES; page++) {
+    const polled = await fetch(after, PAGE);
+    got.push(...polled);
+    if (polled.length < PAGE) break;
+    after = polled[polled.length - 1].seq;
+  }
+  for (const seq of missingSeqs([...held, ...got])) {
+    const polled = await fetch(seq - 1, 1);
+    if (polled[0]?.seq === seq) got.push(polled[0]);
+  }
+  return got;
 }

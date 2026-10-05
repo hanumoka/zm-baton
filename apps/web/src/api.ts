@@ -46,15 +46,12 @@ async function call<T>(method: string, path: string, body?: unknown, signal?: Ab
 
 const enc = encodeURIComponent;
 
-/** The server's page size for events; a full page means there may be more. */
-export const EVENT_PAGE = 200;
-
 export const api = {
   workItems: (signal?: AbortSignal) => call<WorkItem[]>('GET', '/api/work-items?limit=20', undefined, signal),
   runs: (workItemId: string, signal?: AbortSignal) =>
     call<Run[]>('GET', `/api/work-items/${enc(workItemId)}/runs`, undefined, signal),
-  events: (runId: string, afterSeq: number, signal?: AbortSignal) =>
-    call<RunEvent[]>('GET', `/api/runs/${enc(runId)}/events?after_seq=${afterSeq}&limit=${EVENT_PAGE}`, undefined, signal),
+  events: (runId: string, afterSeq: number, limit: number, signal?: AbortSignal) =>
+    call<RunEvent[]>('GET', `/api/runs/${enc(runId)}/events?after_seq=${afterSeq}&limit=${limit}`, undefined, signal),
   createWorkItem: (title: string) =>
     call<{ id: string }>('POST', '/api/work-items', { title, responsible_user_id: 'usr_owner' }),
   createRun: (workItemId: string) =>

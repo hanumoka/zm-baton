@@ -5,8 +5,12 @@ import { app, BrowserWindow, session } from 'electron';
 import { writeFileSync } from 'node:fs';
 
 const serverUrl = new URL(process.env.ZM_BATON_SERVER_URL ?? 'http://127.0.0.1:18081/');
-// Compat test only: write what the page shows once its newest run ends, then quit.
+// Compat test only. With ZM_BATON_DESKTOP_CHECK=<file> the window stays hidden and the shell
+// writes what it saw, then quits. Mode "run" (default) opens the newest work item and waits
+// for its run to end: exit 0 if it did, 2 if time ran out. Mode "probe" only watches the page
+// for the given time (used by test/probe.mjs) and exits 0.
 const checkFile = process.env.ZM_BATON_DESKTOP_CHECK;
+const checkMode = process.env.ZM_BATON_DESKTOP_CHECK_MODE === 'probe' ? 'probe' : 'run';
 const checkSecondsRaw = Number(process.env.ZM_BATON_DESKTOP_CHECK_SECONDS ?? '120');
 const checkSeconds = Number.isFinite(checkSecondsRaw) && checkSecondsRaw > 0 ? Math.min(checkSecondsRaw, 3600) : 120;
 
@@ -64,10 +68,15 @@ function writeCheck(file: string, result: object) {
   );
 }
 
-async function check(win: BrowserWindow, file: string): Promise<void> {
+async function check(win: BrowserWindow, file: string): Promise<'ended' | 'timed_out' | 'observed'> {
   const started = Date.now();
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const run = (code: string) => win.webContents.executeJavaScript(code);
+  if (checkMode === 'probe') {
+    await sleep(checkSeconds * 1000);
+    writeCheck(file, { mode: checkMode, outcome: 'observed', url: win.webContents.getURL() });
+    return 'observed';
+  }
   // The newest work item is first; open it the way a person would, if the page has one.
   for (let i = 0; i < 20 && !(await run(`!!document.querySelector('ul.list button')`)); i++) await sleep(500);
   await run(`document.querySelector('ul.list button')?.click(); true`);
@@ -79,12 +88,16 @@ async function check(win: BrowserWindow, file: string): Promise<void> {
     if (view.lifecycle?.startsWith('ended')) break;
     await sleep(500);
   }
+  const outcome = view?.lifecycle?.startsWith('ended') ? 'ended' : 'timed_out';
   writeCheck(file, {
+    mode: checkMode,
+    outcome,
     url: win.webContents.getURL(),
     statusesSeen,
     final: view,
     seconds: Math.round((Date.now() - started) / 1000),
   });
+  return outcome;
 }
 
 function guardWindow(win: BrowserWindow) {
@@ -137,15 +150,17 @@ app.whenReady().then(async () => {
   const win = new BrowserWindow({ width: 1200, height: 800, title: 'zm-baton', show: !checkFile, webPreferences: { ...webPreferences } });
   guardWindow(win);
 
+  let outcome: string | undefined;
   try {
     await win.loadURL(serverUrl.href);
-    if (checkFile) await check(win, checkFile);
+    if (checkFile) outcome = await check(win, checkFile);
   } catch (err) {
-    if (checkFile) writeCheck(checkFile, { error: String(err), url: win.webContents.getURL() });
+    if (checkFile) writeCheck(checkFile, { mode: checkMode, outcome: 'error', error: String(err), url: win.webContents.getURL() });
     app.exit(1);
     return;
   }
-  if (checkFile) app.quit();
+  if (outcome === 'timed_out') app.exit(2);
+  else if (checkFile) app.quit();
 });
 
 app.on('window-all-closed', () => app.quit());

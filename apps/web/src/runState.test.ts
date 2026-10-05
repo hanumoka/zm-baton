@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { Run, RunEvent } from './api';
-import { applyPolled, contiguousPrefix, FIRST_RESPONSE_MS, reportStatus, SILENCE_MS, summary, type HeldEvents } from './runState';
+import { applyPolled, missingSeqs, PAGE, pollEvents, reportStatus, SILENCE_MS, summary, type HeldEvents } from './runState';
 
 const T0 = Date.parse('2026-10-05T00:00:00Z');
 const iso = (ms: number) => new Date(ms).toISOString();
 
-const ev = (seq: number, kind: string, payload: Record<string, unknown> = {}, at = T0): RunEvent => ({
+const ev = (seq: number, kind = 'answer', payload: Record<string, unknown> = {}): RunEvent => ({
   event_id: `evt_${seq}`,
   generation: 1,
   seq,
   kind,
   payload,
   occurred_at: null,
-  received_at: iso(at),
+  received_at: iso(T0),
 });
 
 const run = (over: Partial<Run> = {}): Run => ({
@@ -25,7 +25,7 @@ const run = (over: Partial<Run> = {}): Run => ({
   device_id: 'dev_a',
   late_reports: false,
   created_at: iso(T0),
-  last_event_at: null,
+  last_event_at: iso(T0),
   ...over,
 });
 
@@ -38,31 +38,38 @@ describe('reportStatus', () => {
     ];
     expect(reportStatus(run({ state: 'ended', end_reason: 'lost' }), events, T0)).toBe('error');
     expect(reportStatus(run({ state: 'ended', end_reason: 'submitted' }), [], T0)).toBe('done');
+    expect(reportStatus(run({ state: 'ended', end_reason: 'failed' }), [], T0)).toBe('error');
     expect(reportStatus(run({ state: 'ended', end_reason: 'cancelled' }), [], T0)).toBe('cancelled');
     expect(reportStatus(run({ state: 'ended', end_reason: 'replaced' }), [], T0)).toBe('replaced');
-    expect(reportStatus(run({ state: 'ended', end_reason: 'failed' }), [], T0)).toBe('error');
   });
 
   it('is claim pending before a claim', () => {
-    expect(reportStatus(run({ state: 'requested' }), [], T0 + 2 * FIRST_RESPONSE_MS)).toBe('claim_pending');
+    expect(reportStatus(run({ state: 'requested', last_event_at: null }), [], T0)).toBe('claim_pending');
   });
 
-  it('needs input when the last activity is a question, even with usage after it', () => {
-    const events = [ev(1, 'lifecycle', { phase: 'started' }), ev(2, 'question', { text: '?' }), ev(3, 'usage')];
-    expect(reportStatus(run(), events, T0)).toBe('needs_input');
-  });
-
-  it('is an error when the last activity is an error', () => {
+  it('is an error only when the last event, of any kind, is an error', () => {
     expect(reportStatus(run(), [ev(1, 'lifecycle', { phase: 'started' }), ev(2, 'error', { text: 'x' })], T0)).toBe('error');
+    // A usage report after the error is the last event: not an error by the contract's rule.
+    expect(reportStatus(run(), [ev(1, 'error', { text: 'x' }), ev(2, 'usage')], T0)).toBe('working');
   });
 
-  it('has no response without a first event in time, or after a long silence', () => {
-    expect(reportStatus(run(), [], T0 + FIRST_RESPONSE_MS - 1)).toBe('working');
-    expect(reportStatus(run(), [], T0 + FIRST_RESPONSE_MS + 1)).toBe('no_response');
+  it('does not judge an open question: the question path is not built yet', () => {
+    expect(reportStatus(run(), [ev(1, 'question', { text: '?' })], T0)).toBe('working');
+    expect(reportStatus(run(), [ev(1, 'question', { text: '?' }), ev(2, 'action', { name: 'Read' })], T0)).toBe('working');
+  });
+
+  it('waits for the first event instead of measuring the first response from creation', () => {
+    // Created two minutes before it was claimed, no event yet: not "no response".
+    const claimedLate = run({ state: 'claimed', last_event_at: null, created_at: iso(T0) });
+    expect(reportStatus(claimedLate, [], T0 + 120_000)).toBe('first_event_pending');
+    // The server already has events this screen has not fetched yet: still working.
+    expect(reportStatus(run({ last_event_at: iso(T0) }), [], T0 + 1000)).toBe('working');
+  });
+
+  it('has no response after a long silence since the last event the server stored', () => {
     const r = run({ last_event_at: iso(T0) });
-    const events = [ev(1, 'answer', { text: 'hi' })];
-    expect(reportStatus(r, events, T0 + SILENCE_MS - 1)).toBe('working');
-    expect(reportStatus(r, events, T0 + SILENCE_MS + 1)).toBe('no_response');
+    expect(reportStatus(r, [ev(1)], T0 + SILENCE_MS - 1)).toBe('working');
+    expect(reportStatus(r, [ev(1)], T0 + SILENCE_MS + 1)).toBe('no_response');
   });
 });
 
@@ -70,32 +77,63 @@ describe('applyPolled', () => {
   it('ignores a late answer for a run that is no longer selected', () => {
     // Run A was selected, then B; A's slow response arrives after B's.
     let held: HeldEvents = { runId: 'run_b', events: [] };
-    held = applyPolled(held, 'run_b', [ev(1, 'answer')]);
-    held = applyPolled(held, 'run_a', [ev(1, 'answer'), ev(100, 'lifecycle', { phase: 'ended', end_reason: 'submitted' })]);
-    expect(held).toEqual({ runId: 'run_b', events: [ev(1, 'answer')] });
+    held = applyPolled(held, 'run_b', [ev(1)]);
+    held = applyPolled(held, 'run_a', [ev(1), ev(100, 'lifecycle', { phase: 'ended', end_reason: 'submitted' })]);
+    expect(held).toEqual({ runId: 'run_b', events: [ev(1)] });
   });
 
   it('appends new events in seq order and drops repeats', () => {
-    const held = applyPolled({ runId: 'run_a', events: [ev(1, 'answer'), ev(2, 'answer')] }, 'run_a', [
-      ev(2, 'answer'),
-      ev(4, 'answer'),
-      ev(3, 'answer'),
-    ]);
+    const held = applyPolled({ runId: 'run_a', events: [ev(1), ev(2)] }, 'run_a', [ev(2), ev(4), ev(3)]);
     expect(held.events.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
   });
 });
 
-describe('contiguousPrefix', () => {
-  it('stops before the first missing seq, so a later-stored smaller seq is still polled', () => {
-    expect(contiguousPrefix([])).toBe(0);
-    expect(contiguousPrefix([ev(1, 'answer'), ev(3, 'answer')])).toBe(1);
-    // Seq 2 is stored after 1 and 3 were read: polling after 1 brings it in.
-    const held = applyPolled({ runId: 'run_a', events: [ev(1, 'answer'), ev(3, 'answer')] }, 'run_a', [
-      ev(2, 'answer'),
-      ev(3, 'answer'),
-    ]);
-    expect(held.events.map((e) => e.seq)).toEqual([1, 2, 3]);
-    expect(contiguousPrefix(held.events)).toBe(3);
+/** A server holding events by seq, answering like GET /api/runs/{id}/events. */
+function fakeServer(seqs: number[]) {
+  const stored = new Set(seqs);
+  const fetch = async (after: number, limit: number) =>
+    [...stored]
+      .filter((s) => s > after)
+      .sort((a, b) => a - b)
+      .slice(0, limit)
+      .map((s) => ev(s));
+  return { stored, fetch };
+}
+
+async function pollTimes(fetch: (after: number, limit: number) => Promise<RunEvent[]>, times: number) {
+  let held: HeldEvents = { runId: 'run_a', events: [] };
+  for (let i = 0; i < times; i++) held = applyPolled(held, 'run_a', await pollEvents(fetch, held.events));
+  return held;
+}
+
+describe('pollEvents', () => {
+  it('moves past more than ten pages even while seq 1 is missing', async () => {
+    const server = fakeServer(Array.from({ length: 2100 }, (_, i) => i + 2)); // 2..2101
+    const held = await pollTimes(server.fetch, 2);
+    expect(held.events).toHaveLength(2100);
+    expect(held.events.at(-1)?.seq).toBe(2101);
+    expect(missingSeqs(held.events)).toEqual([1]);
+  });
+
+  it('fills a missing seq that the server stores later, behind the forward cursor', async () => {
+    const server = fakeServer([1, 3, 4]);
+    let held = await pollTimes(server.fetch, 1);
+    expect(held.events.map((e) => e.seq)).toEqual([1, 3, 4]);
+    server.stored.add(2); // stored after 3 and 4 were read
+    held = applyPolled(held, 'run_a', await pollEvents(server.fetch, held.events));
+    expect(held.events.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('asks at most ten forward pages per poll', async () => {
+    const calls: number[] = [];
+    const server = fakeServer(Array.from({ length: PAGE * 12 }, (_, i) => i + 1));
+    const fetch = (after: number, limit: number) => {
+      calls.push(limit);
+      return server.fetch(after, limit);
+    };
+    const got = await pollEvents(fetch, []);
+    expect(got).toHaveLength(PAGE * 10);
+    expect(calls.filter((l) => l === PAGE)).toHaveLength(10);
   });
 });
 

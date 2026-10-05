@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { api, EVENT_PAGE, type Run, type WorkItem } from './api';
-import { applyPolled, contiguousPrefix, reportStatus, statusLabel, summary, type HeldEvents } from './runState';
+import { api, type Run, type WorkItem } from './api';
+import { applyPolled, pollEvents, reportStatus, statusLabel, summary, type HeldEvents } from './runState';
 
 /**
  * Polls fn every ms for one selection (deps). When the selection changes, the old request
@@ -37,8 +37,6 @@ function usePoll(
     };
   }, deps); // the caller lists what fn reads
 }
-
-const MAX_PAGES_PER_TICK = 10;
 
 export function App() {
   const [items, setItems] = useState<WorkItem[]>([]);
@@ -98,14 +96,8 @@ export function App() {
     async (alive, signal) => {
       if (!runId) return;
       const mine = heldRef.current.runId === runId ? heldRef.current.events : [];
-      let after = contiguousPrefix(mine);
-      for (let page = 0; page < MAX_PAGES_PER_TICK; page++) {
-        const polled = await api.events(runId, after, signal);
-        if (!alive()) return;
-        setHeld((h) => applyPolled(h, runId, polled));
-        if (polled.length < EVENT_PAGE) break;
-        after = polled[polled.length - 1].seq;
-      }
+      const polled = await pollEvents((after, limit) => api.events(runId, after, limit, signal), mine);
+      if (alive()) setHeld((h) => applyPolled(h, runId, polled));
     },
     1000,
     [runId],

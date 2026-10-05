@@ -13,4 +13,4 @@ npm test          # 거부 시험: 서버 밖으로 나가지 못하고 권한�
 npm run package   # out/zm-baton-desktop-win32-x64/ 에 Windows 실행 파일 폴더를 만든다
 ```
 
-시험용 확인 모드: `ZM_BATON_DESKTOP_CHECK=<파일>`을 주면 창을 숨긴 채 가장 최근 작업을 열고, 그 실행 시도가 끝날 때까지(최대 `ZM_BATON_DESKTOP_CHECK_SECONDS`초) 화면의 상태를 읽어 파일에 쓴 뒤 끝난다. `dist/`·`out/`·`node_modules/`는 Git에 넣지 않는다.
+시험용 확인 모드: `ZM_BATON_DESKTOP_CHECK=<파일>`을 주면 창을 숨긴 채 가장 최근 작업을 열고, 그 실행 시도가 끝날 때까지(최대 `ZM_BATON_DESKTOP_CHECK_SECONDS`초) 화면의 상태를 읽어 파일에 쓴 뒤 끝난다. 끝나는 것을 보면 종료 코드 0, 시간 안에 못 보면 2다. `ZM_BATON_DESKTOP_CHECK_MODE=probe`는 거부 시험용으로, 정한 시간 동안 페이지만 지켜본다. `dist/`·`out/`·`node_modules/`는 Git에 넣지 않는다.
