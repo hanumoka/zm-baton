@@ -49,6 +49,10 @@ type Reporter struct {
 	closed  bool
 	stop    chan struct{}
 	done    chan struct{}
+
+	// loopCtx bounds the timer's sends. Close cancels it when its own time runs out.
+	loopCtx    context.Context
+	loopCancel context.CancelFunc
 }
 
 // New makes a reporter for one claimed run. interval <= 0 means DefaultInterval.
@@ -59,7 +63,10 @@ func New(sender Sender, runID string, generation int64, interval time.Duration, 
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
+	loopCtx, loopCancel := context.WithCancel(context.Background())
 	return &Reporter{
+		loopCtx:    loopCtx,
+		loopCancel: loopCancel,
 		sender:     sender,
 		runID:      runID,
 		generation: generation,
@@ -155,7 +162,9 @@ func (r *Reporter) Totals() (api.EventResult, int) {
 	return r.totals, r.dropped
 }
 
-// Close stops the timer and sends what is left, retrying transient failures until ctx ends.
+// Close stops the timer and sends what is left, retrying transient failures until
+// ctx ends. ctx also bounds a send the timer has in flight. It returns an error
+// unless the server stored, or already had, every event.
 func (r *Reporter) Close(ctx context.Context) error {
 	r.mu.Lock()
 	started := r.started
@@ -164,8 +173,14 @@ func (r *Reporter) Close(ctx context.Context) error {
 	r.mu.Unlock()
 	if started {
 		close(r.stop)
-		<-r.done
+		select {
+		case <-r.done:
+		case <-ctx.Done():
+			r.loopCancel() // abort the timer's send in flight
+			<-r.done
+		}
 	}
+	r.loopCancel()
 	backoff := 200 * time.Millisecond
 	for {
 		err := r.flush(ctx)
@@ -182,10 +197,15 @@ func (r *Reporter) Close(ctx context.Context) error {
 		}
 		backoff = min(backoff*2, 5*time.Second)
 	}
-	if _, dropped := r.Totals(); dropped > 0 {
-		return fmt.Errorf("%d events refused permanently by the server", dropped)
+	totals, dropped := r.Totals()
+	var errs []error
+	if dropped > 0 {
+		errs = append(errs, fmt.Errorf("%d events refused permanently by the server", dropped))
 	}
-	return nil
+	if totals.Rejected > 0 {
+		errs = append(errs, fmt.Errorf("%d events rejected by the server", totals.Rejected))
+	}
+	return errors.Join(errs...)
 }
 
 func (r *Reporter) loop() {
@@ -197,7 +217,7 @@ func (r *Reporter) loop() {
 		case <-r.stop:
 			return
 		case <-ticker.C:
-			if err := r.flush(context.Background()); err != nil {
+			if err := r.flush(r.loopCtx); err != nil {
 				r.log.Warn("sending events failed; will retry", "err", err)
 			}
 		}
@@ -210,6 +230,9 @@ func (r *Reporter) flush(ctx context.Context) error {
 	r.sendMu.Lock()
 	defer r.sendMu.Unlock()
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		r.mu.Lock()
 		n := min(len(r.pending), maxBatch)
 		if n == 0 {

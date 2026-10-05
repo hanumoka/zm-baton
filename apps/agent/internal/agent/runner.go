@@ -33,6 +33,17 @@ const (
 // (for example held by a grandchild) before it is closed.
 const pipeGrace = 5 * time.Second
 
+// defaultCloseTimeout bounds how long the last events may take to reach the server.
+const defaultCloseTimeout = 30 * time.Second
+
+// Result is how one run ended on this device, and whether the server got its events.
+type Result struct {
+	EndReason string
+	// Delivery is nil when the server stored, or already had, every event of the run.
+	// Otherwise the server may not know how the run ended, whatever EndReason says.
+	Delivery error
+}
+
 // Config holds the runner settings. Workdir must already have passed CheckWorkdir.
 type Config struct {
 	Client        *api.Client
@@ -44,6 +55,7 @@ type Config struct {
 	PollInterval  time.Duration // pause between polls when nothing was claimed
 	RunTimeout    time.Duration // 0 means no limit
 	FlushInterval time.Duration // 0 means report.DefaultInterval
+	CloseTimeout  time.Duration // 0 means defaultCloseTimeout
 	Log           *slog.Logger
 }
 
@@ -72,6 +84,9 @@ func New(cfg Config) (*Runner, error) {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 2 * time.Second
 	}
+	if cfg.CloseTimeout <= 0 {
+		cfg.CloseTimeout = defaultCloseTimeout
+	}
 	log := cfg.Log
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -93,24 +108,24 @@ func ResolveExecutable(name string) (string, error) {
 	return path, nil
 }
 
-// Run polls and executes runs until ctx ends. With once it returns the end reason
+// Run polls and executes runs until ctx ends. With once it returns the result
 // of the first run it claimed.
-func (r *Runner) Run(ctx context.Context, once bool) (string, error) {
+func (r *Runner) Run(ctx context.Context, once bool) (Result, error) {
 	for {
 		claim, err := r.claimNext(ctx)
 		if err != nil && ctx.Err() == nil {
 			r.log.Warn("poll or claim failed", "err", err)
 		}
 		if claim != nil {
-			reason := r.Execute(ctx, *claim)
+			res := r.Execute(ctx, *claim)
 			if once {
-				return reason, nil
+				return res, nil
 			}
 			continue
 		}
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return Result{}, ctx.Err()
 		case <-time.After(r.cfg.PollInterval):
 		}
 	}
@@ -141,8 +156,8 @@ func (r *Runner) claimNext(ctx context.Context) (*api.Claim, error) {
 }
 
 // Execute runs Claude Code for one claimed run and reports everything, ending with
-// a lifecycle "ended" event. It returns the end reason.
-func (r *Runner) Execute(ctx context.Context, c api.Claim) string {
+// a lifecycle "ended" event. Delivery failures are returned, never folded into success.
+func (r *Runner) Execute(ctx context.Context, c api.Claim) Result {
 	log := r.log.With("run_id", c.RunID, "generation", c.Generation)
 	rep := report.New(r.cfg.Client, c.RunID, c.Generation, r.cfg.FlushInterval, log)
 	rep.Start()
@@ -150,15 +165,16 @@ func (r *Runner) Execute(ctx context.Context, c api.Claim) string {
 	reason := r.execute(ctx, rep, log)
 
 	// Deliver the tail even if ctx was cancelled; give up after a bounded wait.
-	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.cfg.CloseTimeout)
 	defer cancel()
-	if err := rep.Close(closeCtx); err != nil {
-		log.Error("not every event reached the server", "err", err)
+	delivery := rep.Close(closeCtx)
+	if delivery != nil {
+		log.Error("the server did not get every event", "err", delivery)
 	}
 	totals, dropped := rep.Totals()
 	log.Info("run finished", "end_reason", reason, "events", rep.Count(), "stored", totals.Stored,
 		"duplicates", totals.Duplicates, "late", totals.Late, "rejected", totals.Rejected, "dropped", dropped)
-	return reason
+	return Result{EndReason: reason, Delivery: delivery}
 }
 
 func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Logger) string {
@@ -166,6 +182,7 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 	args := claude.Args(claude.Options{SessionID: sessionID, AllowedTools: r.cfg.AllowedTools, Prompt: r.cfg.Prompt})
 	cmd := exec.Command(r.cfg.ClaudePath, args...) // no shell
 	cmd.Dir = r.cfg.Workdir
+	cmd.SysProcAttr = proc.SysProcAttr() // Windows: start suspended until Track pins it
 	stderr := &tailBuffer{max: 4096}
 	cmd.Stderr = stderr
 	cmd.WaitDelay = pipeGrace
@@ -187,6 +204,15 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 	}
 	pw.Close()
 	pid := cmd.Process.Pid // recorded right after Start (contract v1 "프로세스 관리" 1)
+	// Pin the executor before it runs, so a stop can only ever reach this process.
+	pinned, err := proc.Track(cmd.Process)
+	if err != nil {
+		_ = cmd.Process.Kill() // through Go's own handle: still this process, still suspended
+		_ = cmd.Wait()
+		return r.failBeforeStart(rep, log, "cannot pin the executor process", err)
+	}
+	// Released only after the stop decision below is final.
+	defer pinned.Close()
 	log = log.With("pid", pid, "session_id", sessionID)
 	log.Info("executor started", "prompt_chars", len([]rune(r.cfg.Prompt)))
 	rep.Add(claude.KindLifecycle, map[string]any{
@@ -210,7 +236,7 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 		}
 	}()
 
-	stopped := r.watchStop(ctx, pid, sessionID, log)
+	stopped := r.watchStop(ctx, pinned, sessionID, log)
 	waitErr := cmd.Wait()
 	stopWhy := stopped()
 
@@ -258,12 +284,12 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 	return reason
 }
 
-// watchStop kills the executor when ctx ends or the run timeout passes. The
+// watchStop stops the executor when ctx ends or the run timeout passes. The
 // returned function must be called after Wait; it reports why a stop was
-// requested ("" if none), whether or not KillRun had to act: on Ctrl+C the
-// console may already have ended the executor. Holding the un-waited process
-// keeps its PID from being reused while KillRun checks the marker.
-func (r *Runner) watchStop(ctx context.Context, pid int, marker string, log *slog.Logger) func() string {
+// requested ("" if none), whether or not Kill had to act: on Ctrl+C the console
+// may already have ended the executor. Wait may return while a stop is being
+// decided; the pin, closed only after that, keeps the PID from being reused.
+func (r *Runner) watchStop(ctx context.Context, pinned *proc.Run, marker string, log *slog.Logger) func() string {
 	exited := make(chan struct{})
 	done := make(chan struct{})
 	var why string
@@ -285,7 +311,7 @@ func (r *Runner) watchStop(ctx context.Context, pid int, marker string, log *slo
 			reason = "timeout"
 		}
 		why = reason
-		if err := proc.KillRun(pid, marker); err != nil {
+		if err := pinned.Kill(marker); err != nil {
 			log.Error("executor not stopped", "why", reason, "err", err)
 			return
 		}

@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -71,15 +70,18 @@ func run() int {
 	defer stop()
 	log.Info("agent started", "server", *server, "device_id", *deviceID, "once", *once,
 		"poll_interval", pollInterval.String(), "allowed_tools", *allowedTools)
-	reason, err := runner.Run(ctx, *once)
+	res, err := runner.Run(ctx, *once)
 	switch {
-	case errors.Is(err, context.Canceled):
+	case ctx.Err() != nil: // Ctrl+C, while polling or during a run
 		log.Info("agent stopped")
 		return 130
 	case err != nil:
 		log.Error("agent failed", "err", err)
 		return 1
-	case *once && reason != agent.EndSubmitted:
+	case *once && res.Delivery != nil:
+		// The executor may have finished, but the server may not know how.
+		return 1
+	case *once && res.EndReason != agent.EndSubmitted:
 		return 1
 	}
 	return 0

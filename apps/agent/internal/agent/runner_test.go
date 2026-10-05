@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/hanumoka/zm-baton/apps/agent/internal/api"
-	"github.com/hanumoka/zm-baton/apps/agent/internal/proc"
 	"github.com/hanumoka/zm-baton/apps/agent/internal/report"
 )
 
@@ -83,6 +82,9 @@ type fakeServer struct {
 	taken   map[string]bool
 	claims  []string
 	events  map[string][]api.Event
+
+	eventsStatus int  // if set, every event batch gets this HTTP status
+	rejectAll    bool // if set, every event is answered as rejected with HTTP 200
 }
 
 func newFakeServer(t *testing.T) (*fakeServer, *api.Client) {
@@ -115,6 +117,16 @@ func newFakeServer(t *testing.T) (*fakeServer, *api.Client) {
 		id := r.PathValue("id")
 		var res api.EventResult
 		f.mu.Lock()
+		if f.eventsStatus != 0 {
+			f.mu.Unlock()
+			w.WriteHeader(f.eventsStatus)
+			return
+		}
+		if f.rejectAll {
+			f.mu.Unlock()
+			json.NewEncoder(w).Encode(api.EventResult{Rejected: len(b.Events)})
+			return
+		}
 		for _, ev := range b.Events {
 			if slices.ContainsFunc(f.events[id], func(e api.Event) bool { return e.EventID == ev.EventID }) {
 				res.Duplicates++
@@ -175,8 +187,8 @@ func checkSequence(t *testing.T, runID string, evs []api.Event) []string {
 func TestExecuteReportsASuccessfulRun(t *testing.T) {
 	f, c := newFakeServer(t)
 	r := newTestRunner(t, c, "success", 0)
-	if got := r.Execute(context.Background(), api.Claim{RunID: "run_ok", Generation: 3}); got != EndSubmitted {
-		t.Fatalf("end reason %q", got)
+	if got := r.Execute(context.Background(), api.Claim{RunID: "run_ok", Generation: 3}); got.EndReason != EndSubmitted || got.Delivery != nil {
+		t.Fatalf("result %+v", got)
 	}
 	evs := f.runEvents("run_ok")
 	want := []string{"lifecycle", "thought", "action", "action_result", "answer", "usage", "usage", "lifecycle"}
@@ -201,8 +213,8 @@ func TestExecuteReportsASuccessfulRun(t *testing.T) {
 func TestExecuteWithoutResultEndsLost(t *testing.T) {
 	f, c := newFakeServer(t)
 	r := newTestRunner(t, c, "noresult", 0)
-	if got := r.Execute(context.Background(), api.Claim{RunID: "run_nr", Generation: 3}); got != EndLost {
-		t.Fatalf("end reason %q", got)
+	if got := r.Execute(context.Background(), api.Claim{RunID: "run_nr", Generation: 3}); got.EndReason != EndLost {
+		t.Fatalf("result %+v", got)
 	}
 	evs := f.runEvents("run_nr")
 	if got := checkSequence(t, "run_nr", evs); !slices.Equal(got, []string{"lifecycle", "answer", "error", "lifecycle"}) {
@@ -217,8 +229,8 @@ func TestExecuteMissingExecutorEndsFailed(t *testing.T) {
 	f, c := newFakeServer(t)
 	r := newTestRunner(t, c, "success", 0)
 	r.cfg.ClaudePath = filepath.Join(t.TempDir(), "missing-executor")
-	if got := r.Execute(context.Background(), api.Claim{RunID: "run_ms", Generation: 3}); got != EndFailed {
-		t.Fatalf("end reason %q", got)
+	if got := r.Execute(context.Background(), api.Claim{RunID: "run_ms", Generation: 3}); got.EndReason != EndFailed {
+		t.Fatalf("result %+v", got)
 	}
 	if got := checkSequence(t, "run_ms", f.runEvents("run_ms")); !slices.Equal(got, []string{"error", "lifecycle"}) {
 		t.Fatalf("kinds %v", got)
@@ -251,8 +263,8 @@ func TestExecuteStopsAHungExecutor(t *testing.T) {
 				}()
 			}
 			start := time.Now()
-			if got := r.Execute(ctx, api.Claim{RunID: "run_h", Generation: 3}); got != tc.want {
-				t.Fatalf("end reason %q, want %q", got, tc.want)
+			if got := r.Execute(ctx, api.Claim{RunID: "run_h", Generation: 3}); got.EndReason != tc.want {
+				t.Fatalf("end reason %q, want %q", got.EndReason, tc.want)
 			}
 			if d := time.Since(start); d > 30*time.Second {
 				t.Fatalf("stopping took %v", d)
@@ -265,11 +277,8 @@ func TestExecuteStopsAHungExecutor(t *testing.T) {
 			if !tc.cancel && !slices.Contains(kinds, "error") {
 				t.Fatalf("timeout should add an error event: %v", kinds)
 			}
-			pid := int(evs[0].Payload["pid"].(float64))
-			sid := evs[0].Payload["session_id"].(string)
-			if cl, _ := proc.CommandLine(pid); strings.Contains(cl, sid) {
-				t.Fatal("the executor is still running")
-			}
+			// Execute returns only after Wait, so the stopped executor has exited.
+			// The fake executor starts no child; proc's own tests cover children.
 		})
 	}
 }
@@ -284,8 +293,8 @@ func TestRunOnceSkipsOtherExecutorsAndLostClaims(t *testing.T) {
 	f.taken["run_lost"] = true
 	r := newTestRunner(t, c, "success", 0)
 	got, err := r.Run(context.Background(), true)
-	if err != nil || got != EndSubmitted {
-		t.Fatalf("Run once: %q %v", got, err)
+	if err != nil || got.EndReason != EndSubmitted || got.Delivery != nil {
+		t.Fatalf("Run once: %+v %v", got, err)
 	}
 	if !slices.Equal(f.claims, []string{"run_lost", "run_mine"}) {
 		t.Fatalf("claims %v", f.claims)
@@ -311,5 +320,34 @@ func TestNewRequiresSettings(t *testing.T) {
 		if _, err := New(cfg); err == nil {
 			t.Errorf("missing %s accepted", name)
 		}
+	}
+}
+
+// A run that submitted but whose events never reached the server must not look
+// like a success: the server may still show the run as running.
+func TestUndeliveredEventsAreReportedEvenAfterASubmit(t *testing.T) {
+	cases := map[string]func(*fakeServer){
+		"server error":    func(f *fakeServer) { f.eventsStatus = http.StatusInternalServerError },
+		"permanent error": func(f *fakeServer) { f.eventsStatus = http.StatusBadRequest },
+		"rejected events": func(f *fakeServer) { f.rejectAll = true },
+	}
+	for name, breakServer := range cases {
+		t.Run(name, func(t *testing.T) {
+			f, c := newFakeServer(t)
+			breakServer(f)
+			r := newTestRunner(t, c, "success", 0)
+			r.cfg.CloseTimeout = time.Second
+			start := time.Now()
+			got := r.Execute(context.Background(), api.Claim{RunID: "run_nd", Generation: 3})
+			if got.EndReason != EndSubmitted {
+				t.Fatalf("the executor's own result must be kept: %+v", got)
+			}
+			if got.Delivery == nil {
+				t.Fatal("undelivered events were reported as delivered")
+			}
+			if d := time.Since(start); d > 20*time.Second {
+				t.Fatalf("giving up took %v", d)
+			}
+		})
 	}
 }

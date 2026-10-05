@@ -8,84 +8,68 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 )
 
-// CommandLine reads /proc/<pid>/cmdline. Systems without /proc return an error,
-// so KillRun refuses there instead of guessing.
+// SysProcAttr needs nothing on these systems.
+func SysProcAttr() *syscall.SysProcAttr { return nil }
+
+// Run pins the executor through the *os.Process the agent started. Go refuses to
+// signal a process that Wait has reaped, and on Linux it signals through a pidfd,
+// so Kill cannot reach a reused PID. Only the executor itself is stopped: child
+// PIDs are not collected, because such a list can go stale before the kill.
+type Run struct {
+	mu     sync.Mutex
+	p      *os.Process
+	closed bool
+}
+
+// Track pins p, which must not have been waited for yet.
+func Track(p *os.Process) (*Run, error) {
+	if p == nil || p.Pid <= 0 || p.Pid == os.Getpid() {
+		return nil, errors.New("track: invalid process")
+	}
+	return &Run{p: p}, nil
+}
+
+// Kill stops the executor, but only if its command line carries marker. Systems
+// without /proc (macOS) cannot read the command line, so Kill refuses there.
+func (r *Run) Kill(marker string) error {
+	if err := checkMarker(marker); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return errClosed
+	}
+	pid := r.p.Pid
+	cmdline, err := CommandLine(pid)
+	if err != nil {
+		return fmt.Errorf("refusing to kill pid %d: cannot read its command line: %w", pid, err)
+	}
+	if !strings.Contains(cmdline, marker) {
+		return fmt.Errorf("refusing to kill pid %d: %w", pid, ErrMarkerMismatch)
+	}
+	if err := r.p.Kill(); err != nil {
+		return fmt.Errorf("kill pid %d: %w", pid, err)
+	}
+	return nil
+}
+
+// Close releases the pin.
+func (r *Run) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closed = true
+}
+
+// CommandLine reads /proc/<pid>/cmdline.
 func CommandLine(pid int) (string, error) {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(strings.ReplaceAll(string(data), "\x00", " ")), nil
-}
-
-// killTree collects the descendants of pid from /proc first, then kills pid (so it
-// cannot start more children) and the collected descendants.
-func killTree(pid int) error {
-	targets := append([]int{pid}, descendants(pid)...)
-	var errs []error
-	for i, p := range targets {
-		process, err := os.FindProcess(p)
-		if err != nil {
-			continue
-		}
-		if err := process.Kill(); err != nil && i == 0 && !errors.Is(err, os.ErrProcessDone) {
-			errs = append(errs, fmt.Errorf("kill pid %d: %w", p, err))
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// descendants lists every process whose parent chain reaches root.
-func descendants(root int) []int {
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return nil
-	}
-	children := map[int][]int{}
-	for _, e := range entries {
-		pid, err := strconv.Atoi(e.Name())
-		if err != nil {
-			continue
-		}
-		if ppid, ok := parentOf(pid); ok {
-			children[ppid] = append(children[ppid], pid)
-		}
-	}
-	var out []int
-	queue := []int{root}
-	seen := map[int]bool{root: true}
-	for len(queue) > 0 {
-		p := queue[0]
-		queue = queue[1:]
-		for _, c := range children[p] {
-			if !seen[c] {
-				seen[c] = true
-				out = append(out, c)
-				queue = append(queue, c)
-			}
-		}
-	}
-	return out
-}
-
-// parentOf reads the parent PID from /proc/<pid>/stat. The command name sits in
-// parentheses and may contain spaces, so fields are read after the last ')'.
-func parentOf(pid int) (int, bool) {
-	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
-		return 0, false
-	}
-	s := string(data)
-	i := strings.LastIndexByte(s, ')')
-	if i < 0 {
-		return 0, false
-	}
-	fields := strings.Fields(s[i+1:])
-	if len(fields) < 2 {
-		return 0, false
-	}
-	ppid, err := strconv.Atoi(fields[1])
-	return ppid, err == nil
 }

@@ -203,3 +203,69 @@ func TestEventIDsAreUniqueTimeOrderedUUIDv7(t *testing.T) {
 		}
 	}
 }
+
+// slowSender takes delay per batch and honours ctx, like an HTTP call would.
+type slowSender struct {
+	delay time.Duration
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *slowSender) SendEvents(ctx context.Context, _ string, events []api.Event) (api.EventResult, error) {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+	select {
+	case <-time.After(s.delay):
+		return api.EventResult{Stored: len(events)}, nil
+	case <-ctx.Done():
+		return api.EventResult{}, ctx.Err()
+	}
+}
+
+// Close's deadline must also cut short a send the timer already started.
+func TestCloseDeadlineBoundsTheTimersSendInFlight(t *testing.T) {
+	s := &slowSender{delay: 2 * time.Second}
+	r := New(s, "run_a", 1, 5*time.Millisecond, nil)
+	r.Start()
+	for range maxBatch*3 + 1 {
+		r.Add("usage", nil)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.mu.Lock()
+		calls := s.calls
+		s.mu.Unlock()
+		if calls > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the timer never started a send")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := r.Close(ctx); err == nil {
+		t.Fatal("Close reported success with events still unsent")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("Close took %v with a 300ms deadline", d)
+	}
+}
+
+type rejectingSender struct{}
+
+func (rejectingSender) SendEvents(_ context.Context, _ string, events []api.Event) (api.EventResult, error) {
+	return api.EventResult{Rejected: len(events)}, nil
+}
+
+// HTTP 200 with rejected events is still a failure to deliver them.
+func TestRejectedEventsMakeCloseFail(t *testing.T) {
+	r := New(rejectingSender{}, "run_a", 1, time.Hour, nil)
+	r.Add("answer", nil)
+	if err := r.Close(context.Background()); err == nil {
+		t.Fatal("Close reported success although the server rejected the event")
+	}
+}
