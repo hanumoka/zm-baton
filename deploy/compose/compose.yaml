@@ -1,0 +1,16 @@
+# Local development database for the stage-1 compat test.
+# Put ZM_BATON_DB_PASSWORD in deploy/compose/.env (git-ignored); see .env.example.
+name: zm-baton-dev
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: zm_baton
+      POSTGRES_USER: zm_baton
+      POSTGRES_PASSWORD: ${ZM_BATON_DB_PASSWORD:?set ZM_BATON_DB_PASSWORD in deploy/compose/.env}
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - zm-baton-pg:/var/lib/postgresql/data
+volumes:
+  zm-baton-pg: {}

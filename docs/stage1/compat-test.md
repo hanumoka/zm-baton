@@ -42,7 +42,7 @@
 
 | 브랜치 | 내용 | Go 필요 |
 |---|---|---|
-| `work/compat-server` | PostgreSQL Compose, 서버 세 테이블과 API 넷, 서버 시험 | 아니요 |
+| `work/compat-server` | PostgreSQL Compose, 서버 세 테이블과 API 다섯, 서버 시험 | 아니요 |
 | `work/compat-agent` | 연결 프로그램, Claude Code 실행, 끝에서 끝까지 시험 | 예. 설치 전에 소유자 확인 |
 
 ## 확인된 환경
