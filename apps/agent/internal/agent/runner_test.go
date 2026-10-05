@@ -16,6 +16,7 @@ import (
 
 	"github.com/hanumoka/zm-baton/apps/agent/internal/api"
 	"github.com/hanumoka/zm-baton/apps/agent/internal/proc"
+	"github.com/hanumoka/zm-baton/apps/agent/internal/report"
 )
 
 // The runner tests never start the real Claude Code. The executor is this test
@@ -159,7 +160,7 @@ func checkSequence(t *testing.T, runID string, evs []api.Event) []string {
 	t.Helper()
 	out := make([]string, len(evs))
 	for i, ev := range evs {
-		if ev.Seq != int64(i+1) || ev.EventID != fmt.Sprintf("%s:%d", runID, i+1) || ev.Generation != 3 {
+		if ev.Seq != int64(i+1) || !report.IsEventID(ev.EventID) || ev.Generation != 3 {
 			t.Fatalf("event %d badly numbered: %+v", i, ev)
 		}
 		out[i] = ev.Kind
@@ -197,17 +198,17 @@ func TestExecuteReportsASuccessfulRun(t *testing.T) {
 	}
 }
 
-func TestExecuteWithoutResultEndsFailed(t *testing.T) {
+func TestExecuteWithoutResultEndsLost(t *testing.T) {
 	f, c := newFakeServer(t)
 	r := newTestRunner(t, c, "noresult", 0)
-	if got := r.Execute(context.Background(), api.Claim{RunID: "run_nr", Generation: 3}); got != EndFailed {
+	if got := r.Execute(context.Background(), api.Claim{RunID: "run_nr", Generation: 3}); got != EndLost {
 		t.Fatalf("end reason %q", got)
 	}
 	evs := f.runEvents("run_nr")
 	if got := checkSequence(t, "run_nr", evs); !slices.Equal(got, []string{"lifecycle", "answer", "error", "lifecycle"}) {
 		t.Fatalf("kinds %v", got)
 	}
-	if p := evs[3].Payload; p["end_reason"] != "failed" || p["exit_code"] != 3.0 || p["result_seen"] != false {
+	if p := evs[3].Payload; p["end_reason"] != "lost" || p["exit_code"] != 3.0 || p["result_seen"] != false {
 		t.Fatalf("ended payload %v", p)
 	}
 }

@@ -6,10 +6,12 @@ package report
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,7 +82,8 @@ func (r *Reporter) Start() {
 	go r.loop()
 }
 
-// Add numbers an event and queues it. seq starts at 1; event_id is "<run id>:<seq>".
+// Add numbers an event and queues it. seq starts at 1. The event_id is fixed here,
+// so every resend of the event carries the same id.
 func (r *Reporter) Add(kind string, payload map[string]any) api.Event {
 	if payload == nil {
 		payload = map[string]any{}
@@ -88,16 +91,54 @@ func (r *Reporter) Add(kind string, payload map[string]any) api.Event {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.nextSeq++
+	at := r.now()
 	ev := api.Event{
-		EventID:    fmt.Sprintf("%s:%d", r.runID, r.nextSeq),
+		EventID:    NewEventID(at),
 		Generation: r.generation,
 		Seq:        r.nextSeq,
 		Kind:       kind,
 		Payload:    payload,
-		OccurredAt: r.now().UTC().Format(time.RFC3339Nano),
+		OccurredAt: at.UTC().Format(time.RFC3339Nano),
 	}
 	r.pending = append(r.pending, ev)
 	return ev
+}
+
+// NewEventID returns "evt_" and an RFC 9562 version 7 UUID (contract v1 "식별자").
+// A random id, unlike one built from the run id and seq, cannot collide with an
+// earlier event if the agent restarts and numbers a run again.
+func NewEventID(at time.Time) string {
+	var b [16]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails since Go 1.24
+	ms := uint64(at.UnixMilli())
+	for i := range 6 {
+		b[i] = byte(ms >> (40 - 8*i))
+	}
+	b[6] = b[6]&0x0f | 0x70
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("evt_%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// IsEventID reports whether s is "evt_" followed by a lowercase version 7 UUID.
+func IsEventID(s string) bool {
+	u, ok := strings.CutPrefix(s, "evt_")
+	if !ok || len(u) != 36 {
+		return false
+	}
+	for i := range len(u) {
+		c := u[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f') {
+				return false
+			}
+		}
+	}
+	return u[14] == '7' && strings.IndexByte("89ab", u[19]) >= 0
 }
 
 // Count is the number of events numbered so far.

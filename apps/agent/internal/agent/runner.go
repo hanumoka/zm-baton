@@ -26,6 +26,7 @@ const (
 	EndSubmitted = "submitted"
 	EndFailed    = "failed"
 	EndCancelled = "cancelled"
+	EndLost      = "lost"
 )
 
 // pipeGrace is how long stdout may stay open after the executor exits
@@ -226,6 +227,8 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 	// A successful result counts even if a stop was requested after it arrived.
+	// An error result or a timeout stop is failed. Output that ends with no result
+	// at all is lost (contract v1 "실행이 끊겼을 때" 1): nobody knows what was done.
 	reason := EndFailed
 	switch {
 	case mapper.Succeeded():
@@ -235,6 +238,7 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 	case stopWhy == "timeout":
 		rep.Add(claude.KindError, map[string]any{"source": "agent", "text": "run timeout reached; executor stopped"})
 	case !mapper.ResultSeen():
+		reason = EndLost
 		rep.Add(claude.KindError, map[string]any{"source": "agent", "text": "executor exited without a result event"})
 	}
 	rep.Add(claude.KindLifecycle, map[string]any{

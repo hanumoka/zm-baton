@@ -21,7 +21,7 @@ func main() {
 }
 
 func run() int {
-	server := flag.String("server", "http://localhost:18081", "zm-baton server base URL")
+	server := flag.String("server", "http://127.0.0.1:18081", "zm-baton server base URL")
 	deviceID := flag.String("device-id", "", "device id sent with each claim, e.g. dev_compat_a (required)")
 	workdir := flag.String("workdir", "", "executor working directory; must exist and must not be under the OS temp dir (required)")
 	prompt := flag.String("prompt", "", "prompt passed to Claude Code (required)")

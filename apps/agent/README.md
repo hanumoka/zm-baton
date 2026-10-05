@@ -17,9 +17,11 @@
    - `thinking`은 `thought`, `tool_use`는 `action`, `tool_result`는 `action_result`, `text`는 `answer`가 된다.
    - `rate_limit_event`와 `result`의 사용량은 `usage`가 된다. 실패한 `result`는 `error`가 된다.
    - 그 밖의 줄(`system` 등)은 보내지 않고 종류별 개수만 로컬 로그에 남긴다.
-4. 사건마다 `seq`(1부터)와 `event_id`(`<run id>:<seq>`)를 붙인다. 0.5초마다, 그리고 끝날 때 묶어 보낸다.
+4. 사건마다 `seq`(1부터)와 `event_id`(`evt_`와 UUIDv7)를 붙인다. 0.5초마다, 그리고 끝날 때 묶어 보낸다. 다시 보낼 때는 같은 `event_id`를 쓴다.
    - 시작할 때 `lifecycle` `started`(세션 번호 포함)를 보낸다. 끝날 때 `lifecycle` `ended`를 보낸다.
-   - 성공한 `result`가 오면 종료 이유는 `submitted`이고, 아니면 `failed`다. `result` 없이 프로세스가 끝나도 `failed`다.
+   - 성공한 `result`가 오면 종료 이유는 `submitted`이고, 오류 `result`가 오면 `failed`다.
+   - `result` 없이 출력이 끝나면 `lost`다. 무엇을 했는지 알 수 없으므로 서버가 작업에 「결과 확인 필요」를 단다.
+   - 실행 시간 제한에 걸려 멈추면 `failed`다.
    - 중단하면 종료 이유는 `cancelled`이다.
 5. 실행기를 끝낼 때는 `proc.KillRun(pid, 세션 번호)`만 쓴다.
    - 기록한 PID의 명령줄을 먼저 읽는다. 세션 번호가 있을 때만 그 PID와 하위 프로세스를 끝낸다. Windows는 `taskkill /T /F`를 쓴다.
@@ -29,7 +31,7 @@
 
 | 플래그 | 기본값 | 뜻 |
 |---|---|---|
-| `--server` | `http://localhost:18081` | 서버 주소 |
+| `--server` | `http://127.0.0.1:18081` | 서버 주소. 서버는 기본으로 이 PC 안에서만 접속을 받는다 |
 | `--device-id` | 없음(필수) | 청구할 때 보내는 기기 번호. 예: `dev_compat_a` |
 | `--workdir` | 없음(필수) | 실행기 작업 폴더. 있어야 하고, OS 임시 폴더(`TMP`·`TEMP`·`TMPDIR` 포함) 안이면 거부한다 |
 | `--prompt` | 없음(필수) | Claude Code에 넘길 프롬프트 |

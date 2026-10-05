@@ -3,7 +3,6 @@ package report
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"sync"
 	"testing"
@@ -44,7 +43,7 @@ func TestAddNumbersEventsFromOne(t *testing.T) {
 	r.now = func() time.Time { return time.Date(2026, 10, 5, 1, 2, 3, 0, time.FixedZone("KST", 9*3600)) }
 	for i := 1; i <= 3; i++ {
 		ev := r.Add("answer", map[string]any{"text": "x"})
-		if ev.Seq != int64(i) || ev.EventID != fmt.Sprintf("run_a:%d", i) || ev.Generation != 7 {
+		if ev.Seq != int64(i) || !IsEventID(ev.EventID) || ev.Generation != 7 {
 			t.Fatalf("event %d: %+v", i, ev)
 		}
 		if ev.OccurredAt != "2026-10-04T16:02:03Z" {
@@ -182,5 +181,25 @@ func TestPermanentRefusalDropsBatchAndContinues(t *testing.T) {
 	}
 	if _, dropped := r.Totals(); dropped != 1 {
 		t.Fatalf("dropped %d, want 1", dropped)
+	}
+}
+
+func TestEventIDsAreUniqueTimeOrderedUUIDv7(t *testing.T) {
+	early := time.Date(2026, 10, 5, 1, 2, 3, 0, time.UTC)
+	late := early.Add(time.Millisecond)
+	a, b := NewEventID(early), NewEventID(late)
+	if !IsEventID(a) || !IsEventID(b) {
+		t.Fatalf("not evt_ + UUIDv7: %q %q", a, b)
+	}
+	if a >= b {
+		t.Fatalf("a later event id must sort after an earlier one: %q %q", a, b)
+	}
+	if NewEventID(early) == a {
+		t.Fatal("two ids from the same millisecond must differ")
+	}
+	for _, bad := range []string{"run_a:1", "evt_", "evt_0199b4e0-0000-4000-8000-000000000000", "evt_0199B4E0-0000-7000-8000-000000000000"} {
+		if IsEventID(bad) {
+			t.Fatalf("accepted %q", bad)
+		}
 	}
 }
