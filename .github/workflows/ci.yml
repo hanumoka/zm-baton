@@ -49,9 +49,16 @@ jobs:
           cache: false # no external modules, so no go.sum to key a cache on
       - name: gofmt
         shell: bash
-        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+        # A gofmt error fails the step on its own; any listed file fails it too.
+        run: |
+          out=$(gofmt -l .) || { echo "gofmt failed"; exit 1; }
+          if [ -n "$out" ]; then echo "not formatted:"; echo "$out"; exit 1; fi
       - run: go vet ./...
       - run: go test -count=1 -v ./... # -v: the log names each test, so a skipped stop test is visible
+      - name: go test -race (review standard v0.3, Go)
+        env:
+          CGO_ENABLED: '1' # the race detector needs cgo and a C compiler, which the runners have
+        run: go test -race -count=1 ./...
 
   web:
     name: web (React, TypeScript, Vitest)
