@@ -19,6 +19,9 @@ const MinMarkerLen = 16
 // ErrMarkerMismatch means the executor's command line does not carry the marker.
 var ErrMarkerMismatch = errors.New("command line does not contain the run marker")
 
+// ErrExited means the executor had already exited when a stop was asked for.
+var ErrExited = errors.New("the executor has already exited")
+
 // errClosed means Kill was called after Close released the pin.
 var errClosed = errors.New("refusing to kill: the executor is no longer tracked")
 

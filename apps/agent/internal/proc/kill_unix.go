@@ -45,7 +45,7 @@ func (r *Run) Kill(marker string) error {
 		return errClosed
 	}
 	pid := r.p.Pid
-	cmdline, err := CommandLine(pid)
+	cmdline, err := commandLine(pid)
 	if err != nil {
 		return fmt.Errorf("refusing to kill pid %d: cannot read its command line: %w", pid, err)
 	}
@@ -65,8 +65,8 @@ func (r *Run) Close() {
 	r.closed = true
 }
 
-// CommandLine reads /proc/<pid>/cmdline.
-func CommandLine(pid int) (string, error) {
+// commandLine reads /proc/<pid>/cmdline.
+func commandLine(pid int) (string, error) {
 	data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
 	if err != nil {
 		return "", err

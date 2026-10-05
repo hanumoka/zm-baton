@@ -119,7 +119,11 @@ func exitedWithin(t *testing.T, h syscall.Handle, d time.Duration) bool {
 func TestKillRefusesWithoutAMatchingMarker(t *testing.T) {
 	marker := newMarker(t)
 	h := startHelper(t, "parent", marker)
-	if got, _ := CommandLine(h.cmd.Process.Pid); !strings.Contains(got, marker) {
+	got, err := commandLineOf(h.run.process)
+	if err != nil {
+		t.Fatalf("cannot read the helper command line: %v", err)
+	}
+	if !strings.Contains(got, marker) {
 		t.Fatalf("helper command line %q does not carry the marker", got)
 	}
 	cases := map[string]string{
@@ -173,8 +177,8 @@ func TestKillAfterTheExecutorExitedStopsNothing(t *testing.T) {
 	if err := h.cmd.Wait(); err != nil {
 		t.Fatalf("helper parent: %v", err)
 	}
-	if err := h.run.Kill(marker); err == nil {
-		t.Fatal("Kill acted on an executor that had already exited")
+	if err := h.run.Kill(marker); !errors.Is(err, ErrExited) {
+		t.Fatalf("Kill on an executor that had already exited: want ErrExited, got %v", err)
 	}
 	if exitedWithin(t, h.child, 300*time.Millisecond) {
 		t.Fatal("a refused Kill stopped the orphaned child")

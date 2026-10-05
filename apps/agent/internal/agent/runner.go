@@ -207,8 +207,13 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 	// Pin the executor before it runs, so a stop can only ever reach this process.
 	pinned, err := proc.Track(cmd.Process)
 	if err != nil {
-		_ = cmd.Process.Kill() // through Go's own handle: still this process, still suspended
-		_ = cmd.Wait()
+		// Through Go's own handle: still this process, still suspended. If even that
+		// fails, do not Wait for a process that will never run.
+		if killErr := cmd.Process.Kill(); killErr != nil {
+			log.Error("could not end the unpinned executor; it stays suspended", "err", killErr)
+		} else {
+			_ = cmd.Wait()
+		}
 		return r.failBeforeStart(rep, log, "cannot pin the executor process", err)
 	}
 	// Released only after the stop decision below is final.

@@ -6,11 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
+	"unsafe"
 )
 
 var (
@@ -20,6 +19,7 @@ var (
 	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
 	procTerminateJobObject       = kernel32.NewProc("TerminateJobObject")
 	procNtResumeProcess          = ntdll.NewProc("NtResumeProcess")
+	procNtQueryInformation       = ntdll.NewProc("NtQueryInformationProcess")
 )
 
 const (
@@ -29,6 +29,11 @@ const (
 	processSuspendResume           = 0x0800
 	processQueryLimitedInformation = 0x1000
 	synchronize                    = 0x00100000
+
+	processCommandLineInformation = 60 // PROCESSINFOCLASS, Windows 8.1 and later
+	statusInfoLengthMismatch      = 0xC0000004
+	statusBufferTooSmall          = 0xC0000023
+	statusBufferOverflow          = 0x80000005
 )
 
 // SysProcAttr starts the executor suspended, so Track can put it in a job object
@@ -55,7 +60,7 @@ func Track(p *os.Process) (*Run, error) {
 	if p == nil || p.Pid <= 0 || p.Pid == os.Getpid() {
 		return nil, errors.New("track: invalid process")
 	}
-	for _, proc := range []*syscall.LazyProc{procCreateJobObjectW, procAssignProcessToJobObject, procTerminateJobObject, procNtResumeProcess} {
+	for _, proc := range []*syscall.LazyProc{procCreateJobObjectW, procAssignProcessToJobObject, procTerminateJobObject, procNtResumeProcess, procNtQueryInformation} {
 		if err := proc.Find(); err != nil {
 			return nil, fmt.Errorf("track: %w", err)
 		}
@@ -84,8 +89,10 @@ func Track(p *os.Process) (*Run, error) {
 
 // Kill stops the executor and every process in its job, but only while the
 // executor runs and its command line carries marker. It stops nothing after
-// Close, for a bad marker, when the command line cannot be read, or once the
-// executor has exited: an exited process has no command line to check.
+// Close, for a bad marker, when the executor has already exited, or when its
+// command line cannot be read. Both checks go through the pinned handle, never
+// through a PID lookup. If the executor exits between the checks and the stop,
+// only processes left in its own job are stopped.
 func (r *Run) Kill(marker string) error {
 	if err := checkMarker(marker); err != nil {
 		return err
@@ -95,8 +102,14 @@ func (r *Run) Kill(marker string) error {
 	if r.closed {
 		return errClosed
 	}
-	// The handle is still open, so this PID names the executor and no other process.
-	cmdline, err := CommandLine(r.pid)
+	switch ev, err := syscall.WaitForSingleObject(r.process, 0); ev {
+	case syscall.WAIT_TIMEOUT: // still running
+	case syscall.WAIT_OBJECT_0:
+		return fmt.Errorf("refusing to kill pid %d: %w", r.pid, ErrExited)
+	default:
+		return fmt.Errorf("refusing to kill pid %d: cannot tell whether it runs: %w", r.pid, err)
+	}
+	cmdline, err := commandLineOf(r.process)
 	if err != nil {
 		return fmt.Errorf("refusing to kill pid %d: cannot read its command line: %w", r.pid, err)
 	}
@@ -121,27 +134,35 @@ func (r *Run) Close() {
 	syscall.CloseHandle(r.process)
 }
 
-// CommandLine reads the command line of pid through CIM. An exited or inaccessible
-// process yields an empty string, which never contains a marker.
-func CommandLine(pid int) (string, error) {
-	// pid is an int, so nothing from outside reaches the script text.
-	script := "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; " +
-		fmt.Sprintf("(Get-CimInstance Win32_Process -Filter 'ProcessId=%d').CommandLine", pid)
-	powershell := systemTool(filepath.Join("WindowsPowerShell", "v1.0", "powershell.exe"), "powershell")
-	out, err := exec.Command(powershell, "-NoProfile", "-NonInteractive", "-Command", script).Output()
-	if err != nil {
-		return "", fmt.Errorf("powershell: %w", err)
-	}
-	return strings.TrimSpace(string(out)), nil
+// unicodeString is the UNICODE_STRING header NtQueryInformationProcess writes
+// at the start of the buffer; Buffer points into the same buffer.
+type unicodeString struct {
+	Length        uint16
+	MaximumLength uint16
+	Buffer        *uint16
 }
 
-// systemTool prefers the copy under %SystemRoot%\System32 over a PATH lookup.
-func systemTool(rel, fallback string) string {
-	if root := os.Getenv("SystemRoot"); root != "" {
-		p := filepath.Join(root, "System32", rel)
-		if _, err := os.Stat(p); err == nil {
-			return p
+// commandLineOf reads the command line of the process behind h, so the answer
+// belongs to that process object and not to whatever holds its PID now.
+func commandLineOf(h syscall.Handle) (string, error) {
+	size := uint32(4096)
+	for range 5 {
+		buf := make([]byte, size)
+		var needed uint32
+		status, _, _ := procNtQueryInformation.Call(uintptr(h), processCommandLineInformation,
+			uintptr(unsafe.Pointer(&buf[0])), uintptr(size), uintptr(unsafe.Pointer(&needed)))
+		switch uint32(status) {
+		case 0:
+			us := (*unicodeString)(unsafe.Pointer(&buf[0]))
+			if us.Length == 0 || us.Buffer == nil {
+				return "", nil
+			}
+			return syscall.UTF16ToString(unsafe.Slice(us.Buffer, us.Length/2)), nil
+		case statusInfoLengthMismatch, statusBufferTooSmall, statusBufferOverflow:
+			size = max(needed, size*2)
+		default:
+			return "", fmt.Errorf("NtQueryInformationProcess: NTSTATUS 0x%x", uint32(status))
 		}
 	}
-	return fallback
+	return "", errors.New("NtQueryInformationProcess: command line keeps growing")
 }

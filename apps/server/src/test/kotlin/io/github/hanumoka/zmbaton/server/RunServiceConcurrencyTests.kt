@@ -127,7 +127,8 @@ class RunServiceConcurrencyTests @Autowired constructor(
 
 	/**
 	 * Waits until a report query is blocked by the given holder backend. Matching the holder pid
-	 * keeps other connections, even ones running the same report SQL, from satisfying the check.
+	 * keeps reports on other work items from satisfying the check. The test sends one report to
+	 * its own new work item; telling apart several reports blocked on the same row is not covered.
 	 */
 	private fun awaitReportBlockedBy(holderPid: Int) {
 		val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
