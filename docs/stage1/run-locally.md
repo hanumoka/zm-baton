@@ -22,37 +22,55 @@
 - Claude Code(`claude.exe`)가 설치돼 있고 소유자가 직접 로그인해 둔 상태다. zm-baton은 로그인 정보를 읽거나 보내지 않는다.
 - 연결 프로그램은 Claude Code를 **소유자 개인 구독**으로 돌린다. 아래 예시는 파일 한 줄을 읽는 짧은 지시라 사용량이 작다.
 
-## 단계
+## 창 셋을 쓴다
 
-### 1. 데이터베이스를 띄운다
+서버와 데스크톱 껍데기는 끝날 때까지 창을 차지하므로 PowerShell 창 셋을 쓴다.
+
+| 창 | 하는 일 |
+|---|---|
+| 창 A | 1~3단계. 서버를 띄운 채 둔다 |
+| 창 B | 4단계. 데스크톱 껍데기를 띄운 채 둔다(선택) |
+| 창 C | 5단계. 연결 프로그램을 한 번 돌린다 |
+
+**모든 명령 묶음은 저장소 루트에서 시작한다.** 창마다 먼저 저장소 경로를 `$repo`에 담는다. 각 묶음의 첫 줄이 `$repo` 기준으로 옮겨 가므로, 앞 묶음이 어디서 끝났든 상관없다.
 
 ```powershell
-cd deploy/compose
+$repo = '<이 저장소를 내려받은 절대 경로>'   # 구분자는 / 로 쓴다. 예: C:/work/zm-baton
+```
+
+경로 구분자를 `/`로 쓰는 것은 3단계의 `ZM_BATON_WEB_DIR`이 `file:` 주소이기 때문이다. 시험은 이 형식으로만 했다.
+
+## 단계
+
+### 1. 데이터베이스를 띄운다(창 A)
+
+```powershell
+Set-Location "$repo/deploy/compose"
 Copy-Item .env.example .env
 # .env 의 ZM_BATON_DB_PASSWORD 를 이 PC에서만 쓸 임의의 값으로 바꾼다. .env 는 Git에 들어가지 않는다.
 docker compose up -d
 docker compose ps   # zm-baton-dev-postgres-1 이 Up, 127.0.0.1:15432 로 보이면 된다
 ```
 
-### 2. Web 화면을 빌드한다
+### 2. Web 화면을 빌드한다(창 A)
 
 ```powershell
-cd apps/web
+Set-Location "$repo/apps/web"
 npm ci
 npm run build       # dist/ 가 생긴다
 ```
 
-### 3. 서버를 띄운다
+### 3. 서버를 띄운다(창 A)
 
 ```powershell
-cd apps/server
+Set-Location "$repo/apps/server"
 ./gradlew.bat bootJar
 $env:ZM_BATON_DB_PASSWORD = '<.env 에 적은 값>'
-$env:ZM_BATON_WEB_DIR = 'file:<저장소 절대 경로>/apps/web/dist/'   # 끝의 / 를 빼지 않는다
+$env:ZM_BATON_WEB_DIR = "file:$repo/apps/web/dist/"   # 끝의 / 를 빼지 않는다
 java -jar build/libs/server-0.0.1-SNAPSHOT.jar
 ```
 
-다른 PowerShell 창에서 확인한다.
+서버는 창 A를 차지한다. 창 C에서 확인한다.
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:18081/actuator/health   # status 가 UP
@@ -60,24 +78,24 @@ Invoke-RestMethod http://127.0.0.1:18081/actuator/health   # status 가 UP
 
 브라우저로 `http://127.0.0.1:18081/`을 열면 화면이 보인다.
 
-### 4. 데스크톱 껍데기로 열어 본다(선택)
+### 4. 데스크톱 껍데기로 열어 본다(창 B, 선택)
 
 ```powershell
-cd apps/desktop
+Set-Location "$repo/apps/desktop"
 npm ci
 npm start
 ```
 
 같은 화면이 창으로 뜬다. 서버 밖 주소로는 이동하지 않는다.
 
-### 5. 연결 프로그램으로 Claude Code를 한 번 돌린다
+### 5. 연결 프로그램으로 Claude Code를 한 번 돌린다(창 C)
 
 1. 임시 폴더(`$env:TEMP`) 밖에 빈 폴더를 하나 만들고, 그 안에 `hello.txt`를 둔다. 연결 프로그램은 임시 폴더 안의 작업 폴더를 거부한다.
 2. 화면 왼쪽 위 입력란에 제목을 쓰고 「작업과 실행 시도 만들기」를 누른다.
 3. 연결 프로그램을 빌드하고 한 번만 실행한다.
 
 ```powershell
-cd apps/agent
+Set-Location "$repo/apps/agent"
 go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 ./bin/zm-baton-agent.exe --device-id dev_me --workdir '<만든 폴더>' --prompt 'Read hello.txt in the current folder and reply with its first line only.' --once
 ```
@@ -96,9 +114,9 @@ go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 |---|---|
 | `docker compose up`이 비밀번호를 요구하며 멈춘다 | `.env`가 없거나 `ZM_BATON_DB_PASSWORD`가 비었다. 1단계를 다시 한다 |
 | 서버가 시작하다 DB 연결 오류로 끝난다 | 컨테이너가 떠 있는지, 서버 창의 `ZM_BATON_DB_PASSWORD`가 `.env`와 같은지 본다 |
-| 서버가 18081 포트를 이미 쓰고 있다며 끝난다 | 그 포트를 쓰는 다른 프로세스를 확인한다. 이름으로 골라 끄지 말고 PID를 확인한 뒤 끈다 |
+| 서버가 18081 포트를 이미 쓰고 있다며 끝난다 | 이 절차로 띄운 서버가 다른 창에서 아직 돌고 있으면 그 창에서 Ctrl+C로 끈다. 무엇이 그 포트를 쓰는지 모르면 **끄지 않는다.** 대신 서버를 다른 포트로 띄운다: 창 A에서 `$env:ZM_BATON_SERVER_PORT = '18082'`를 준 뒤 다시 실행하고, 연결 프로그램에는 `--server http://127.0.0.1:18082`, 데스크톱 껍데기에는 `$env:ZM_BATON_SERVER_URL = 'http://127.0.0.1:18082/'`를 준다 |
 | 화면 주소가 404다 | `ZM_BATON_WEB_DIR`이 `file:`로 시작하고 `/`로 끝나는지, `apps/web/dist/`가 있는지 본다 |
-| 연결 프로그램이 `bad --workdir`로 끝난다 | 작업 폴더가 임시 폴더 안에 있다. 다른 곳으로 옮긴다 |
+| 연결 프로그램이 `bad --workdir`로 끝난다 | 오류 줄의 내용을 본다. 폴더가 없거나, 폴더가 아니라 파일이거나, 임시 폴더(`TMP`·`TEMP`·`TMPDIR` 포함) 안에 있을 때 거부한다. 각각 폴더를 만들거나, 폴더 경로를 주거나, 임시 폴더 밖으로 옮긴다 |
 | 연결 프로그램이 `bad --claude`로 끝난다 | `claude`가 PATH에 없거나 `.cmd`·`.bat`다. `--claude`로 `claude.exe` 경로를 준다 |
 | 연결 프로그램이 할 일을 못 찾고 기다린다 | 화면에서 실행 시도를 만들었는지, 서버 주소가 기본값(`http://127.0.0.1:18081`)인지 본다 |
 
@@ -106,15 +124,15 @@ go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 
 1. 연결 프로그램은 `--once`이면 스스로 끝난다.
 2. 서버 창에서 Ctrl+C로 서버를 끈다.
-3. `deploy/compose`에서 `docker compose down`으로 컨테이너를 끈다. 자료는 볼륨에 남는다. 자료까지 지우려면 `docker compose down -v`.
+3. `Set-Location "$repo/deploy/compose"` 뒤 `docker compose down`으로 컨테이너를 끈다. 자료는 볼륨에 남는다. 자료까지 지우려면 `docker compose down -v`.
 
 ## 핵심 모듈 재현 시험에 쓸 명령
 
-핵심 모듈 기록의 「재현 시험 하나」에 쓸 수 있는 명령이다. 어느 것을 쓸지는 기록을 쓰는 소유자가 정한다.
+핵심 모듈 기록의 「재현 시험 하나」에 쓸 수 있는 명령이다. 어느 것을 쓸지는 기록을 쓰는 소유자가 정한다. 명령은 `$repo`를 담은 아무 창에서나 실행한다.
 
 | 모듈 | 무엇을 재현하는가 | 명령 |
 |---|---|---|
-| 2 실행 계약과 로컬 연결 프로그램 | 같은 실행 시도를 여럿이 동시에 청구하면 하나만 성공한다 | `cd apps/server; ./gradlew.bat test --tests '*RunServiceTests*concurrent*'` |
-| 2 | 옛 세대의 늦은 보고는 기록만 되고 상태를 바꾸지 않는다 | `cd apps/server; ./gradlew.bat test --tests '*RunServiceTests*older generation*'` |
-| 3 실행기 어댑터와 실행 보고 표준 | 표식이 맞을 때만 실행기를 끝낸다 | `cd apps/agent; go test -v -run TestKill ./internal/proc` |
+| 2 실행 계약과 로컬 연결 프로그램 | 같은 실행 시도를 여럿이 동시에 청구하면 하나만 성공한다 | `Set-Location "$repo/apps/server"; ./gradlew.bat test --tests '*RunServiceTests*concurrent*'` |
+| 2 | 옛 세대의 늦은 보고는 기록만 되고 상태를 바꾸지 않는다 | `Set-Location "$repo/apps/server"; ./gradlew.bat test --tests '*RunServiceTests*older generation*'` |
+| 3 실행기 어댑터와 실행 보고 표준 | 표식이 맞을 때만 실행기를 끝낸다 | `Set-Location "$repo/apps/agent"; go test -v -run TestKill ./internal/proc` |
 | 3 | Claude Code 출력이 계약의 사건으로 바뀐다 | 위 「5. 연결 프로그램으로 Claude Code를 한 번 돌린다」 |
