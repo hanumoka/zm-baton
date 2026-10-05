@@ -1,0 +1,21 @@
+# 빌드 결과
+build/
+out/
+dist/
+bin/
+.gradle/
+node_modules/
+
+# 편집기
+.idea/
+.vscode/
+*.iml
+
+# 로컬 설정과 비밀값
+.env
+.env.*
+!.env.example
+
+# 실행 기록과 로컬 연결 프로그램 상태
+*.log
+.zm-baton/
