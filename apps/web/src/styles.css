@@ -1,0 +1,26 @@
+:root {
+  font-family: system-ui, 'Segoe UI', 'Malgun Gothic', sans-serif;
+  color: #1d1d1f;
+  background: #fafafa;
+}
+main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+header p { color: #555; margin-top: 0; }
+.columns { display: grid; grid-template-columns: 320px 1fr; gap: 16px; }
+@media (max-width: 720px) { .columns { grid-template-columns: 1fr; } }
+form { display: flex; gap: 8px; margin-bottom: 12px; }
+input { flex: 1; padding: 6px 8px; }
+ul.list, ul.runs { list-style: none; padding: 0; margin: 0 0 12px; }
+ul.list button, ul.runs button {
+  width: 100%; text-align: left; padding: 8px; margin-bottom: 4px;
+  border: 1px solid #ddd; background: #fff; border-radius: 6px; cursor: pointer;
+  display: flex; justify-content: space-between; gap: 8px;
+}
+button.selected { border-color: #2f6fed; background: #eef3ff; }
+small { color: #666; }
+ol.events { padding-left: 0; list-style: none; font-size: 14px; }
+ol.events li { padding: 4px 0; border-bottom: 1px solid #eee; white-space: pre-wrap; word-break: break-word; }
+ol.events code { color: #888; }
+.kind-error { color: #b00020; }
+.error { background: #fde8ea; padding: 8px; border-radius: 6px; cursor: pointer; }
+.undecided { margin: 0 0 8px; padding-left: 18px; font-size: 13px; color: #666; }
+.undecided .relevant { color: #8a5a00; font-weight: 600; }
