@@ -1,15 +1,27 @@
-# 빌드 결과
-build/
-out/
-dist/
-bin/
+# 빌드 결과. 소스 폴더 이름과 겹치지 않게 위치를 좁힌다
+/build/
+/out/
+/dist/
+apps/*/build/
+apps/*/out/
+apps/*/dist/
+packages/*/build/
+packages/*/dist/
+apps/agent/bin/
 .gradle/
+.kotlin/
 node_modules/
 
-# 편집기
+# Go 시험·산출물
+*.exe
+*.test
+coverage.out
+
+# 편집기와 OS
 .idea/
 .vscode/
 *.iml
+.DS_Store
 
 # 로컬 설정과 비밀값
 .env
