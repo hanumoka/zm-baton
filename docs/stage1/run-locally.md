@@ -2,7 +2,7 @@
 
 **목적**: 1단계 설치·호환 시험으로 만든 것(서버, 로컬 연결 프로그램, Web 화면, 데스크톱 껍데기)을 소유자가 자기 PC에서 직접 돌려 본다. 핵심 모듈 2·3의 재현 시험([docs/core-modules/README.md](../core-modules/README.md))을 돌릴 때도 이 순서를 쓴다.
 **대상**: Windows 11 PC. 명령은 PowerShell 기준이다.
-**마지막 검토**: 2026-10-05
+**마지막 검토**: 2026-10-05. 작성 AI가 이 순서를 그대로 따라 해 완료 확인 세 가지를 만족했다. 다만 서버는 창 대신 백그라운드로 띄웠고, 화면의 버튼 대신 같은 API 두 개를 불렀다.
 
 ## 무엇이 어디에 뜨는가
 
@@ -18,7 +18,7 @@
 ## 전제조건
 
 - Docker Desktop이 실행 중이다.
-- JDK 25, Go 1.27, Node.js 24가 설치돼 있다.
+- JDK 25, Go 1.27, Node.js 24가 설치돼 있다. 막 설치했다면 PowerShell 창을 새로 연다. 설치 전에 연 창은 바뀐 PATH를 모른다(`go`를 찾지 못한다).
 - Claude Code(`claude.exe`)가 설치돼 있고 소유자가 직접 로그인해 둔 상태다. zm-baton은 로그인 정보를 읽거나 보내지 않는다.
 - 연결 프로그램은 Claude Code를 **소유자 개인 구독**으로 돌린다. 아래 예시는 파일 한 줄을 읽는 짧은 지시라 사용량이 작다.
 
@@ -46,8 +46,9 @@ $repo = '<이 저장소를 내려받은 절대 경로>'   # 구분자는 / 로 �
 
 ```powershell
 Set-Location "$repo/deploy/compose"
-Copy-Item .env.example .env
-# .env 의 ZM_BATON_DB_PASSWORD 를 이 PC에서만 쓸 임의의 값으로 바꾼다. .env 는 Git에 들어가지 않는다.
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+# 처음이면 .env 의 ZM_BATON_DB_PASSWORD 를 이 PC에서만 쓸 임의의 값으로 바꾼다. .env 는 Git에 들어가지 않는다.
+# 이미 .env 가 있으면 그대로 둔다. PostgreSQL은 볼륨을 처음 만들 때만 비밀번호를 정하므로, 바꾸면 접속이 실패한다.
 docker compose up -d
 docker compose ps   # zm-baton-dev-postgres-1 이 Up, 127.0.0.1:15432 로 보이면 된다
 ```
