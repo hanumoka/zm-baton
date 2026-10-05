@@ -202,3 +202,61 @@ Windows에서 연결 프로그램은 실행기를 이렇게 붙잡는다.
 - 한도 사건(`rate_limit_event`)에는 추가 과금 상태를 뜻하는 값(`overageStatus`)이 들어 있었다. 추가 과금 신호를 읽는 작업(DEC-0083)에서 이 값을 쓸 수 있는지 확인한다.
 - 연결 프로그램이 재시작하면 `seq`를 1부터 다시 매긴다. 같은 실행 시도를 이어서 보고하는 재개는 1단계 본작업에서 정한다.
 - 실행기가 정상으로 끝난 뒤 남은 하위 프로세스는 작업 객체에 남아 계속 돈다. 실행이 끝날 때 남은 하위 프로세스를 정리할지는 1단계 본작업에서 정한다.
+
+## 2026-10-05 화면 쪽 (`work/compat-ui`)
+
+계획은 [compat-test-ui.md](compat-test-ui.md)에 있다.
+
+### 환경
+
+- OS: Windows 11 Pro 10.0.26300
+- Node.js 24.4.0, npm 11.8.0
+- Web: React 19.3.0, TypeScript 7.0.2, Vite 8.3.2, @vitejs/plugin-react 6.1.2, Vitest 5.0.3
+- 데스크톱: Electron 44.5.1(Chromium 152.0.7977.130), @electron/packager 20.3.0
+- 서버: 이 브랜치의 `apps/server`를 `java -jar`로 실행. 연결 프로그램은 main `9101bb7`(PR #4)과 같은 코드
+
+### 실행한 명령과 결과
+
+| 명령 | 결과 |
+|---|---|
+| `apps/web`에서 `npm install`(버전 고정) | 취약점 보고 0 |
+| `apps/web`에서 `tsc --noEmit`, `vitest run`, `vite build` | 타입 오류 없음. 단위 시험 8개 통과. 빌드 결과 JS 224KB(gzip 70KB) |
+| `apps/desktop`에서 `npm install`(버전 고정) | 취약점 보고 0 |
+| `apps/desktop`에서 `tsc -p .`, `npm run package` | 컴파일 성공. Windows 실행 파일 폴더 생성(368MB, 이 저장소의 코드는 `app.asar` 32KB) |
+| 이 브랜치에서 `apps/server/gradlew test` | 통과. 시험 16개(읽기 API 시험 2개 추가), 실패 0 |
+
+### 통과 기준별 결과
+
+| 기준 | 결과 | 근거 |
+|---|---|---|
+| 1. 빌드·시험·묶기 | 통과 | 위 표 |
+| 2. 서버가 화면을 내준다 | 통과 | `ZM_BATON_WEB_DIR`을 주고 서버를 띄우자 `/`와 빌드된 JS 파일이 모두 200이었다 |
+| 3. 실행 중 상태가 화면에서 바뀐다 | 통과 | 아래 「데스크톱 창에서 실행 상태가 바뀌는 것을 봤다」 |
+| 4. 창 안에서 Node 기능이 보이지 않는다 | 통과 | 페이지에서 `require`와 `process`가 모두 정의되지 않았다 |
+| 5. 묶은 실행 파일이 같은 화면을 연다 | 통과 | 묶은 `zm-baton-desktop.exe`가 같은 주소의 화면을 열고 같은 실행 상태와 사건 수를 읽었다 |
+
+### 데스크톱 창에서 실행 상태가 바뀌는 것을 봤다
+
+1. 서버 API로 작업 하나와 실행 시도 하나를 만들었다.
+2. Electron을 확인 모드로 띄웠다. 확인 모드는 창을 숨긴 채 가장 최근 작업을 사람처럼 눌러 열고, 0.5초마다 화면의 실행 상태와 사건 수를 읽는다.
+3. 4초 뒤 연결 프로그램을 `--once`로 실행했다. 실제 Claude Code가 `hello.txt`의 첫 줄을 읽어 답했다.
+4. 화면이 보여 준 상태는 「시작 전 → 실행 중 → 끝남(submitted)」 순서였다. 마지막 사건 수는 7로, 서버에 저장된 수와 같았다.
+5. 확인 모드가 시작부터 끝까지 걸린 시간은 12초였다.
+
+실행 상태는 서버의 상태 열이 아니라 화면이 사건에서 계산한 값이다. 읽기 API는 실행 시도의 상태 열을 내주지 않는다.
+
+### 보안 설정으로 한 것과 확인한 것
+
+- 창 설정: `contextIsolation`, `sandbox`, `nodeIntegration: false`, `webSecurity`. 페이지 안에서 Node 기능이 보이지 않는 것을 확인했다.
+- 서버 밖 주소로의 이동과 새 창 열기를 막고, 권한 요청을 모두 거부하고, 응답에 콘텐츠 보안 정책을 붙였다. 이 넷은 코드로 넣었고, 막히는 상황을 따로 만들어 시험하지는 않았다.
+- 사건 내용(실행기 출력)은 React가 글자로만 그린다. HTML로 해석하는 코드는 없다.
+
+### 새 의존성의 라이선스
+
+React·React DOM·Vite·@vitejs/plugin-react·Vitest·Electron·@types 패키지는 MIT, TypeScript는 Apache-2.0, @electron/packager는 BSD-2-Clause다(`npm view`로 확인). Electron은 Chromium을 함께 묶으며 그 고지(`LICENSES.chromium.html`)가 묶은 폴더에 들어 있다. 전이 의존성 전체는 확인하지 않았다.
+
+### 확인하지 못한 것
+
+- Chrome 같은 일반 브라우저로 화면을 직접 열어 보지는 않았다. Electron 안의 Chromium 152로만 봤다.
+- 이동 차단·새 창 차단·권한 거부·콘텐츠 보안 정책이 실제로 막는 장면은 시험하지 않았다.
+- 코드 서명, 설치 프로그램, 자동 업데이트, macOS·Linux 빌드, 접근성, 화면 디자인은 하지 않았다.
