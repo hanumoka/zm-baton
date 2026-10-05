@@ -126,7 +126,7 @@
 | `go vet ./...`(Windows), `GOOS=linux`·`GOOS=darwin`으로 같은 명령 | 경고 없음. Linux·macOS는 컴파일과 타입 검사만 했다 |
 | `go test -count=3 ./...` | 패키지 5개 모두 세 번 통과. 최상위 시험 34개와 하위 시험 8개, 실패 0 |
 | `go build ./cmd/zm-baton-agent` | 실행 파일 생성 |
-| `go test -race` | 돌리지 못했다. 이 PC는 `CGO_ENABLED=0`이고 C 컴파일러가 없다 |
+| `go test -race` | 이 PC에서는 돌리지 못했다(`CGO_ENABLED=0`, C 컴파일러 없음). CI(PR #7)가 ubuntu와 windows에서 돌려 다섯 패키지 모두 통과했고 경합 보고는 없었다(실행 37310279129) |
 | 이 브랜치에서 `apps/server/gradlew test` | 통과. 시험 14개, 실패 0 |
 
 ### 통과 기준별 결과
@@ -192,8 +192,9 @@ Windows에서 연결 프로그램은 실행기를 이렇게 붙잡는다.
 ### 확인하지 못한 것
 
 - 실제 Ctrl+C 신호가 연결 프로그램에 전달되는 경로는 시험하지 않았다. 단위 시험은 실행 중 context를 취소하는 경로(`cancelled`)만 확인한다.
-- Linux·macOS에서 실행기 종료를 실제로 하지 않았다. 컴파일만 확인했다. Linux에서는 실행기 하나만 끝내고 하위 프로세스는 끝내지 않는다. macOS는 명령줄을 읽을 수 없어 종료를 거부한다.
-- 경합 검사(`-race`)는 위 이유로 돌리지 못했다.
+- Linux 종료 경로는 CI(PR #7)의 ubuntu에서 처음 실제로 돌았다. 시험(`TestKillChecksTheMarkerBeforeStopping`)이 틀린 표식은 거부하고 맞는 표식으로 실행기를 끝내는 것을 확인했다. Linux에서는 실행기 하나만 끝내고 하위 프로세스는 끝내지 않는다. 실제 Claude Code를 Linux에서 돌려 보지는 않았다.
+- macOS는 시험하지 않았다. 명령줄을 읽을 수 없어 종료를 거부한다.
+- Windows 작업 객체 종료 시험은 CI의 windows 실행기(이 PC가 아닌 기기)에서도 통과했다.
 - 다른 기기의 연결 프로그램이 이 서버에 붙는 경우는 시험하지 않았다. 서버가 아직 루프백에만 열리기 때문이다.
 
 ### 다음 단계로 넘기는 것
