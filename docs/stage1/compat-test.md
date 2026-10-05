@@ -30,7 +30,7 @@
 
 ## 하지 않는 것
 
-인증, 권한, 위임, 요청 번호(`request_id`)로 같은 요청 거르기, 작업의 `version` 검사, WebSocket 깨우기 신호, 끝났다는 사건 없이 끊긴 실행의 판정과 재개, 화면(Web·TUI), 기억, 충돌 알림, Codex·Grok 어댑터, 임대 갱신(15초)과 기기 생존 판정(5분), 보내지 못한 사건의 디스크 보관, 순번 빈 곳 재요청, 외부 동작 기록. 이 시험 뒤 1단계 작업으로 한다. Web·데스크톱 후보(React + TypeScript, Electron, D8)는 이 시험에서 다루지 않고 따로 시험한다.
+인증, 권한, 위임, 요청 번호(`request_id`)로 같은 요청 거르기, 작업의 `version` 검사, WebSocket 깨우기 신호, 끝났다는 사건 없이 끊긴 실행의 판정과 재개, 화면(Web·TUI), 기억, 충돌 알림, Codex·Grok 어댑터, 임대 갱신(15초)과 기기 생존 판정(5분), 보내지 못한 사건의 디스크 보관, 순번 빈 곳 재요청, 외부 동작 기록. 이 시험 뒤 1단계 작업으로 한다. Web·데스크톱 후보(React + TypeScript, Electron, D8)는 이 시험에서 다루지 않고 [화면 시험](compat-test-ui.md)에서 따로 시험한다.
 
 ## 기록할 것
 
@@ -44,6 +44,7 @@
 |---|---|---|
 | `work/compat-server` | PostgreSQL Compose, 서버 세 테이블과 API 다섯, 서버 시험 | 아니요 |
 | `work/compat-agent` | 연결 프로그램, Claude Code 실행, 끝에서 끝까지 시험 | 예. 설치 전에 소유자 확인 |
+| `work/compat-ui` | 서버 읽기 API, Web 화면, 데스크톱 껍데기([화면 시험](compat-test-ui.md)) | 아니요 |
 
 ## 확인된 환경
 
