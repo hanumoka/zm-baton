@@ -126,18 +126,57 @@ class RunServiceTests @Autowired constructor(
 			mapOf("phase" to "ended", "end_reason" to null),
 			mapOf("phase" to "paused"),
 		)
-		bad.forEachIndexed { i, payload ->
-			val result = service.ingest(runId, EventBatch(1, listOf(event(gen, 10L + i, "lifecycle", payload))))
+		val refused = bad.mapIndexed { i, payload ->
+			val ev = event(gen, 10L + i, "lifecycle", payload)
+			val result = service.ingest(runId, EventBatch(1, listOf(ev)))
 			assertEquals(EventResult(0, 0, 0, 1), result, "payload $payload")
+			ev
 		}
 		assertEquals("running", runRow(runId)["state"])
 		assertEquals(0L, jdbc.sql("select count(*) from run_events where run_id = :id and seq >= 10")
 			.param("id", runId).query(Long::class.javaObjectType).single())
 
-		service.ingest(runId, EventBatch(1, listOf(event(gen, 20, "lifecycle", mapOf("phase" to "ended", "end_reason" to "failed")))))
+		// A refused event was not stored, so the corrected event may reuse its event_id and seq.
+		val corrected = refused.first().copy(payload = mapOf("phase" to "ended", "end_reason" to "failed"))
+		assertEquals(EventResult(1, 0, 0, 0), service.ingest(runId, EventBatch(1, listOf(corrected))))
 		val row = runRow(runId)
 		assertEquals("ended", row["state"])
 		assertEquals("failed", row["end_reason"])
+	}
+
+	@Test
+	fun `a report must carry the generation its own run was claimed with`() {
+		val (workId, runA) = newRun()
+		val genA = service.claim(runA, "dev_1").generation
+		service.ingest(runA, EventBatch(1, listOf(event(genA, 1, "lifecycle", mapOf("phase" to "ended", "end_reason" to "replaced")))))
+		val runB = service.createRun(workId, "codex").id
+
+		// B is not claimed yet: even the work item's current generation is not B's to use.
+		assertEquals(EventResult(0, 0, 0, 1), service.ingest(runB, EventBatch(1, listOf(event(genA, 1)))))
+		assertEquals("requested", runRow(runB)["state"])
+
+		val genB = service.claim(runB, "dev_2").generation
+		assertEquals(EventResult(0, 0, 0, 1), service.ingest(runB, EventBatch(1, listOf(event(genA, 1)))))
+		assertEquals(EventResult(1, 0, 0, 0), service.ingest(runB, EventBatch(1, listOf(event(genB, 1)))))
+	}
+
+	@Test
+	fun `a lost run leaves its work item outcome_unknown once`() {
+		val (workId, runId) = newRun()
+		val gen = service.claim(runId, "dev_1").generation
+		val before = workRow(workId)
+		val lost = mapOf("phase" to "ended", "end_reason" to "lost")
+		service.ingest(runId, EventBatch(1, listOf(event(gen, 1, "lifecycle", lost))))
+		val row = runRow(runId)
+		assertEquals("ended", row["state"])
+		assertEquals("lost", row["end_reason"])
+		val after = workRow(workId)
+		assertEquals("{outcome_unknown}", after["wait_reasons"])
+		assertEquals((before["version"] as Long) + 1, after["version"])
+
+		// A second ended report for the same run changes nothing.
+		service.ingest(runId, EventBatch(1, listOf(event(gen, 2, "lifecycle", lost))))
+		assertEquals(after, workRow(workId))
 	}
 
 	@Test

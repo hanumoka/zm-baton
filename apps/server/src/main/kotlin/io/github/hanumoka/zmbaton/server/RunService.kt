@@ -80,17 +80,27 @@ class RunService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
 		if (batch.protocolVersion != 1) throw BadRequestException("unsupported protocol_version ${batch.protocolVersion}")
 		// Lock the run and its work item: batches for one run apply in order, and a concurrent claim
 		// cannot bump the generation between this read and the late-report decision.
-		val current = jdbc.sql(
-			"select w.generation from runs r join work_items w on w.id = r.work_item_id where r.id = :runId for update of r, w",
-		).param("runId", runId).query(Long::class.javaObjectType).optional()
+		val target = jdbc.sql(
+			"""
+			select r.work_item_id, r.generation as run_generation, w.generation as current_generation
+			  from runs r join work_items w on w.id = r.work_item_id
+			 where r.id = :runId
+			   for update of r, w
+			""".trimIndent(),
+		).param("runId", runId)
+			.query { rs, _ -> ReportTarget(rs.getString(1), rs.getObject(2) as Long?, rs.getLong(3)) }
+			.optional()
 			.orElseThrow { NotFoundException("no run $runId") }
+		// A report carries the generation its run got at claim ("generation" in "보고 한 건의 모양").
+		// A run that was never claimed has none, so nothing can be reported for it.
+		val runGeneration = target.runGeneration
 
 		var stored = 0
 		var duplicates = 0
 		var late = 0
 		var rejected = 0
 		for (event in batch.events.sortedBy { it.seq }) {
-			if (event.kind !in KINDS || event.generation > current || !validLifecycle(event)) {
+			if (event.kind !in KINDS || runGeneration == null || event.generation != runGeneration || !validLifecycle(event)) {
 				rejected++
 				continue
 			}
@@ -112,17 +122,19 @@ class RunService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
 				continue
 			}
 			stored++
-			if (event.generation < current) {
+			if (event.generation < target.currentGeneration) {
 				// Late report from an older generation: keep the event, never change state.
 				late++
 				jdbc.sql("update runs set late_reports = true where id = :runId").param("runId", runId).update()
 				continue
 			}
 			jdbc.sql("update runs set last_event_at = now() where id = :runId").param("runId", runId).update()
-			if (event.kind == "lifecycle") applyLifecycle(runId, event.payload)
+			if (event.kind == "lifecycle") applyLifecycle(runId, target.workItemId, event.payload)
 		}
 		return EventResult(stored, duplicates, late, rejected)
 	}
+
+	private data class ReportTarget(val workItemId: String, val runGeneration: Long?, val currentGeneration: Long)
 
 	/** A lifecycle event must be `started`, or `ended` with a contract end reason. Never infer success. */
 	private fun validLifecycle(event: EventIn): Boolean {
@@ -134,7 +146,7 @@ class RunService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
 		}
 	}
 
-	private fun applyLifecycle(runId: String, payload: Map<String, Any?>) {
+	private fun applyLifecycle(runId: String, workItemId: String, payload: Map<String, Any?>) {
 		when (payload["phase"]) {
 			"started" -> jdbc.sql(
 				"""
@@ -146,12 +158,22 @@ class RunService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
 
 			"ended" -> {
 				val reason = payload["end_reason"] as String // checked by validLifecycle
-				jdbc.sql(
+				val ended = jdbc.sql(
 					"""
 					update runs set state = 'ended', end_reason = :reason, ended_at = now(), lease_expires_at = null
 					 where id = :runId and state <> 'ended'
 					""".trimIndent(),
 				).param("reason", reason).param("runId", runId).update()
+				// Contract v1 "실행 시도 > 상태": a lost run leaves its work item outcome_unknown.
+				if (ended == 1 && reason == "lost") {
+					jdbc.sql(
+						"""
+						update work_items
+						   set wait_reasons = array_append(wait_reasons, 'outcome_unknown'), version = version + 1, updated_at = now()
+						 where id = :wid and not ('outcome_unknown' = any(wait_reasons))
+						""".trimIndent(),
+					).param("wid", workItemId).update()
+				}
 			}
 		}
 	}
