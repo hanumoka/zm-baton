@@ -57,11 +57,13 @@ type helper struct {
 	child syscall.Handle // pinned, so its state can be read without a PID lookup
 }
 
-// startHelper starts a tracked helper parent carrying marker, and pins the child
-// it starts. Cleanup ends both through the job and the pinned handle only.
-func startHelper(t *testing.T, mode, marker string) *helper {
+// startHelper starts a tracked helper parent carrying extra arguments and then
+// marker, and pins the child it starts. Cleanup ends both through the job and
+// the pinned handle only.
+func startHelper(t *testing.T, mode, marker string, extra ...string) *helper {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "zmb-helper", marker)
+	args := append(append([]string{"zmb-helper"}, extra...), marker)
+	cmd := exec.Command(os.Args[0], args...)
 	cmd.Env = append(os.Environ(), helperEnv+"="+mode)
 	cmd.SysProcAttr = SysProcAttr()
 	out, err := cmd.StdoutPipe()
@@ -195,5 +197,48 @@ func TestTrackRefusesInvalidProcesses(t *testing.T) {
 		if _, err := Track(p); err == nil {
 			t.Errorf("%s: Track returned nil", name)
 		}
+	}
+}
+
+// A command line longer than the first 4 KiB buffer, with Korean and an emoji
+// before the marker at its very end, must come back whole.
+func TestCommandLineReadsLongAndNonASCIIArguments(t *testing.T) {
+	marker := newMarker(t)
+	long := strings.Repeat("x", 5000)
+	words := "한글 표식 😀"
+	h := startHelper(t, "parent", marker, long, words)
+	got, err := commandLineOf(h.run.process)
+	if err != nil {
+		t.Fatalf("read the command line: %v", err)
+	}
+	if !strings.Contains(got, long) || !strings.Contains(got, words) || !strings.HasSuffix(strings.TrimSpace(got), marker) {
+		t.Fatalf("command line not read whole (%d characters)", len([]rune(got)))
+	}
+	if err := h.run.Kill(marker); err != nil {
+		t.Fatalf("Kill with the marker at the end of a long command line: %v", err)
+	}
+	if !exitedWithin(t, h.child, 15*time.Second) {
+		t.Fatal("helper child still running after Kill")
+	}
+}
+
+// A query that fails must refuse with that error, never pass as a marker mismatch.
+func TestKillRefusesWithTheQueryErrorWhenTheCommandLineCannotBeRead(t *testing.T) {
+	marker := newMarker(t)
+	h := startHelper(t, "parent", marker)
+	// A second pin with SYNCHRONIZE only: liveness can be read, the command line cannot.
+	weak, err := syscall.OpenProcess(synchronize, false, uint32(h.cmd.Process.Pid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.CloseHandle(weak)
+	// Same job as the helper, so even a wrong stop would reach only test processes.
+	r := &Run{pid: h.cmd.Process.Pid, process: weak, job: h.run.job}
+	err = r.Kill(marker)
+	if err == nil || errors.Is(err, ErrMarkerMismatch) || !strings.Contains(err.Error(), "NTSTATUS") {
+		t.Fatalf("want the query error, got %v", err)
+	}
+	if exitedWithin(t, h.run.process, 300*time.Millisecond) || exitedWithin(t, h.child, 0) {
+		t.Fatal("a refused Kill stopped a helper")
 	}
 }

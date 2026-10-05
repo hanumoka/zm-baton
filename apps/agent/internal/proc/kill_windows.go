@@ -43,8 +43,9 @@ func SysProcAttr() *syscall.SysProcAttr {
 }
 
 // Run pins one executor. Its open process handle keeps the PID from being given
-// to another process until Close, and its job object holds the executor and
-// every process the executor starts.
+// to another process until Close. Its job object holds the executor and the
+// processes it starts the usual way, which inherit the job; a process started
+// through WMI or a similar service may not be in it.
 type Run struct {
 	mu      sync.Mutex
 	pid     int
