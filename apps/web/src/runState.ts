@@ -51,6 +51,29 @@ export function reportStatus(run: Run, events: readonly RunEvent[], now: number)
   return now - Date.parse(run.last_event_at) > SILENCE_MS ? 'no_response' : 'working';
 }
 
+/** A contract rule this screen does not judge, and why. */
+export type UndecidedRule = { rule: string; reason: string; relevant: boolean };
+
+/**
+ * The contract rules left undecided for a run that has not ended, so the screen can say so
+ * next to the status. relevant marks the rule that would matter for the events shown now.
+ */
+export function undecidedRules(run: Run, events: readonly RunEvent[]): UndecidedRule[] {
+  if (run.state === 'ended' || run.state === 'requested') return [];
+  return [
+    {
+      rule: '입력 필요',
+      reason: '질문에 답이 왔는지 알 수단(질문 경로)이 아직 없다',
+      relevant: events.some((e) => e.kind === 'question'),
+    },
+    {
+      rule: '첫 응답 기한',
+      reason: '청구 시각이 저장되지 않는다',
+      relevant: run.last_event_at === null,
+    },
+  ];
+}
+
 export function statusLabel(s: ReportStatus): string {
   switch (s) {
     case 'claim_pending':
@@ -98,8 +121,15 @@ export type HeldEvents = { runId: string | undefined; events: RunEvent[] };
 export function applyPolled(held: HeldEvents, runId: string, polled: readonly RunEvent[]): HeldEvents {
   if (held.runId !== runId || polled.length === 0) return held;
   const seen = new Set(held.events.map((e) => e.event_id));
-  const events = [...held.events, ...polled.filter((e) => !seen.has(e.event_id))].sort((a, b) => a.seq - b.seq);
-  return { runId, events };
+  const fresh: RunEvent[] = [];
+  for (const e of polled) {
+    // A poll can return the same event twice (a gap request overlapping the forward pages).
+    if (seen.has(e.event_id)) continue;
+    seen.add(e.event_id);
+    fresh.push(e);
+  }
+  if (fresh.length === 0) return held;
+  return { runId, events: [...held.events, ...fresh].sort((a, b) => a.seq - b.seq) };
 }
 
 /** Fetches events with seq > after, at most limit of them, in seq order. */
@@ -107,23 +137,33 @@ export type FetchEvents = (after: number, limit: number) => Promise<RunEvent[]>;
 
 export const PAGE = 200;
 const MAX_FORWARD_PAGES = 10;
-const MAX_GAPS = 5;
+const MAX_GAP_ASKS = 5;
 
-/** Seqs missing below the largest held seq, lowest first, at most max of them. */
-export function missingSeqs(events: readonly RunEvent[], max = MAX_GAPS): number[] {
-  const seqs = new Set(events.map((e) => e.seq));
-  const top = events.reduce((m, e) => Math.max(m, e.seq), 0);
-  const out: number[] = [];
-  for (let s = 1; s < top && out.length < max; s++) if (!seqs.has(s)) out.push(s);
+/** A run of missing seqs, first..last inclusive. */
+export type Gap = { first: number; last: number };
+
+/**
+ * Missing seqs below the largest held seq, as runs. Built from the held seqs, so the work
+ * does not grow with how large a seq is.
+ */
+export function gaps(events: readonly RunEvent[]): Gap[] {
+  const seqs = [...new Set(events.map((e) => e.seq))].filter((s) => s >= 1).sort((a, b) => a - b);
+  const out: Gap[] = [];
+  let prev = 0;
+  for (const s of seqs) {
+    if (s > prev + 1) out.push({ first: prev + 1, last: s - 1 });
+    prev = s;
+  }
   return out;
 }
 
 /**
- * One poll: moves forward after the largest held seq, then asks once for each of the first
- * few missing seqs. The server may store a smaller seq after a larger one, so the gaps are
- * asked again on every poll until they fill; the forward cursor never waits for them.
+ * One poll. First it moves forward after the largest held seq. Then it asks for up to five
+ * gaps, starting at a place that turns with tick, so every gap gets asked in time however
+ * many there are. The server may store a smaller seq after a larger one; whatever a gap
+ * request returns is kept, even when it is not the seq that was asked for.
  */
-export async function pollEvents(fetch: FetchEvents, held: readonly RunEvent[]): Promise<RunEvent[]> {
+export async function pollEvents(fetch: FetchEvents, held: readonly RunEvent[], tick = 0): Promise<RunEvent[]> {
   const got: RunEvent[] = [];
   let after = held.reduce((m, e) => Math.max(m, e.seq), 0);
   for (let page = 0; page < MAX_FORWARD_PAGES; page++) {
@@ -132,9 +172,11 @@ export async function pollEvents(fetch: FetchEvents, held: readonly RunEvent[]):
     if (polled.length < PAGE) break;
     after = polled[polled.length - 1].seq;
   }
-  for (const seq of missingSeqs([...held, ...got])) {
-    const polled = await fetch(seq - 1, 1);
-    if (polled[0]?.seq === seq) got.push(polled[0]);
+  const open = gaps([...held, ...got]);
+  const asks = Math.min(MAX_GAP_ASKS, open.length);
+  for (let i = 0; i < asks; i++) {
+    const gap = open[(tick * MAX_GAP_ASKS + i) % open.length];
+    got.push(...(await fetch(gap.first - 1, Math.min(gap.last - gap.first + 1, PAGE))));
   }
   return got;
 }

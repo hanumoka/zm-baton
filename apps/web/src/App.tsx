@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, type Run, type WorkItem } from './api';
-import { applyPolled, pollEvents, reportStatus, statusLabel, summary, type HeldEvents } from './runState';
+import { RunStatusLine } from './RunStatusLine';
+import { applyPolled, pollEvents, summary, type HeldEvents } from './runState';
 
 /**
  * Polls fn every ms for one selection (deps). When the selection changes, the old request
@@ -46,6 +47,7 @@ export function App() {
   const [held, setHeld] = useState<HeldEvents>({ runId: undefined, events: [] });
   const heldRef = useRef(held);
   heldRef.current = held;
+  const tickRef = useRef(0);
   const [now, setNow] = useState(() => Date.now());
   const [title, setTitle] = useState('');
   const [error, setError] = useState<string>();
@@ -96,7 +98,7 @@ export function App() {
     async (alive, signal) => {
       if (!runId) return;
       const mine = heldRef.current.runId === runId ? heldRef.current.events : [];
-      const polled = await pollEvents((after, limit) => api.events(runId, after, limit, signal), mine);
+      const polled = await pollEvents((after, limit) => api.events(runId, after, limit, signal), mine, tickRef.current++);
       if (alive()) setHeld((h) => applyPolled(h, runId, polled));
     },
     1000,
@@ -168,15 +170,7 @@ export function App() {
               </ul>
               {run && (
                 <>
-                  <p>
-                    보고 상태: <strong data-testid="report-status">{statusLabel(reportStatus(run, events, now))}</strong>
-                    {' · '}실행 시도:{' '}
-                    <span data-testid="run-lifecycle">
-                      {run.state}
-                      {run.end_reason && `/${run.end_reason}`}
-                    </span>
-                    {' · '}사건 <span data-testid="event-count">{events.length}</span>건
-                  </p>
+                  <RunStatusLine run={run} events={events} now={now} />
                   <ol className="events">
                     {events.map((e) => (
                       <li key={e.event_id} className={`kind-${e.kind}`}>

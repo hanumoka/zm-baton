@@ -22,3 +22,5 @@ ol.events li { padding: 4px 0; border-bottom: 1px solid #eee; white-space: pre-w
 ol.events code { color: #888; }
 .kind-error { color: #b00020; }
 .error { background: #fde8ea; padding: 8px; border-radius: 6px; cursor: pointer; }
+.undecided { margin: 0 0 8px; padding-left: 18px; font-size: 13px; color: #666; }
+.undecided .relevant { color: #8a5a00; font-weight: 600; }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Run, RunEvent } from './api';
-import { applyPolled, missingSeqs, PAGE, pollEvents, reportStatus, SILENCE_MS, summary, type HeldEvents } from './runState';
+import { applyPolled, gaps, PAGE, pollEvents, reportStatus, SILENCE_MS, summary, type HeldEvents } from './runState';
 
 const T0 = Date.parse('2026-10-05T00:00:00Z');
 const iso = (ms: number) => new Date(ms).toISOString();
@@ -82,8 +82,8 @@ describe('applyPolled', () => {
     expect(held).toEqual({ runId: 'run_b', events: [ev(1)] });
   });
 
-  it('appends new events in seq order and drops repeats', () => {
-    const held = applyPolled({ runId: 'run_a', events: [ev(1), ev(2)] }, 'run_a', [ev(2), ev(4), ev(3)]);
+  it('appends new events in seq order and drops repeats, also within one poll', () => {
+    const held = applyPolled({ runId: 'run_a', events: [ev(1), ev(2)] }, 'run_a', [ev(2), ev(4), ev(3), ev(4)]);
     expect(held.events.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
   });
 });
@@ -100,9 +100,13 @@ function fakeServer(seqs: number[]) {
   return { stored, fetch };
 }
 
-async function pollTimes(fetch: (after: number, limit: number) => Promise<RunEvent[]>, times: number) {
-  let held: HeldEvents = { runId: 'run_a', events: [] };
-  for (let i = 0; i < times; i++) held = applyPolled(held, 'run_a', await pollEvents(fetch, held.events));
+async function pollTimes(
+  fetch: (after: number, limit: number) => Promise<RunEvent[]>,
+  times: number,
+  start: HeldEvents = { runId: 'run_a', events: [] },
+) {
+  let held = start;
+  for (let i = 0; i < times; i++) held = applyPolled(held, 'run_a', await pollEvents(fetch, held.events, i));
   return held;
 }
 
@@ -112,7 +116,7 @@ describe('pollEvents', () => {
     const held = await pollTimes(server.fetch, 2);
     expect(held.events).toHaveLength(2100);
     expect(held.events.at(-1)?.seq).toBe(2101);
-    expect(missingSeqs(held.events)).toEqual([1]);
+    expect(gaps(held.events)).toEqual([{ first: 1, last: 1 }]);
   });
 
   it('fills a missing seq that the server stores later, behind the forward cursor', async () => {
@@ -122,6 +126,30 @@ describe('pollEvents', () => {
     server.stored.add(2); // stored after 3 and 4 were read
     held = applyPolled(held, 'run_a', await pollEvents(server.fetch, held.events));
     expect(held.events.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('keeps a late seq behind gaps that stay open', async () => {
+    // 1..5 never arrive; 6 is stored after 7 and 8 were read.
+    const server = fakeServer([7, 8]);
+    let held = await pollTimes(server.fetch, 1);
+    server.stored.add(6);
+    held = await pollTimes(server.fetch, 1, held);
+    expect(held.events.map((e) => e.seq)).toEqual([6, 7, 8]);
+    expect(gaps(held.events)).toEqual([{ first: 1, last: 5 }]);
+  });
+
+  it('turns through more than five gaps, so a late seq in any of them arrives', async () => {
+    const evens = Array.from({ length: 15 }, (_, i) => (i + 1) * 2); // 2..30: 15 one-seq gaps
+    const server = fakeServer(evens);
+    let held = await pollTimes(server.fetch, 1);
+    server.stored.add(29); // the fifteenth gap
+    held = await pollTimes(server.fetch, 3, held);
+    expect(held.events.some((e) => e.seq === 29)).toBe(true);
+  });
+
+  it('finds gaps without walking every seq up to a huge one', () => {
+    expect(gaps([ev(1), ev(1e12)])).toEqual([{ first: 2, last: 1e12 - 1 }]);
+    expect(gaps([ev(3), ev(1), ev(3)])).toEqual([{ first: 2, last: 2 }]);
   });
 
   it('asks at most ten forward pages per poll', async () => {
