@@ -46,7 +46,7 @@ npm run build       # dist/ 가 생긴다
 
 ```powershell
 cd apps/server
-./gradlew bootJar
+./gradlew.bat bootJar
 $env:ZM_BATON_DB_PASSWORD = '<.env 에 적은 값>'
 $env:ZM_BATON_WEB_DIR = 'file:<저장소 절대 경로>/apps/web/dist/'   # 끝의 / 를 빼지 않는다
 java -jar build/libs/server-0.0.1-SNAPSHOT.jar
@@ -114,7 +114,7 @@ go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 
 | 모듈 | 무엇을 재현하는가 | 명령 |
 |---|---|---|
-| 2 실행 계약과 로컬 연결 프로그램 | 같은 실행 시도를 여럿이 동시에 청구하면 하나만 성공한다 | `cd apps/server; ./gradlew test --tests '*RunServiceTests*concurrent*'` |
-| 2 | 옛 세대의 늦은 보고는 기록만 되고 상태를 바꾸지 않는다 | `cd apps/server; ./gradlew test --tests '*RunServiceTests*older generation*'` |
+| 2 실행 계약과 로컬 연결 프로그램 | 같은 실행 시도를 여럿이 동시에 청구하면 하나만 성공한다 | `cd apps/server; ./gradlew.bat test --tests '*RunServiceTests*concurrent*'` |
+| 2 | 옛 세대의 늦은 보고는 기록만 되고 상태를 바꾸지 않는다 | `cd apps/server; ./gradlew.bat test --tests '*RunServiceTests*older generation*'` |
 | 3 실행기 어댑터와 실행 보고 표준 | 표식이 맞을 때만 실행기를 끝낸다 | `cd apps/agent; go test -v -run TestKill ./internal/proc` |
 | 3 | Claude Code 출력이 계약의 사건으로 바뀐다 | 위 「5. 연결 프로그램으로 Claude Code를 한 번 돌린다」 |
