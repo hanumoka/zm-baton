@@ -61,11 +61,13 @@ class RunServiceConcurrencyTests @Autowired constructor(
 		val generation = service.claim(run.id, "dev_1").generation
 		val locked = CountDownLatch(1)
 		val release = CountDownLatch(1)
+		var holderPid = 0
 		val pool = Executors.newFixedThreadPool(2)
 		try {
 			// Another transaction holds the work item and bumps its generation, like a claim in flight.
 			val bump = pool.submit {
 				tx.executeWithoutResult {
+					holderPid = jdbc.sql("select pg_backend_pid()").query(Int::class.javaObjectType).single()
 					jdbc.sql("select id from work_items where id = :id for update").param("id", work.id).query().listOfRows()
 					locked.countDown()
 					check(release.await(30, TimeUnit.SECONDS)) { "the generation bump was never released" }
@@ -79,8 +81,8 @@ class RunServiceConcurrencyTests @Autowired constructor(
 					EventBatch(1, listOf(EventIn(eventId = "evt_race", generation = generation, seq = 1, kind = "answer", payload = mapOf("text" to "x")))),
 				)
 			}
-			// Only bump once the report is seen blocked on a row lock, so the order is not left to timing.
-			awaitReportBlockedOnLock()
+			// Only bump once the report is seen blocked by this holder, so the order is not left to timing.
+			awaitReportBlockedBy(holderPid)
 			release.countDown()
 			bump.get(10, TimeUnit.SECONDS)
 			assertEquals(EventResult(stored = 1, duplicates = 0, late = 1, rejected = 0), report.get(10, TimeUnit.SECONDS))
@@ -123,18 +125,24 @@ class RunServiceConcurrencyTests @Autowired constructor(
 		}
 	}
 
-	private fun awaitReportBlockedOnLock() {
+	/**
+	 * Waits until a report query is blocked by the given holder backend. Matching the holder pid
+	 * keeps other connections, even ones running the same report SQL, from satisfying the check.
+	 */
+	private fun awaitReportBlockedBy(holderPid: Int) {
 		val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
 		while (System.nanoTime() < deadline) {
 			val waiting = jdbc.sql(
 				"""
 				select count(*) from pg_stat_activity
-				 where wait_event_type = 'Lock' and query like '%join work_items w on w.id = r.work_item_id%' and pid <> pg_backend_pid()
+				 where pid <> pg_backend_pid()
+				   and :holder = any(pg_blocking_pids(pid))
+				   and query like '%join work_items w on w.id = r.work_item_id%'
 				""".trimIndent(),
-			).query(Long::class.javaObjectType).single()
+			).param("holder", holderPid).query(Long::class.javaObjectType).single()
 			if (waiting > 0) return
 			Thread.sleep(20)
 		}
-		throw AssertionError("the report never waited on the locked work item")
+		throw AssertionError("the report never waited on the work item locked by backend $holderPid")
 	}
 }
