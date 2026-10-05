@@ -14,8 +14,9 @@ import java.sql.ResultSet
 import java.time.OffsetDateTime
 
 // Read side for the Web and desktop compat test (docs/stage1/compat-test-ui.md).
-// Run state shown on screen is computed from events (contract v1 "보고 한 건의 모양"),
-// so the event list is the main read; the run row is only for selection.
+// A run's lifecycle state and end reason are stored (data model "runs") and decided by the
+// server, so the screen reads them here and never re-derives them from events. The report
+// status on screen (contract v1 "보고 상태") is computed from that state and the events.
 
 data class WorkItemView(
 	val id: String,
@@ -29,11 +30,14 @@ data class WorkItemView(
 data class RunView(
 	val id: String,
 	@JsonProperty("work_item_id") val workItemId: String,
+	val state: String,
+	@JsonProperty("end_reason") val endReason: String?,
 	val executor: String,
 	val generation: Long?,
 	@JsonProperty("device_id") val deviceId: String?,
 	@JsonProperty("late_reports") val lateReports: Boolean,
 	@JsonProperty("created_at") val createdAt: OffsetDateTime,
+	@JsonProperty("last_event_at") val lastEventAt: OffsetDateTime?,
 )
 
 data class EventView(
@@ -56,18 +60,23 @@ class ReadService(private val jdbc: JdbcClient, private val json: ObjectMapper) 
 			"select id, title, stage, wait_reasons, generation, created_at from work_items order by created_at desc limit :limit",
 		).param("limit", limit).query { rs, _ -> workItem(rs) }.list()
 
-	fun runs(workItemId: String): List<RunView> {
+	/** The newest [limit] runs of a work item, oldest first. */
+	fun runs(workItemId: String, limit: Int): List<RunView> {
 		exists("work_items", workItemId)
 		return jdbc.sql(
 			"""
-			select id, work_item_id, executor, generation, device_id, late_reports, created_at
-			  from runs where work_item_id = :wid order by created_at
+			select * from (
+			  select id, work_item_id, state, end_reason, executor, generation, device_id, late_reports,
+			         created_at, last_event_at
+			    from runs where work_item_id = :wid order by created_at desc, id desc limit :limit
+			) newest order by created_at, id
 			""".trimIndent(),
-		).param("wid", workItemId).query { rs, _ ->
+		).param("wid", workItemId).param("limit", limit).query { rs, _ ->
 			RunView(
-				rs.getString("id"), rs.getString("work_item_id"), rs.getString("executor"),
-				rs.getObject("generation") as Long?, rs.getString("device_id"), rs.getBoolean("late_reports"),
-				rs.getObject("created_at", OffsetDateTime::class.java),
+				rs.getString("id"), rs.getString("work_item_id"), rs.getString("state"), rs.getString("end_reason"),
+				rs.getString("executor"), rs.getObject("generation") as Long?, rs.getString("device_id"),
+				rs.getBoolean("late_reports"), rs.getObject("created_at", OffsetDateTime::class.java),
+				rs.getObject("last_event_at", OffsetDateTime::class.java),
 			)
 		}.list()
 	}
@@ -116,7 +125,8 @@ class ReadController(private val reads: ReadService) {
 		reads.workItems(limit.coerceIn(1, 100))
 
 	@GetMapping("/work-items/{id}/runs")
-	fun runs(@PathVariable id: String): List<RunView> = reads.runs(id)
+	fun runs(@PathVariable id: String, @RequestParam(defaultValue = "50") limit: Int): List<RunView> =
+		reads.runs(id, limit.coerceIn(1, 100))
 
 	@GetMapping("/runs/{id}/events")
 	fun events(

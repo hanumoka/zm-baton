@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc -p .",
     "start": "npm run build && electron .",
-    "package": "npm run build && electron-packager . zm-baton-desktop --platform=win32 --arch=x64 --out=out --overwrite --ignore=^/src --ignore=^/out --ignore=^/tsconfig.json"
+    "test": "npm run build && node test/probe.mjs",
+    "package": "npm run build && electron-packager . zm-baton-desktop --platform=win32 --arch=x64 --out=out --overwrite --ignore=^/src --ignore=^/out --ignore=^/tsconfig.json --ignore=^/test"
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",

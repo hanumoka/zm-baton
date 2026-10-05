@@ -52,6 +52,9 @@ class ReadApiTests @Autowired constructor(
 		val runRow = (runs as List<*>).single() as Map<*, *>
 		assertEquals(run.id, runRow["id"])
 		assertEquals("dev_read", runRow["device_id"])
+		assertEquals("running", runRow["state"])
+		assertEquals(null, runRow["end_reason"])
+		assertTrue(runRow["last_event_at"] is String)
 
 		val (_, all) = get("/api/runs/${run.id}/events")
 		assertEquals(listOf(1, 2, 3), (all as List<*>).map { ((it as Map<*, *>)["seq"] as Number).toInt() })
@@ -66,5 +69,32 @@ class ReadApiTests @Autowired constructor(
 	fun `unknown work items and runs are 404`() {
 		assertEquals(404, get("/api/work-items/wrk_missing/runs").first)
 		assertEquals(404, get("/api/runs/run_missing/events").first)
+	}
+
+	@Test
+	fun `the run list shows the end reason the server applied`() {
+		val work = service.createWorkItem("end reason", "usr_owner")
+		val run = service.createRun(work.id, "claude_code")
+		val gen = service.claim(run.id, "dev_read").generation
+		// Two ended reports in separate batches, the later one with a smaller seq:
+		// the server keeps the first one it applied, and the read API must say so.
+		service.ingest(run.id, EventBatch(1, listOf(EventIn("evt_er_${run.id}_10", gen, 10, "lifecycle", mapOf("phase" to "ended", "end_reason" to "lost")))))
+		service.ingest(run.id, EventBatch(1, listOf(EventIn("evt_er_${run.id}_9", gen, 9, "lifecycle", mapOf("phase" to "ended", "end_reason" to "submitted")))))
+		val runRow = ((get("/api/work-items/${work.id}/runs").second as List<*>).single() as Map<*, *>)
+		assertEquals("ended", runRow["state"])
+		assertEquals("lost", runRow["end_reason"])
+	}
+
+	@Test
+	fun `the run list is limited to the newest runs, oldest first`() {
+		val work = service.createWorkItem("many runs", "usr_owner")
+		val ids = (1..3).map {
+			val run = service.createRun(work.id, "claude_code")
+			val gen = service.claim(run.id, "dev_read").generation
+			service.ingest(run.id, EventBatch(1, listOf(EventIn("evt_lim_${run.id}", gen, 1, "lifecycle", mapOf("phase" to "ended", "end_reason" to "replaced")))))
+			run.id
+		}
+		val listed = (get("/api/work-items/${work.id}/runs?limit=2").second as List<*>).map { (it as Map<*, *>)["id"] }
+		assertEquals(ids.takeLast(2), listed)
 	}
 }

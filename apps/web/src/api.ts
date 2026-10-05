@@ -13,11 +13,14 @@ export type WorkItem = {
 export type Run = {
   id: string;
   work_item_id: string;
+  state: 'requested' | 'claimed' | 'running' | 'stopping' | 'ended';
+  end_reason: 'submitted' | 'failed' | 'cancelled' | 'replaced' | 'lost' | null;
   executor: string;
   generation: number | null;
   device_id: string | null;
   late_reports: boolean;
   created_at: string;
+  last_event_at: string | null;
 };
 
 export type RunEvent = {
@@ -30,9 +33,10 @@ export type RunEvent = {
   received_at: string;
 };
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
     method,
+    signal,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -42,11 +46,15 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 const enc = encodeURIComponent;
 
+/** The server's page size for events; a full page means there may be more. */
+export const EVENT_PAGE = 200;
+
 export const api = {
-  workItems: () => call<WorkItem[]>('GET', '/api/work-items?limit=20'),
-  runs: (workItemId: string) => call<Run[]>('GET', `/api/work-items/${enc(workItemId)}/runs`),
-  events: (runId: string, afterSeq: number) =>
-    call<RunEvent[]>('GET', `/api/runs/${enc(runId)}/events?after_seq=${afterSeq}`),
+  workItems: (signal?: AbortSignal) => call<WorkItem[]>('GET', '/api/work-items?limit=20', undefined, signal),
+  runs: (workItemId: string, signal?: AbortSignal) =>
+    call<Run[]>('GET', `/api/work-items/${enc(workItemId)}/runs`, undefined, signal),
+  events: (runId: string, afterSeq: number, signal?: AbortSignal) =>
+    call<RunEvent[]>('GET', `/api/runs/${enc(runId)}/events?after_seq=${afterSeq}&limit=${EVENT_PAGE}`, undefined, signal),
   createWorkItem: (title: string) =>
     call<{ id: string }>('POST', '/api/work-items', { title, responsible_user_id: 'usr_owner' }),
   createRun: (workItemId: string) =>
