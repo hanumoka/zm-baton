@@ -1,0 +1,228 @@
+package io.github.hanumoka.zmbaton.server
+
+import com.fasterxml.jackson.annotation.JsonProperty
+import org.springframework.context.annotation.Configuration
+import org.springframework.http.HttpHeaders
+import org.springframework.jdbc.core.simple.JdbcClient
+import org.springframework.scheduling.annotation.EnableScheduling
+import org.springframework.scheduling.annotation.Scheduled
+import org.springframework.stereotype.Component
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.PathVariable
+import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RequestHeader
+import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
+import org.springframework.web.bind.annotation.RestController
+import tools.jackson.core.type.TypeReference
+import tools.jackson.databind.ObjectMapper
+import java.time.OffsetDateTime
+
+// The person's side: the first screen ("나를 기다리는 것", contract v1 "첫 화면"), the session
+// list and the judgement of a conflict notice. These are person actions, so a session token is
+// refused here and the refusal is audited (contract "등록과 세션 토큰" 6). There is no person
+// authentication yet; the server listens on loopback only.
+
+data class SessionView(
+	val id: String,
+	val executor: String,
+	@JsonProperty("executor_version") val executorVersion: String?,
+	@JsonProperty("device_name") val deviceName: String,
+	val repository: Map<String, Any?>?,
+	@JsonProperty("repo_key") val repoKey: String?,
+	/** Null when the session does not share what it works on. */
+	@JsonProperty("current_work") val currentWork: String?,
+	val shared: Boolean,
+	@JsonProperty("current_work_at") val currentWorkAt: OffsetDateTime?,
+	/** `live`, `ended`, `deregistered` or `expired`. */
+	val state: String,
+	@JsonProperty("created_at") val createdAt: OffsetDateTime,
+	@JsonProperty("last_seen_at") val lastSeenAt: OffsetDateTime,
+	@JsonProperty("touched_files") val touchedFiles: List<String>,
+	@JsonProperty("conflicted_files") val conflictedFiles: List<String>,
+)
+
+data class InboxItemView(
+	val id: String,
+	val bucket: Int,
+	val kind: String,
+	@JsonProperty("source_kind") val sourceKind: String,
+	@JsonProperty("source_id") val sourceId: String,
+	val summary: String,
+	val detail: Map<String, Any?>?,
+	@JsonProperty("wait_kind") val waitKind: String?,
+	@JsonProperty("repeat_count") val repeatCount: Int,
+	@JsonProperty("waiting_since") val waitingSince: OffsetDateTime,
+	val notify: String,
+)
+
+data class NoticeStatusIn(val status: String, val note: String? = null)
+
+data class NoticeStatusOut(val id: String, val status: String)
+
+@Service
+class PersonService(
+	private val jdbc: JdbcClient,
+	private val json: ObjectMapper,
+	private val sessions: SessionService,
+) {
+	private val mapType = object : TypeReference<Map<String, Any?>>() {}
+	private val listType = object : TypeReference<List<String>>() {}
+
+	/**
+	 * Person actions do not accept a session token. Not transactional on purpose: the audit
+	 * row of a refusal must survive the refusal.
+	 */
+	fun refuseSessionToken(authorization: String?, action: String) {
+		val token = SessionTokens.bearer(authorization) ?: return
+		val sessionId = jdbc.sql("select id from agent_sessions where token_hash = :hash")
+			.param("hash", SessionTokens.hash(token)).query(String::class.java).optional().orElse("unknown")
+		sessions.audit("session", sessionId, "person_action.refused", "api", action, mapOf("reason" to "session token"))
+		throw ForbiddenException("$action is a person action; a session token cannot do it")
+	}
+
+	fun sessions(includeEnded: Boolean, limit: Int): List<SessionView> =
+		jdbc.sql(
+			"""
+			select a.id, a.executor, a.executor_version, d.name as device_name, a.repository::text as repository, a.repo_key,
+			       a.current_work, a.share_current_work, a.current_work_at, a.created_at, a.last_seen_at,
+			       case when a.deregistered_at is not null then 'deregistered'
+			            when a.ended_at is not null then 'ended'
+			            when a.token_expires_at <= now() then 'expired'
+			            else 'live' end as state,
+			       coalesce((select json_agg(t.path order by t.last_at desc)::text from (
+			           select e.payload ->> 'path' as path, max(e.received_at) as last_at
+			             from session_events e where e.session_id = a.id and e.kind = 'file_touch'
+			            group by e.payload ->> 'path' order by last_at desc limit 20) t), '[]') as touched,
+			       coalesce((select json_agg(distinct n.evidence ->> 'path')::text from notices n
+			          where n.status in ('open', 'acknowledged')
+			            and n.evidence -> 'sessions' @> jsonb_build_array(jsonb_build_object('session_id', a.id))), '[]') as conflicted
+			  from agent_sessions a join devices d on d.id = a.device_id
+			 where cast(:all as boolean) or (a.ended_at is null and a.deregistered_at is null and a.token_expires_at > now())
+			 order by a.last_seen_at desc
+			 limit :limit
+			""".trimIndent(),
+		).param("all", includeEnded).param("limit", limit).query { rs, _ ->
+			val shared = rs.getBoolean("share_current_work")
+			SessionView(
+				id = rs.getString("id"),
+				executor = rs.getString("executor"),
+				executorVersion = rs.getString("executor_version"),
+				deviceName = rs.getString("device_name"),
+				repository = rs.getString("repository")?.let { json.readValue(it, mapType) },
+				repoKey = rs.getString("repo_key"),
+				currentWork = if (shared) rs.getString("current_work") else null,
+				shared = shared,
+				currentWorkAt = if (shared) rs.getObject("current_work_at", OffsetDateTime::class.java) else null,
+				state = rs.getString("state"),
+				createdAt = rs.getObject("created_at", OffsetDateTime::class.java),
+				lastSeenAt = rs.getObject("last_seen_at", OffsetDateTime::class.java),
+				touchedFiles = json.readValue(rs.getString("touched"), listType),
+				conflictedFiles = json.readValue(rs.getString("conflicted"), listType),
+			)
+		}.list()
+
+	/** Open items, in the contract's order: bucket, then who waited longest. */
+	fun inbox(): List<InboxItemView> =
+		jdbc.sql(
+			"""
+			select id, bucket, kind, source_kind, source_id, summary, detail::text as detail, wait_kind, repeat_count,
+			       waiting_since, notify
+			  from inbox_items where user_id = :user and state = 'open'
+			 order by bucket, waiting_since, id
+			""".trimIndent(),
+		).param("user", SessionService.OWNER).query { rs, _ ->
+			InboxItemView(
+				id = rs.getString("id"),
+				bucket = rs.getInt("bucket"),
+				kind = rs.getString("kind"),
+				sourceKind = rs.getString("source_kind"),
+				sourceId = rs.getString("source_id"),
+				summary = rs.getString("summary"),
+				detail = rs.getString("detail")?.let { json.readValue(it, mapType) },
+				waitKind = rs.getString("wait_kind"),
+				repeatCount = rs.getInt("repeat_count"),
+				waitingSince = rs.getObject("waiting_since", OffsetDateTime::class.java),
+				notify = rs.getString("notify"),
+			)
+		}.list()
+
+	/**
+	 * A person's judgement of a conflict notice (contract "알림 처리"). Any of the three takes it
+	 * off the first screen in the same transaction; "not a conflict" needs a reason.
+	 */
+	@Transactional
+	fun judgeNotice(noticeId: String, body: NoticeStatusIn): NoticeStatusOut {
+		val status = body.status.trim()
+		if (status !in setOf("acknowledged", "not_a_conflict", "resolved")) {
+			throw BadRequestException("status must be acknowledged, not_a_conflict or resolved")
+		}
+		val note = body.note?.trim()?.take(500)?.ifEmpty { null }
+		if (status == "not_a_conflict" && note == null) throw BadRequestException("not_a_conflict needs a reason in note")
+		val updated = jdbc.sql(
+			"""
+			update notices set status = :status, status_by = :user, status_at = now(), status_note = :note
+			 where id = :id
+			""".trimIndent(),
+		).param("status", status).param("user", SessionService.OWNER).param("note", note).param("id", noticeId).update()
+		if (updated == 0) throw NotFoundException("no notice $noticeId")
+		jdbc.sql(
+			"""
+			update inbox_items set state = 'closed', closed_at = now()
+			 where source_kind = 'ntc' and source_id = :id and state = 'open'
+			""".trimIndent(),
+		).param("id", noticeId).update()
+		sessions.audit("person", SessionService.OWNER, "notice.$status", "ntc", noticeId, mapOf("note" to note))
+		return NoticeStatusOut(noticeId, status)
+	}
+}
+
+@RestController
+@RequestMapping("/api")
+class PersonController(private val people: PersonService) {
+
+	@GetMapping("/sessions")
+	fun sessions(
+		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
+		@RequestParam(name = "include_ended", defaultValue = "false") includeEnded: Boolean,
+		@RequestParam(defaultValue = "50") limit: Int,
+	): List<SessionView> {
+		people.refuseSessionToken(authorization, "list sessions")
+		return people.sessions(includeEnded, limit.coerceIn(1, 200))
+	}
+
+	@GetMapping("/inbox")
+	fun inbox(@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): List<InboxItemView> {
+		people.refuseSessionToken(authorization, "read the first screen")
+		return people.inbox()
+	}
+
+	@PostMapping("/notices/{id}/status")
+	fun judgeNotice(
+		@PathVariable id: String,
+		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
+		@RequestBody body: NoticeStatusIn,
+	): NoticeStatusOut {
+		people.refuseSessionToken(authorization, "judge a notice")
+		return people.judgeNotice(id, body)
+	}
+}
+
+/**
+ * Ends registrations whose token expired and closes their waits. Runs inside the server for
+ * now; whether stage 1 keeps such jobs here or in a separate background worker is still open.
+ */
+@Component
+class SessionSweeper(private val sessions: SessionService) {
+	@Scheduled(fixedDelayString = "\${zm-baton.session-sweep-ms:60000}", initialDelayString = "\${zm-baton.session-sweep-ms:60000}")
+	fun sweep() {
+		sessions.endExpired()
+	}
+}
+
+@Configuration(proxyBeanMethods = false)
+@EnableScheduling
+class SchedulingConfig

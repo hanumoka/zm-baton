@@ -13,6 +13,19 @@ object Ids {
 
 	fun run(): String = "run_" + uuidV7()
 
+	fun device(): String = "dev_" + uuidV7()
+
+	fun session(): String = "ses_" + uuidV7()
+
+	fun inbox(): String = "inb_" + uuidV7()
+
+	fun notice(): String = "ntc_" + uuidV7()
+
+	fun event(): String = "evt_" + uuidV7()
+
+	/** Audit rows have no contract prefix; `aud_` keeps them readable next to the others. */
+	fun audit(): String = "aud_" + uuidV7()
+
 	/** RFC 9562 UUIDv7: 48-bit Unix milliseconds, version 7, variant 10, the rest random. */
 	fun uuidV7(nowMillis: Long = System.currentTimeMillis()): UUID {
 		val randomBits = ByteArray(10).also(random::nextBytes)
