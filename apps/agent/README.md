@@ -66,3 +66,23 @@ go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 ## 이 시험에서 하지 않는 것
 
 다음은 이 시험이 끝난 뒤 1단계 본작업에서 한다: 임대 갱신, WebSocket 깨우기, 보내지 못한 사건의 디스크 보관, `request_id`, 끊긴 실행의 재개, 질문 경로, 실행기 설정 격리(`CLAUDE_CONFIG_DIR`). 도구 결과 본문은 4,000자로 자르기만 하고 비밀값을 가리지 않는다.
+
+## `zm-baton` 명령 — 사람이 직접 연 AI 세션을 서버에 잇는다
+
+같은 Go 모듈의 두 번째 프로그램이다(`cmd/zm-baton`, `internal/session`). 협업 계약 v1 「직접 연 AI 세션을 서버에 등록한다」(`protocol_version` 2)를 따른다. 지금은 Claude Code 세션만 잇는다.
+
+1. `zm-baton login --server http://127.0.0.1:18081`으로 이 기기를 한 번 등록한다. 설정은 사용자 설정 폴더의 `zm-baton/config.json`에 둔다(`ZM_BATON_HOME`으로 바꿀 수 있다).
+2. `zm-baton hooks install`이 Claude Code 사용자 설정(`~/.claude/settings.json`)에 훅 다섯을 넣는다. `--project <폴더>`를 주면 그 폴더의 `.claude/settings.local.json`에만 넣는다. 바뀌는 내용을 보여 주고 묻는다. 쓰기 전에 이전 파일을 `*.zm-baton-backup-<시각>`으로 남기고, 다른 설정과 다른 도구의 훅은 그대로 둔다. `hooks uninstall`은 zm-baton이 넣은 항목만 지운다.
+3. 그 뒤 새로 여는 Claude Code 세션은 시작할 때 서버에 등록되고, 서버가 돌려준 현재 상태 카드가 AI의 맥락에 들어간다. 파일을 고치는 도구(`Edit`·`Write`·`MultiEdit`·`NotebookEdit`)가 끝나면 저장소 기준 상대 경로·`git hash-object`·HEAD를 보낸다. 알림 훅은 기다림을, 다음 입력이나 도구 실행은 재개를, 끝 훅은 세션 끝을 보낸다.
+4. 세션 안에서 `zm-baton session work "<무엇을, 어디서>"`로 「지금 하는 일」을 올린다(300자 이하, `--ref`, `--private`). `zm-baton session off`는 이 세션의 등록을 끄고, 그 뒤 이 세션의 훅은 아무것도 보내지 않는다. 시작 전에 끄려면 `ZM_BATON_OFF=1`을 둔다.
+
+지키는 것:
+
+- 훅은 늘 종료 코드 0으로 끝나고, 실패해도 세션에 아무것도 출력하지 않는다. 시간 상한은 시작 4초, 세션 끝 1초, 나머지 3초다. 실패는 설정 폴더의 `hook.log`에 남는다.
+- 기기의 절대 경로는 보내지 않는다. 저장소는 첫 커밋 번호(`git:<SHA>`)로 식별하고, 원격 주소는 호스트와 경로만 남긴다(자격 증명·쿼리·scp 형식의 사용자 부분을 버린다).
+- 세션 토큰은 설정 폴더의 `sessions/` 아래 파일에만 둔다. 세션 번호는 Claude Code가 훅에 주는 `session_id`이고, `session work`·`off`는 `CLAUDE_CODE_SESSION_ID` 환경 변수(공식 문서에는 없고 2.1.296에서 확인)나 `--session`으로 찾는다.
+- 셸 명령으로 바꾼 파일은 보고되지 않는다. 등록하지 않았거나 등록을 끈 세션은 충돌 판정에서 빠진다.
+
+```sh
+go build -o bin/zm-baton.exe ./cmd/zm-baton
+```
