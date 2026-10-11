@@ -10,6 +10,16 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
+)
+
+// Right after Start, /proc/<pid>/cmdline is briefly empty while the kernel finishes
+// execve (measured on Linux: empty in most starts, filled within a few ms). Kill
+// waits up to emptyCmdlineWait for it instead of refusing a stop that is legitimate.
+// A command line that stays empty (an exiting process) is still refused.
+const (
+	emptyCmdlineWait = 2 * time.Second
+	emptyCmdlinePoll = time.Millisecond
 )
 
 // SysProcAttr needs nothing on these systems.
@@ -46,6 +56,10 @@ func (r *Run) Kill(marker string) error {
 	}
 	pid := r.p.Pid
 	cmdline, err := commandLine(pid)
+	for deadline := time.Now().Add(emptyCmdlineWait); err == nil && cmdline == "" && time.Now().Before(deadline); {
+		time.Sleep(emptyCmdlinePoll)
+		cmdline, err = commandLine(pid)
+	}
 	if err != nil {
 		return fmt.Errorf("refusing to kill pid %d: cannot read its command line: %w", pid, err)
 	}

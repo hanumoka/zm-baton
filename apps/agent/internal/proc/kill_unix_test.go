@@ -42,6 +42,33 @@ func TestKillChecksTheMarkerBeforeStopping(t *testing.T) {
 	}
 }
 
+// Kill right after Start used to be refused when it raced execve, because the new
+// process's command line is briefly empty. Each start here is killed at once.
+func TestKillRightAfterStartStopsTheProcess(t *testing.T) {
+	if _, err := os.Stat("/proc/self/cmdline"); err != nil {
+		t.Skip("no /proc: Kill always refuses here")
+	}
+	marker := "zmb-proc-race-0123456789abcdef"
+	for i := 0; i < 200; i++ {
+		cmd := exec.Command("sh", "-c", "sleep 30; :", marker)
+		if err := cmd.Start(); err != nil {
+			t.Skip("sleep is not available:", err)
+		}
+		run, err := Track(cmd.Process)
+		if err != nil {
+			t.Fatal(err)
+		}
+		killErr := run.Kill(marker)
+		run.Close()
+		if killErr != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			t.Fatalf("start %d: Kill right after Start: %v", i, killErr)
+		}
+		_ = cmd.Wait()
+	}
+}
+
 func TestTrackRefusesInvalidProcesses(t *testing.T) {
 	if _, err := Track(nil); err == nil {
 		t.Fatal("Track(nil) returned nil")
