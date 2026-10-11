@@ -31,6 +31,8 @@ create table agent_sessions (
 	current_work text check (char_length(current_work) <= 300),
 	current_work_refs jsonb,
 	current_work_at timestamptz,
+	-- local_seq of the current_work event applied last: an older event that arrives later is ignored.
+	current_work_seq bigint not null default 0,
 	share_current_work boolean not null default true,
 	-- Only the SHA-256 of the session token is kept, never the token.
 	token_hash text not null unique,
@@ -91,8 +93,10 @@ create table inbox_items (
 	source_id text not null,
 	summary text not null,
 	detail jsonb,
-	-- A directly opened session's wait: its kind and the newest local_seq that opened or repeated it.
+	-- A directly opened session's wait: its kind, the local_seq that started it and the newest
+	-- local_seq that repeated it. A resume between the two means an old wait ended and a new one began.
 	wait_kind text,
+	wait_first_seq bigint,
 	wait_seq bigint,
 	repeat_count integer not null default 0,
 	waiting_since timestamptz not null default now(),

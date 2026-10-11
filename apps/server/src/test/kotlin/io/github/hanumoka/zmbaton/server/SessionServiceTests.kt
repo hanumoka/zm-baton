@@ -279,6 +279,106 @@ class SessionServiceTests @Autowired constructor(
 		assertTrue(people.sessions(false, 200).none { it.id == s.id }, "an ended session is not listed as live")
 	}
 
+	private fun storedRemote(remote: String): String? {
+		val r = sessions.register(
+			RegisterSession(2, device(), "codex", null, UUID.randomUUID().toString(), RepositoryIn(repoKey(), remote, "", "main")),
+		)
+		return jdbc.sql("select repository ->> 'remote' from agent_sessions where id = :id")
+			.param("id", r.sessionId).query(String::class.java).optional().orElse(null)
+	}
+
+	@Test
+	fun `remotes keep only host and path, whatever their length or shape`() {
+		val longSecret = "https://" + "SYNTHETIC_".repeat(60) + "@example.invalid/repo.git"
+		assertEquals("https://example.invalid/repo.git", storedRemote(longSecret))
+		assertEquals("https://example.invalid/repo.git", storedRemote("https://example.invalid/repo.git?access_token=SYNTHETIC_TOKEN#frag"))
+		assertEquals("ssh://host:2222/me/r.git", storedRemote("ssh://deploy:SYNTHETIC@host:2222/me/r.git"))
+		assertEquals("github.com:me/repo.git", storedRemote("SYNTHETIC_USER@github.com:me/repo.git"))
+		assertNull(storedRemote("not a remote with spaces"))
+		assertNull(storedRemote("https://example.invalid/" + "x".repeat(600)), "too long after cleaning: dropped, not cut")
+	}
+
+	@Test
+	fun `an older current work that arrives late changes nothing`() {
+		val repo = repoKey()
+		val a = register(repo)
+		val b = register(repo)
+		send(a, "current_work", mapOf("summary" to "공개 요약", "share" to true), seq = 3)
+		send(a, "current_work", mapOf("summary" to "비공개였던 요약"), seq = 2)
+		send(a, "current_work", mapOf("summary" to "처음 요약", "share" to false), seq = 1)
+		val card = sessions.statusCardFor(b.id, b.token)
+		assertContains(card, "공개 요약")
+		assertFalse("비공개였던 요약" in card)
+		assertEquals("공개 요약", people.sessions(false, 200).single { it.id == a.id }.currentWork)
+	}
+
+	@Test
+	fun `registering again after expiry closes the expired registration's waits`() {
+		val dev = device()
+		val esid = UUID.randomUUID().toString()
+		val old = register(repoKey(), device = dev, esid = esid)
+		send(old, "waiting", mapOf("wait_kind" to "idle_prompt"))
+		jdbc.sql("update agent_sessions set token_expires_at = now() - interval '1 minute' where id = :id")
+			.param("id", old.id).update()
+		val renewed = register(repoKey(), device = dev, esid = esid)
+		assertNotEquals(old.id, renewed.id)
+		assertTrue(openItems(old.id).isEmpty(), "the expired registration's wait must close with it")
+	}
+
+	@Test
+	fun `a late older wait report only counts, and a resume between two reports starts a new wait`() {
+		val s = register(repoKey())
+		fun openRow() = jdbc.sql(
+			"select summary, wait_first_seq, wait_seq, waiting_since from inbox_items where source_id = :id and state = 'open'",
+		).param("id", s.id).query().singleRow()
+		// Real order: wait 10, resume 20, wait 30. Arrival order: 10, 30, 20.
+		send(s, "waiting", mapOf("wait_kind" to "idle_prompt", "message" to "첫 기다림"), seq = 10)
+		val firstSince = (openRow()["waiting_since"] as java.sql.Timestamp).toInstant()
+		Thread.sleep(30)
+		send(s, "waiting", mapOf("wait_kind" to "idle_prompt", "message" to "새 기다림"), seq = 30)
+		assertEquals(10L, (openRow()["wait_first_seq"] as Number).toLong())
+		send(s, "resumed", seq = 20)
+		val after = openRow()
+		assertEquals(30L, (after["wait_first_seq"] as Number).toLong(), "the wait reported at 30 is a new wait")
+		assertTrue((after["waiting_since"] as java.sql.Timestamp).toInstant().isAfter(firstSince), "it waits since its own report")
+		assertContains(after["summary"] as String, "새 기다림")
+		// A late report older than the newest one only counts; it does not bring back old words.
+		send(s, "waiting", mapOf("wait_kind" to "idle_prompt", "message" to "늦게 온 옛 문구"), seq = 25)
+		assertContains(openRow()["summary"] as String, "새 기다림")
+	}
+
+	@Test
+	fun `two batches touching two files in opposite orders neither deadlock nor double the notices`() {
+		val pool = Executors.newFixedThreadPool(2)
+		try {
+			repeat(15) {
+				val repo = repoKey()
+				val a = register(repo)
+				val b = register(repo)
+				val start = CountDownLatch(1)
+				fun batch(s: Registered, first: String, second: String) = SessionEventBatch(
+					2,
+					listOf(first, second).map { path ->
+						SessionEventIn("evt_" + UUID.randomUUID(), ++s.seq, "file_touch", mapOf("repo_key" to repo, "path" to path))
+					},
+				)
+				val futures = listOf(a to batch(a, "x.md", "y.md"), b to batch(b, "y.md", "x.md")).map { (s, events) ->
+					pool.submit<SessionEventResult> {
+						start.await()
+						sessions.ingest(s.id, s.token, events)
+					}
+				}
+				start.countDown()
+				futures.forEach { assertEquals(2, it.get(30, TimeUnit.SECONDS).stored) }
+				val notices = noticesBetween(a.id, b.id)
+				assertEquals(2, notices.size, "one notice per file")
+				for (n in notices) assertEquals(1, openItems(n["id"] as String).size)
+			}
+		} finally {
+			pool.shutdownNow()
+		}
+	}
+
 	@Test
 	fun `concurrent touches of one file by two sessions raise exactly one notice`() {
 		val pool = Executors.newFixedThreadPool(2)

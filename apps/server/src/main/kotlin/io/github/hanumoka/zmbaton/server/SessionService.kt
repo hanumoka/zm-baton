@@ -4,6 +4,8 @@ import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import tools.jackson.databind.ObjectMapper
+import java.net.URI
+import java.net.URISyntaxException
 import java.time.OffsetDateTime
 
 /**
@@ -32,7 +34,9 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		private val WAIT_KIND = Regex("^[a-z][a-z0-9_]{0,49}$")
 		private val REPO_KEY = Regex("^[A-Za-z0-9._:@/+-]{1,200}$")
 		private val HEX = Regex("^[0-9a-f]{7,128}$")
-		private val CREDENTIALS = Regex("^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]+@")
+		private val URL_SCHEME = Regex("^[A-Za-z][A-Za-z0-9+.-]*://")
+		/** `[user@]host:path` without whitespace, query or fragment; the user part is dropped. */
+		private val SCP_REMOTE = Regex("^(?:[^@/\\s]+@)?([A-Za-z0-9._-]+):([^\\s?#]+)$")
 		private val DRIVE = Regex("^[A-Za-z]:")
 		private val STAGE_LABELS = mapOf(
 			"draft" to "초안", "plan_review" to "계획 검토", "ready" to "수행 준비", "in_progress" to "수행",
@@ -78,14 +82,12 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 
 		// Two start hooks of one executor session must not race into two registrations.
 		lock("register|$deviceId|${req.executor}|$executorSessionId")
-		// An expired registration is over; ending it frees the one-live-registration index.
-		jdbc.sql(
-			"""
-			update agent_sessions set ended_at = token_expires_at
-			 where device_id = :device and executor = :executor and executor_session_id = :esid
-			   and ended_at is null and deregistered_at is null and token_expires_at <= now()
-			""".trimIndent(),
-		).param("device", deviceId).param("executor", req.executor).param("esid", executorSessionId).update()
+		// An expired registration is over; ending it frees the one-live-registration index and,
+		// like the sweeper, closes its waits.
+		endExpiredWhere(
+			"device_id = :device and executor = :executor and executor_session_id = :esid",
+			mapOf("device" to deviceId, "executor" to req.executor, "esid" to executorSessionId),
+		)
 
 		val token = SessionTokens.newToken()
 		val existing = jdbc.sql(
@@ -153,6 +155,15 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		requireProtocol(batch.protocolVersion)
 		if (batch.events.size > MAX_BATCH) throw BadRequestException("at most $MAX_BATCH events per batch")
 		val session = authenticate(sessionId, token, forUpdate = true)
+		// Every file lock this batch needs is taken up front in one sorted order, so two batches
+		// that touch the same files in opposite orders cannot wait for each other.
+		batch.events.filter { it.kind == "file_touch" }.mapNotNull { event ->
+			try {
+				validate(event).let { "touch|${it["repo_key"]}|${it["path"]}" }
+			} catch (e: BadRequestException) {
+				null
+			}
+		}.distinct().sorted().forEach(::lock)
 		var stored = 0
 		var duplicates = 0
 		val reasons = mutableListOf<String>()
@@ -204,29 +215,41 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 
 	/** Ends registrations whose token expired and closes their waits. The sweeper calls this. */
 	@Transactional
-	fun endExpired(): Int {
-		val ended = jdbc.sql(
+	fun endExpired(): Int = endExpiredWhere("true", emptyMap())
+
+	/**
+	 * The one way an expired registration ends: `ended_at` and the closing of its waits happen
+	 * together, whether the sweeper or a new registration finds it first.
+	 */
+	private fun endExpiredWhere(condition: String, params: Map<String, Any?>): Int {
+		var statement = jdbc.sql(
 			"""
 			update agent_sessions set ended_at = token_expires_at
-			 where ended_at is null and deregistered_at is null and token_expires_at <= now()
+			 where ($condition) and ended_at is null and deregistered_at is null and token_expires_at <= now()
 			returning id
 			""".trimIndent(),
-		).query(String::class.java).list()
+		)
+		for ((name, value) in params) statement = statement.param(name, value)
+		val ended = statement.query(String::class.java).list()
 		for (id in ended) closeWaits(id!!, beforeSeq = null)
 		return ended.size
 	}
 
 	private fun apply(session: SessionRow, seq: Long, kind: String, payload: Map<String, Any?>) {
 		when (kind) {
+			// Only a newer summary replaces the current one, so an older event that arrives late can
+			// neither bring back an old summary nor undo a later change of the sharing setting.
+			// An event without `share` keeps the session's setting (contract: sharing is per session).
 			"current_work" -> jdbc.sql(
 				"""
 				update agent_sessions
 				   set current_work = :summary, current_work_refs = cast(:refs as jsonb), current_work_at = now(),
-				       share_current_work = coalesce(cast(:share as boolean), share_current_work)
-				 where id = :id
+				       share_current_work = coalesce(cast(:share as boolean), share_current_work),
+				       current_work_seq = :seq
+				 where id = :id and current_work_seq < :seq
 				""".trimIndent(),
 			).param("summary", payload["summary"]).param("refs", json.writeValueAsString(payload["refs"] ?: emptyList<String>()))
-				.param("share", payload["share"] as Boolean?).param("id", session.id).update()
+				.param("share", payload["share"] as Boolean?).param("seq", seq).param("id", session.id).update()
 
 			"waiting" -> openWait(session, seq, payload)
 
@@ -234,6 +257,19 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 				session.maxResumedSeq = maxOf(session.maxResumedSeq, seq)
 				jdbc.sql("update agent_sessions set max_resumed_seq = greatest(max_resumed_seq, :seq) where id = :id")
 					.param("seq", seq).param("id", session.id).update()
+				// A wait that started before this resume but was reported again after it is a new
+				// wait: it starts at its newest report, not at the old one.
+				jdbc.sql(
+					"""
+					update inbox_items i
+					   set wait_first_seq = i.wait_seq,
+					       waiting_since = coalesce((select max(e.received_at) from session_events e
+					                                  where e.session_id = i.source_id and e.kind = 'waiting'
+					                                    and e.local_seq = i.wait_seq), now())
+					 where i.source_id = :session and i.kind = 'session_waiting' and i.state = 'open'
+					   and i.wait_first_seq < :seq and i.wait_seq > :seq
+					""".trimIndent(),
+				).param("session", session.id).param("seq", seq).update()
 				closeWaits(session.id, beforeSeq = seq)
 			}
 
@@ -268,12 +304,17 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			.joinToString(" · ").take(300)
 		jdbc.sql(
 			"""
-			insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, wait_kind, wait_seq, notify)
-			values (:id, :user, 2, 'session_waiting', 'ses', :session, :summary, cast(:detail as jsonb), :waitKind, :seq, :notify)
+			insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, wait_kind,
+			                         wait_first_seq, wait_seq, notify)
+			values (:id, :user, 2, 'session_waiting', 'ses', :session, :summary, cast(:detail as jsonb), :waitKind,
+			        :seq, :seq, :notify)
 			on conflict (source_id, wait_kind) where state = 'open' and kind = 'session_waiting'
 			do update set repeat_count = inbox_items.repeat_count + 1,
-			              wait_seq = greatest(inbox_items.wait_seq, excluded.wait_seq),
-			              summary = excluded.summary, detail = excluded.detail
+			              -- the newest report's words win; an older report that arrives late only counts
+			              summary = case when excluded.wait_seq > inbox_items.wait_seq then excluded.summary else inbox_items.summary end,
+			              detail = case when excluded.wait_seq > inbox_items.wait_seq then excluded.detail else inbox_items.detail end,
+			              wait_first_seq = least(inbox_items.wait_first_seq, excluded.wait_first_seq),
+			              wait_seq = greatest(inbox_items.wait_seq, excluded.wait_seq)
 			""".trimIndent(),
 		).param("id", Ids.inbox()).param("user", OWNER).param("session", session.id).param("summary", summary)
 			.param("detail", json.writeValueAsString(mapOf("wait_kind" to waitKind, "message" to message, "branch" to session.branch)))
@@ -495,12 +536,35 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			prefix.isNullOrEmpty() -> ""
 			else -> relativePath(prefix) ?: throw BadRequestException("repository.prefix must be relative to the repository root")
 		}
-		// Credentials never leave the request; a local path as a remote is dropped, not stored.
-		val remote = repo.remote?.trim()?.take(500)?.replace(CREDENTIALS, "$1")?.takeUnless {
-			it.isEmpty() || looksAbsolute(it) || it.startsWith("file:", ignoreCase = true)
-		}
+		val remote = cleanRemote(repo.remote)
 		val branch = repo.branch?.trim()?.take(200)?.ifEmpty { null }
 		return CleanRepository(repoKey, mapOf("remote" to remote, "prefix" to cleanPrefix, "branch" to branch))
+	}
+
+	/**
+	 * The remote as host and path only. The whole value is parsed first and rebuilt from the parts
+	 * that cannot hold a secret: user info, query and fragment are dropped, and so is the user of
+	 * an scp-style `user@host:path`. Anything else, and local paths, give null. The length limit
+	 * applies to the result, so cutting can never leave half a credential behind.
+	 */
+	private fun cleanRemote(raw: String?): String? {
+		val s = raw?.trim().orEmpty()
+		if (s.isEmpty() || s.length > 2000 || looksAbsolute(s) || s.startsWith(".") || s.startsWith("file:", ignoreCase = true)) {
+			return null
+		}
+		val cleaned = if (URL_SCHEME.containsMatchIn(s)) {
+			val uri = try {
+				URI(s)
+			} catch (e: URISyntaxException) {
+				return null
+			}
+			val host = uri.host ?: return null
+			"${uri.scheme.lowercase()}://$host${if (uri.port >= 0) ":${uri.port}" else ""}${uri.rawPath.orEmpty()}"
+		} else {
+			val m = SCP_REMOTE.matchEntire(s) ?: return null
+			"${m.groupValues[1]}:${m.groupValues[2]}"
+		}
+		return cleaned.takeIf { it.length <= 500 }
 	}
 
 	/** A path from the repository root with `/` separators, or null when it is absolute or climbs out. */
