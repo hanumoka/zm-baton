@@ -1,0 +1,10 @@
+# Build context is apps/: send only sources, never local build output, dependencies or secrets.
+**/node_modules
+**/dist
+**/build
+**/.gradle
+**/bin
+**/out
+**/.env
+agent/
+desktop/

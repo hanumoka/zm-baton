@@ -1,5 +1,8 @@
-# Local development database for the stage-1 compat test.
+# Local stage-1 services on one PC.
 # Put ZM_BATON_DB_PASSWORD in deploy/compose/.env (git-ignored); see .env.example.
+#   database only (compat test):  docker compose -f deploy/compose/compose.yaml up -d
+#   database, server and Web:     docker compose -f deploy/compose/compose.yaml --profile app up -d --build
+# Everything is published on 127.0.0.1 only: there is no person authentication yet.
 name: zm-baton-dev
 services:
   postgres:
@@ -12,5 +15,27 @@ services:
       - "127.0.0.1:15432:5432"
     volumes:
       - zm-baton-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zm_baton -d zm_baton"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  server:
+    profiles: ["app"]
+    build:
+      context: ../../apps
+      dockerfile: ../deploy/compose/server.Dockerfile
+    environment:
+      ZM_BATON_DB_URL: jdbc:postgresql://postgres:5432/zm_baton
+      ZM_BATON_DB_USER: zm_baton
+      ZM_BATON_DB_PASSWORD: ${ZM_BATON_DB_PASSWORD:?set ZM_BATON_DB_PASSWORD in deploy/compose/.env}
+    ports:
+      - "127.0.0.1:18081:18081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   zm-baton-pg: {}
