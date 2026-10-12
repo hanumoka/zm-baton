@@ -195,9 +195,9 @@ class SessionServiceTests @Autowired constructor(
 		val repo = repoKey()
 		val a = register(repo)
 		val b = register(repo)
-		val tooLong = send(a, "current_work", mapOf("summary" to "x".repeat(301)))
+		val tooLong = send(a, "current_work", mapOf("summary" to "x".repeat(301), "share" to true))
 		assertEquals(1, tooLong.rejected)
-		send(a, "current_work", mapOf("summary" to "결정 문서 셋 쓰는 중", "refs" to listOf("DEC-0105")))
+		send(a, "current_work", mapOf("summary" to "결정 문서 셋 쓰는 중", "refs" to listOf("DEC-0105"), "share" to true))
 		assertContains(sessions.statusCardFor(b.id, b.token), "결정 문서 셋 쓰는 중")
 		send(a, "current_work", mapOf("summary" to "비밀 작업", "share" to false))
 		val card = sessions.statusCardFor(b.id, b.token)
@@ -304,12 +304,30 @@ class SessionServiceTests @Autowired constructor(
 		val a = register(repo)
 		val b = register(repo)
 		send(a, "current_work", mapOf("summary" to "공개 요약", "share" to true), seq = 3)
-		send(a, "current_work", mapOf("summary" to "비공개였던 요약"), seq = 2)
-		send(a, "current_work", mapOf("summary" to "처음 요약", "share" to false), seq = 1)
+		send(a, "current_work", mapOf("summary" to "비공개였던 요약", "share" to false), seq = 2)
+		send(a, "current_work", mapOf("summary" to "처음 요약", "share" to true), seq = 1)
 		val card = sessions.statusCardFor(b.id, b.token)
 		assertContains(card, "공개 요약")
 		assertFalse("비공개였던 요약" in card)
+		assertFalse("처음 요약" in card)
 		assertEquals("공개 요약", people.sessions(false, 200).single { it.id == a.id }.currentWork)
+	}
+
+	@Test
+	fun `every summary states its sharing, so a late older one cannot publish a private one`() {
+		val repo = repoKey()
+		val a = register(repo)
+		val b = register(repo)
+		// Real order: shared 1, sharing turned off 2, private 3. Arrival order: 1, 3, 2.
+		send(a, "current_work", mapOf("summary" to "공개 요약", "share" to true), seq = 1)
+		assertEquals(1, send(a, "current_work", mapOf("summary" to "설정 없는 요약"), seq = 3).rejected, "share is required")
+		send(a, "current_work", mapOf("summary" to "공유를 끈 뒤 요약", "share" to false), seq = 3)
+		send(a, "current_work", mapOf("summary" to "공유를 끄며 쓴 요약", "share" to false), seq = 2)
+		val card = sessions.statusCardFor(b.id, b.token)
+		assertFalse("공유를 끈 뒤 요약" in card)
+		assertFalse("공유를 끄며 쓴 요약" in card)
+		assertContains(card, "공유 안 함")
+		assertNull(people.sessions(false, 200).single { it.id == a.id }.currentWork)
 	}
 
 	@Test
@@ -342,9 +360,36 @@ class SessionServiceTests @Autowired constructor(
 		assertEquals(30L, (after["wait_first_seq"] as Number).toLong(), "the wait reported at 30 is a new wait")
 		assertTrue((after["waiting_since"] as java.sql.Timestamp).toInstant().isAfter(firstSince), "it waits since its own report")
 		assertContains(after["summary"] as String, "새 기다림")
-		// A late report older than the newest one only counts; it does not bring back old words.
+		// A late report older than the newest one joins the wait; it does not bring back old words.
 		send(s, "waiting", mapOf("wait_kind" to "idle_prompt", "message" to "늦게 온 옛 문구"), seq = 25)
-		assertContains(openRow()["summary"] as String, "새 기다림")
+		val late = openRow()
+		assertContains(late["summary"] as String, "새 기다림")
+		assertEquals(25L, (late["wait_first_seq"] as Number).toLong())
+		assertEquals(after["waiting_since"], late["waiting_since"], "the server first heard of this wait at 30")
+	}
+
+	@Test
+	fun `with several resumes and waits in any arrival order the wait starts at the first report after the newest resume`() {
+		val s = register(repoKey())
+		fun openRow() = jdbc.sql(
+			"select wait_first_seq, wait_seq, repeat_count, waiting_since from inbox_items where source_id = :id and state = 'open'",
+		).param("id", s.id).query().singleRow()
+		fun receivedAt(seq: Long) = jdbc.sql("select received_at from session_events where session_id = :id and local_seq = :seq")
+			.param("id", s.id).param("seq", seq).query(java.sql.Timestamp::class.java).single()
+		// Real order: wait 10, resume 20, wait 30, wait 40, resume 50, wait 60, wait 70.
+		// Arrival order: 10, 30, 40, 60, 70, 20, 50.
+		for (seq in listOf(10L, 30L, 40L, 60L, 70L)) {
+			send(s, "waiting", mapOf("wait_kind" to "idle_prompt"), seq = seq)
+			Thread.sleep(5)
+		}
+		send(s, "resumed", seq = 20)
+		assertEquals(30L, (openRow()["wait_first_seq"] as Number).toLong())
+		send(s, "resumed", seq = 50)
+		val row = openRow()
+		assertEquals(60L, (row["wait_first_seq"] as Number).toLong())
+		assertEquals(70L, (row["wait_seq"] as Number).toLong())
+		assertEquals(1, (row["repeat_count"] as Number).toInt(), "60 and 70 are one wait reported twice")
+		assertEquals(receivedAt(60), row["waiting_since"])
 	}
 
 	@Test
@@ -373,6 +418,56 @@ class SessionServiceTests @Autowired constructor(
 				val notices = noticesBetween(a.id, b.id)
 				assertEquals(2, notices.size, "one notice per file")
 				for (n in notices) assertEquals(1, openItems(n["id"] as String).size)
+			}
+		} finally {
+			pool.shutdownNow()
+		}
+	}
+
+	@Test
+	fun `two files whose lock numbers collide are locked in number order, not in path order`() {
+		val repo = repoKey()
+		// Two paths of this repository whose lock numbers are equal, found by trying many paths.
+		val (first, third) = jdbc.sql(
+			"""
+			select min(p), max(p) from (
+			  select format('f%s.md', lpad(g::text, 7, '0')) as p from generate_series(1, 300000) g
+			) t group by hashtext(:repo || '|' || p) having count(*) = 2 limit 1
+			""".trimIndent(),
+		).param("repo", repo).query { rs, _ -> rs.getString(1) to rs.getString(2) }.single()
+		fun number(path: String) = jdbc.sql("select hashtext(:k)").param("k", "$repo|$path").query(Int::class.java).single()
+		// A path between the two in path order whose number differs: sorting paths would lock
+		// first -> second in one batch and second -> third (= first's number) in the other.
+		val second = jdbc.sql(
+			"""
+			select p from (
+			  select format('f%s.md', lpad(g::text, 7, '0')) as p from generate_series(1, 300000) g
+			) t where p > :a and p < :b and hashtext(:repo || '|' || p) <> hashtext(:repo || '|' || :a) limit 1
+			""".trimIndent(),
+		).param("a", first).param("b", third).param("repo", repo).query(String::class.java).single()
+		assertEquals(number(first), number(third))
+		assertNotEquals(number(first), number(second))
+		val pool = Executors.newFixedThreadPool(2)
+		try {
+			repeat(15) {
+				val a = register(repo)
+				val b = register(repo)
+				val start = CountDownLatch(1)
+				fun batch(s: Registered, vararg paths: String) = SessionEventBatch(
+					2,
+					paths.map { path ->
+						SessionEventIn("evt_" + UUID.randomUUID(), ++s.seq, "file_touch", mapOf("repo_key" to repo, "path" to path))
+					},
+				)
+				val futures = listOf(a to batch(a, first, second), b to batch(b, second, third)).map { (s, events) ->
+					pool.submit<SessionEventResult> {
+						start.await()
+						sessions.ingest(s.id, s.token, events)
+					}
+				}
+				start.countDown()
+				futures.forEach { assertEquals(2, it.get(30, TimeUnit.SECONDS).stored) }
+				assertEquals(1, noticesBetween(a.id, b.id).size, "only the second path is shared")
 			}
 		} finally {
 			pool.shutdownNow()

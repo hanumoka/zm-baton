@@ -93,8 +93,8 @@ create table inbox_items (
 	source_id text not null,
 	summary text not null,
 	detail jsonb,
-	-- A directly opened session's wait: its kind, the local_seq that started it and the newest
-	-- local_seq that repeated it. A resume between the two means an old wait ended and a new one began.
+	-- A directly opened session's wait: its kind and the local_seq of its first and newest report
+	-- after the session's newest resume. The server recomputes them from session_events each time.
 	wait_kind text,
 	wait_first_seq bigint,
 	wait_seq bigint,

@@ -27,6 +27,9 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		const val CURRENT_WORK_MAX = 300
 		const val STATUS_CARD_MAX = 2000
 		const val MAX_BATCH = 100
+		/** The first key of an advisory lock; each kind of lock has its own number space. */
+		private const val LOCK_REGISTER = 1
+		private const val LOCK_FILE = 2
 		val EXECUTORS = setOf("claude_code", "codex")
 		val CLIENT_KINDS = setOf("current_work", "waiting", "file_touch", "resumed", "ended", "deregistered")
 		/** Waits that stop work until a person answers are raised at once; the rest wait for the digest. */
@@ -81,7 +84,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			.orElseThrow { NotFoundException("no active device $deviceId; run zm-baton login") }
 
 		// Two start hooks of one executor session must not race into two registrations.
-		lock("register|$deviceId|${req.executor}|$executorSessionId")
+		lock(LOCK_REGISTER, "$deviceId|${req.executor}|$executorSessionId")
 		// An expired registration is over; ending it frees the one-live-registration index and,
 		// like the sweeper, closes its waits.
 		endExpiredWhere(
@@ -155,15 +158,17 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		requireProtocol(batch.protocolVersion)
 		if (batch.events.size > MAX_BATCH) throw BadRequestException("at most $MAX_BATCH events per batch")
 		val session = authenticate(sessionId, token, forUpdate = true)
-		// Every file lock this batch needs is taken up front in one sorted order, so two batches
-		// that touch the same files in opposite orders cannot wait for each other.
-		batch.events.filter { it.kind == "file_touch" }.mapNotNull { event ->
-			try {
-				validate(event).let { "touch|${it["repo_key"]}|${it["path"]}" }
-			} catch (e: BadRequestException) {
-				null
-			}
-		}.distinct().sorted().forEach(::lock)
+		// Every file lock this batch needs is taken up front, so two batches that touch the same
+		// files in opposite orders cannot wait for each other.
+		lockFiles(
+			batch.events.filter { it.kind == "file_touch" }.mapNotNull { event ->
+				try {
+					validate(event).let { fileLockKey(it["repo_key"] as String, it["path"] as String) }
+				} catch (e: BadRequestException) {
+					null
+				}
+			},
+		)
 		var stored = 0
 		var duplicates = 0
 		val reasons = mutableListOf<String>()
@@ -231,58 +236,48 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		)
 		for ((name, value) in params) statement = statement.param(name, value)
 		val ended = statement.query(String::class.java).list()
-		for (id in ended) closeWaits(id!!, beforeSeq = null)
+		for (id in ended) closeWaits(id!!)
 		return ended.size
 	}
 
 	private fun apply(session: SessionRow, seq: Long, kind: String, payload: Map<String, Any?>) {
 		when (kind) {
-			// Only a newer summary replaces the current one, so an older event that arrives late can
-			// neither bring back an old summary nor undo a later change of the sharing setting.
-			// An event without `share` keeps the session's setting (contract: sharing is per session).
+			// Only a newer summary replaces the current one. Each summary carries its own sharing
+			// setting, so no event depends on another one having arrived first; the CLI remembers a
+			// session's choice and states it every time.
 			"current_work" -> jdbc.sql(
 				"""
 				update agent_sessions
 				   set current_work = :summary, current_work_refs = cast(:refs as jsonb), current_work_at = now(),
-				       share_current_work = coalesce(cast(:share as boolean), share_current_work),
-				       current_work_seq = :seq
+				       share_current_work = :share, current_work_seq = :seq
 				 where id = :id and current_work_seq < :seq
 				""".trimIndent(),
 			).param("summary", payload["summary"]).param("refs", json.writeValueAsString(payload["refs"] ?: emptyList<String>()))
-				.param("share", payload["share"] as Boolean?).param("seq", seq).param("id", session.id).update()
+				.param("share", payload["share"] as Boolean).param("seq", seq).param("id", session.id).update()
 
-			"waiting" -> openWait(session, seq, payload)
+			// A report older than the newest resume is already over (contract "세션이 보내는 사건" 6).
+			"waiting" -> if (seq > session.maxResumedSeq) refreshWait(session, payload["wait_kind"] as String)
 
 			"resumed" -> {
 				session.maxResumedSeq = maxOf(session.maxResumedSeq, seq)
 				jdbc.sql("update agent_sessions set max_resumed_seq = greatest(max_resumed_seq, :seq) where id = :id")
 					.param("seq", seq).param("id", session.id).update()
-				// A wait that started before this resume but was reported again after it is a new
-				// wait: it starts at its newest report, not at the old one.
-				jdbc.sql(
-					"""
-					update inbox_items i
-					   set wait_first_seq = i.wait_seq,
-					       waiting_since = coalesce((select max(e.received_at) from session_events e
-					                                  where e.session_id = i.source_id and e.kind = 'waiting'
-					                                    and e.local_seq = i.wait_seq), now())
-					 where i.source_id = :session and i.kind = 'session_waiting' and i.state = 'open'
-					   and i.wait_first_seq < :seq and i.wait_seq > :seq
-					""".trimIndent(),
-				).param("session", session.id).param("seq", seq).update()
-				closeWaits(session.id, beforeSeq = seq)
+				val kinds = jdbc.sql(
+					"select distinct wait_kind from inbox_items where source_id = :session and kind = 'session_waiting' and state = 'open'",
+				).param("session", session.id).query(String::class.java).list()
+				for (kind in kinds) refreshWait(session, kind!!)
 			}
 
 			"file_touch" -> checkConflicts(session, payload["repo_key"] as String, payload["path"] as String)
 
 			"ended" -> {
 				jdbc.sql("update agent_sessions set ended_at = now() where id = :id").param("id", session.id).update()
-				closeWaits(session.id, beforeSeq = null)
+				closeWaits(session.id)
 			}
 
 			"deregistered" -> {
 				jdbc.sql("update agent_sessions set deregistered_at = now() where id = :id").param("id", session.id).update()
-				closeWaits(session.id, beforeSeq = null)
+				closeWaits(session.id)
 				audit("session", session.id, "session.deregistered", "ses", session.id, emptyMap())
 			}
 		}
@@ -290,11 +285,40 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 
 	// ---------------------------------------------------------------- waits ("나를 기다리는 것" 2)
 
-	private fun openWait(session: SessionRow, seq: Long, payload: Map<String, Any?>) {
-		// A wait older than the newest resume is already over (contract "세션이 보내는 사건" 6).
-		if (seq < session.maxResumedSeq) return
-		val waitKind = payload["wait_kind"] as String
-		val message = payload["message"] as String?
+	/**
+	 * Recomputes the session's open wait of one kind from the event log instead of adjusting it
+	 * step by step, so the order in which reports and resumes arrive does not matter. The wait
+	 * is made of the reports after the newest resume: it waits since the earliest of them
+	 * reached the server and shows the words of the newest one. No such report: the wait is over.
+	 */
+	private fun refreshWait(session: SessionRow, waitKind: String) {
+		data class Span(val first: Long, val last: Long, val count: Long, val since: OffsetDateTime)
+		val span = jdbc.sql(
+			"""
+			select min(local_seq), max(local_seq), count(*), min(received_at) from session_events
+			 where session_id = :session and kind = 'waiting' and payload ->> 'wait_kind' = :kind and local_seq > :resumed
+			""".trimIndent(),
+		).param("session", session.id).param("kind", waitKind).param("resumed", session.maxResumedSeq).query { rs, _ ->
+			if (rs.getObject(1) == null) null
+			else Span(rs.getLong(1), rs.getLong(2), rs.getLong(3), rs.getObject(4, OffsetDateTime::class.java))
+		}.list().firstOrNull()
+		if (span == null) {
+			jdbc.sql(
+				"""
+				update inbox_items set state = 'closed', closed_at = now()
+				 where source_id = :session and kind = 'session_waiting' and wait_kind = :kind and state = 'open'
+				""".trimIndent(),
+			).param("session", session.id).param("kind", waitKind).update()
+			return
+		}
+		val message = jdbc.sql(
+			"""
+			select payload ->> 'message' from session_events
+			 where session_id = :session and kind = 'waiting' and payload ->> 'wait_kind' = :kind and local_seq = :last
+			 order by received_at desc limit 1
+			""".trimIndent(),
+		).param("session", session.id).param("kind", waitKind).param("last", span.last)
+			.query { rs, _ -> rs.getString(1) }.list().firstOrNull()
 		val label = when (waitKind) {
 			"permission_prompt" -> "터미널에서 권한 확인을 기다림"
 			"idle_prompt" -> "다음 지시를 기다림"
@@ -305,39 +329,36 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		jdbc.sql(
 			"""
 			insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, wait_kind,
-			                         wait_first_seq, wait_seq, notify)
-			values (:id, :user, 2, 'session_waiting', 'ses', :session, :summary, cast(:detail as jsonb), :waitKind,
-			        :seq, :seq, :notify)
+			                         wait_first_seq, wait_seq, repeat_count, waiting_since, notify)
+			values (:id, :user, 2, 'session_waiting', 'ses', :session, :summary, cast(:detail as jsonb), :kind,
+			        :first, :last, :repeats, :since, :notify)
 			on conflict (source_id, wait_kind) where state = 'open' and kind = 'session_waiting'
-			do update set repeat_count = inbox_items.repeat_count + 1,
-			              -- the newest report's words win; an older report that arrives late only counts
-			              summary = case when excluded.wait_seq > inbox_items.wait_seq then excluded.summary else inbox_items.summary end,
-			              detail = case when excluded.wait_seq > inbox_items.wait_seq then excluded.detail else inbox_items.detail end,
-			              wait_first_seq = least(inbox_items.wait_first_seq, excluded.wait_first_seq),
-			              wait_seq = greatest(inbox_items.wait_seq, excluded.wait_seq)
+			do update set summary = excluded.summary, detail = excluded.detail,
+			              wait_first_seq = excluded.wait_first_seq, wait_seq = excluded.wait_seq,
+			              repeat_count = excluded.repeat_count, waiting_since = excluded.waiting_since
 			""".trimIndent(),
 		).param("id", Ids.inbox()).param("user", OWNER).param("session", session.id).param("summary", summary)
 			.param("detail", json.writeValueAsString(mapOf("wait_kind" to waitKind, "message" to message, "branch" to session.branch)))
-			.param("waitKind", waitKind).param("seq", seq)
-			.param("notify", if (waitKind in IMMEDIATE_WAITS) "immediate" else "digest").update()
+			.param("kind", waitKind).param("first", span.first).param("last", span.last).param("repeats", span.count - 1)
+			.param("since", span.since).param("notify", if (waitKind in IMMEDIATE_WAITS) "immediate" else "digest").update()
 	}
 
-	/** Closes the session's open waits; with [beforeSeq], only waits opened before that local_seq. */
-	private fun closeWaits(sessionId: String, beforeSeq: Long?) {
+	/** Closes all open waits of a session that ended, was turned off or expired. */
+	private fun closeWaits(sessionId: String) {
 		jdbc.sql(
 			"""
 			update inbox_items set state = 'closed', closed_at = now()
 			 where source_id = :session and kind = 'session_waiting' and state = 'open'
-			   and (cast(:before as bigint) is null or wait_seq < cast(:before as bigint))
 			""".trimIndent(),
-		).param("session", sessionId).param("before", beforeSeq).update()
+		).param("session", sessionId).update()
 	}
 
 	// ---------------------------------------------------------------- conflicts ("작업 충돌" 6)
 
 	private fun checkConflicts(session: SessionRow, repoKey: String, path: String) {
 		// Serialises checks of one file: of two sessions touching it at once, the second sees the first.
-		lock("touch|$repoKey|$path")
+		// The batch already holds this lock (see [ingest]); taking it again is free.
+		lockFiles(listOf(fileLockKey(repoKey, path)))
 		data class Other(val id: String, val executor: String, val branch: String?, val touchedAt: OffsetDateTime)
 		val others = jdbc.sql(
 			"""
@@ -502,8 +523,9 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 				}
 				val refs = (p["refs"] as? List<*>).orEmpty().map { it as? String ?: throw BadRequestException("refs must be strings") }
 				if (refs.size > 10 || refs.any { it.length > 200 }) throw BadRequestException("at most 10 refs of up to 200 characters")
-				val share = p["share"]
-				if (share != null && share !is Boolean) throw BadRequestException("share must be true or false")
+				// Required: a summary that leaned on an earlier one's setting could be published by
+				// arriving after the event that turned sharing off.
+				val share = p["share"] as? Boolean ?: throw BadRequestException("share must be true or false")
 				mapOf("summary" to summary, "refs" to refs, "share" to share)
 			}
 			"waiting" -> {
@@ -582,8 +604,25 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		if (version != PROTOCOL_VERSION) throw BadRequestException("unsupported protocol_version $version")
 	}
 
-	private fun lock(key: String) {
-		jdbc.sql("select pg_advisory_xact_lock(hashtext(:key))").param("key", key).query().listOfRows()
+	private fun lock(space: Int, key: String) {
+		jdbc.sql("select pg_advisory_xact_lock(:space, hashtext(:key))").param("space", space).param("key", key)
+			.query().listOfRows()
+	}
+
+	private fun fileLockKey(repoKey: String, path: String) = "$repoKey|$path"
+
+	/**
+	 * Takes the file locks in the order of the lock numbers themselves, not of the strings: two
+	 * keys whose numbers collide are one lock, and only the number order is the same for everyone.
+	 */
+	private fun lockFiles(keys: Collection<String>) {
+		if (keys.isEmpty()) return
+		// `array[:keys]` becomes `array[?, ?, …]`: the named parameter expands a collection.
+		val numbers = jdbc.sql("select distinct hashtext(k) as h from unnest(array[:keys]) as k order by h")
+			.param("keys", keys.distinct()).query(Int::class.java).list()
+		for (n in numbers) {
+			jdbc.sql("select pg_advisory_xact_lock(:space, :n)").param("space", LOCK_FILE).param("n", n).query().listOfRows()
+		}
 	}
 
 	private fun sessionLabel(session: SessionRow): String =
