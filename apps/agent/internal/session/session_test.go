@@ -101,7 +101,7 @@ func TestRepoAtReadsKeyPrefixBranchAndCleanRemote(t *testing.T) {
 
 func TestUpdateHandsOutUniqueSequenceNumbersUnderConcurrency(t *testing.T) {
 	dir := t.TempDir()
-	if err := Update(dir, "claude_code", "s1", time.Second, func(st *State, _ bool) (bool, error) {
+	if err := Update(context.Background(), dir, "claude_code", "s1", time.Second, func(st *State, _ bool) (bool, error) {
 		st.SessionID = "ses_x"
 		return false, nil
 	}); err != nil {
@@ -113,7 +113,7 @@ func TestUpdateHandsOutUniqueSequenceNumbersUnderConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := Update(dir, "claude_code", "s1", 5*time.Second, func(st *State, _ bool) (bool, error) {
+			err := Update(context.Background(), dir, "claude_code", "s1", 5*time.Second, func(st *State, _ bool) (bool, error) {
 				st.NextSeq++
 				seen <- st.NextSeq
 				return false, nil
@@ -134,24 +134,6 @@ func TestUpdateHandsOutUniqueSequenceNumbersUnderConcurrency(t *testing.T) {
 	}
 	if len(got) != 40 {
 		t.Fatalf("%d numbers, want 40", len(got))
-	}
-}
-
-func TestAStaleLockIsTakenOver(t *testing.T) {
-	dir := t.TempDir()
-	path := statePath(dir, "claude_code", "s2") + ".lock"
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("1"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	old := time.Now().Add(-time.Minute)
-	if err := os.Chtimes(path, old, old); err != nil {
-		t.Fatal(err)
-	}
-	if err := Update(dir, "claude_code", "s2", 100*time.Millisecond, func(*State, bool) (bool, error) { return false, nil }); err != nil {
-		t.Fatalf("stale lock blocked: %v", err)
 	}
 }
 
@@ -245,12 +227,29 @@ type fakeServer struct {
 	events   []Event
 	register int
 	srv      *httptest.Server
+	// registerSeen, when set, gets a value as each registration arrives; registerGate, when
+	// set, holds the answer until it is closed.
+	registerSeen chan struct{}
+	registerGate chan struct{}
+	// failEvents answers the next n event batches with HTTP 503 without recording them.
+	failEvents int
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
 	f := &fakeServer{}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		data, _ := io.ReadAll(r.Body)
+		if r.URL.Path == "/api/sessions" {
+			f.mu.Lock()
+			seen, gate := f.registerSeen, f.registerGate
+			f.mu.Unlock()
+			if seen != nil {
+				seen <- struct{}{}
+			}
+			if gate != nil {
+				<-gate
+			}
+		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		f.bodies = append(f.bodies, string(data))
@@ -262,6 +261,11 @@ func newFakeServer(t *testing.T) *fakeServer {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/sessions/ses_test/events":
 			if r.Header.Get("Authorization") != "Bearer zmbs_tok" {
 				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			if f.failEvents > 0 {
+				f.failEvents--
+				w.WriteHeader(http.StatusServiceUnavailable)
 				return
 			}
 			var batch struct {
@@ -294,7 +298,7 @@ func setup(t *testing.T, server string) (*Hooks, *bytes.Buffer) {
 		t.Fatal(err)
 	}
 	out := &bytes.Buffer{}
-	return &Hooks{Dir: dir, Executor: "claude_code", ExecutorVersion: "2.1.296", Stdout: out}, out
+	return &Hooks{Dir: dir, Executor: "claude_code", Stdout: out}, out
 }
 
 func hookInput(t *testing.T, fields map[string]any) io.Reader {
@@ -441,8 +445,8 @@ func TestTurnedOffSessionsSendNothingMore(t *testing.T) {
 	if err := h.Run(ctx, "session-start", hookInput(t, map[string]any{"session_id": "esid-5", "cwd": t.TempDir()})); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := TurnOff(ctx, h.Dir, "claude_code", "esid-5"); err != nil {
-		t.Fatal(err)
+	if outcome, err := TurnOff(ctx, h.Dir, "claude_code", "esid-5"); err != nil || outcome != OffDelivered {
+		t.Fatal(outcome, err)
 	}
 	registrations := f.register
 	if err := h.Run(ctx, "session-start", hookInput(t, map[string]any{"session_id": "esid-5", "cwd": t.TempDir(), "source": "resume"})); err != nil {
@@ -458,7 +462,7 @@ func TestTurnedOffSessionsSendNothingMore(t *testing.T) {
 	if st.Token != "" || !st.Off {
 		t.Errorf("state after off %+v", st)
 	}
-	if _, err := SendCurrentWork(ctx, h.Dir, "claude_code", "esid-5", "x", nil, nil); err != ErrNotRegistered {
+	if _, err := SendCurrentWork(ctx, h.Dir, "claude_code", "esid-5", "x", nil, nil); err != ErrTurnedOff {
 		t.Errorf("work after off: %v", err)
 	}
 

@@ -29,8 +29,9 @@ const usage = `zm-baton — connects AI sessions you open yourself to the zm-bat
   zm-baton hooks install [--project DIR] [--yes] [--dry-run]
                                                add zm-baton hooks to Claude Code settings
   zm-baton hooks uninstall [--project DIR] [--yes]
-  zm-baton session work [--ref REF]... [--private] "<what, where>"
-                                               tell zm-baton what this session works on
+  zm-baton session work [--ref REF]... [--private|--share] "<what, where>"
+                                               tell zm-baton what this session works on;
+                                               --private keeps it and later ones unshared
   zm-baton session off                         stop reporting this session
   zm-baton status                              show this device's connection
   zm-baton hook <event>                        called by executor hooks; not for people
@@ -93,12 +94,20 @@ func runHook(args []string, stdin io.Reader, stdout io.Writer) (code int) {
 		log.Error("hook needs one event name", "args", strings.Join(args, " "))
 		return 0
 	}
+	// Every wait inside a hook stops at its time limit. This is the last line: whatever still
+	// blocks a little after it (a stuck disk, a git child) does not hold the session.
+	if limit, ok := session.HookTimeout(args[0]); ok {
+		watchdog := time.AfterFunc(limit+250*time.Millisecond, func() {
+			log.Warn("hook passed its time limit; exiting", "event", args[0])
+			os.Exit(0)
+		})
+		defer watchdog.Stop()
+	}
 	h := &session.Hooks{
-		Dir:             dir,
-		Executor:        "claude_code",
-		ExecutorVersion: os.Getenv("CLAUDE_CODE_VERSION"),
-		Stdout:          stdout,
-		Off:             os.Getenv("ZM_BATON_OFF") != "",
+		Dir:      dir,
+		Executor: "claude_code",
+		Stdout:   stdout,
+		Off:      os.Getenv("ZM_BATON_OFF") != "",
 	}
 	if err := h.Run(context.Background(), args[0], stdin); err != nil {
 		log.Warn("hook failed", "event", args[0], "err", err.Error())
@@ -216,25 +225,70 @@ func hooks(args []string, stdin io.Reader, stdout io.Writer) error {
 			return nil
 		}
 	}
-	if existed {
-		backup := target + ".zm-baton-backup-" + time.Now().Format("20060102-150405")
-		if err := os.WriteFile(backup, old, 0o600); err != nil {
-			return fmt.Errorf("backup: %w", err)
-		}
-		fmt.Fprintf(stdout, "이전 파일을 남겼다: %s\n", backup)
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		return err
-	}
-	tmp := target + ".zm-baton-tmp"
-	if err := os.WriteFile(tmp, next, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, target); err != nil {
+	if err := writeSettings(target, old, existed, next, stdout); err != nil {
 		return err
 	}
 	fmt.Fprintln(stdout, "썼다. 새로 여는 세션부터 적용된다.")
 	return nil
+}
+
+// errSettingsChanged means the settings file changed after it was read: someone else's change
+// would be lost, so nothing is written.
+var errSettingsChanged = errors.New("the settings file changed while zm-baton was waiting; nothing was written. Run the command again")
+
+// writeSettings replaces target with next only if target still holds old, the content the
+// person approved a change of. It keeps old as a new backup first and writes through a fresh
+// temporary file, so neither an earlier backup nor another run's file is overwritten.
+func writeSettings(target string, old []byte, existed bool, next []byte, stdout io.Writer) error {
+	unchanged := func() error {
+		now, err := os.ReadFile(target)
+		switch {
+		case errors.Is(err, os.ErrNotExist) && !existed:
+			return nil
+		case err != nil && !errors.Is(err, os.ErrNotExist):
+			return err
+		case err != nil || !existed || string(now) != string(old):
+			return errSettingsChanged
+		}
+		return nil
+	}
+	if err := unchanged(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	if existed {
+		backup, err := os.OpenFile(target+".zm-baton-backup-"+time.Now().Format("20060102-150405.000000000"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			return fmt.Errorf("backup: %w", err)
+		}
+		_, werr := backup.Write(old)
+		if cerr := backup.Close(); werr == nil {
+			werr = cerr
+		}
+		if werr != nil {
+			return fmt.Errorf("backup: %w", werr)
+		}
+		fmt.Fprintf(stdout, "이전 파일을 남겼다: %s\n", backup.Name())
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".zm-baton-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	_, werr := tmp.Write(next)
+	if cerr := tmp.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		return werr
+	}
+	// Checked again at the last moment; what remains is the instant between this read and the rename.
+	if err := unchanged(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), target)
 }
 
 func settingsPath(project string) (string, error) {
@@ -276,12 +330,16 @@ func sessionCmd(args []string, stdout io.Writer) error {
 	id := fs.String("session", os.Getenv("CLAUDE_CODE_SESSION_ID"), "the executor session id (default: CLAUDE_CODE_SESSION_ID)")
 	var refs refList
 	fs.Var(&refs, "ref", "a related work item or document; repeatable")
-	private := fs.Bool("private", false, "keep this summary off other sessions' status cards")
+	private := fs.Bool("private", false, "from now on keep this session's summaries off other sessions' status cards")
+	shared := fs.Bool("share", false, "from now on show this session's summaries again (the default)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	if *id == "" {
 		return errors.New("no session: run inside a Claude Code session or pass --session")
+	}
+	if *private && *shared {
+		return errors.New("use --private or --share, not both")
 	}
 	dir, err := session.Dir()
 	if err != nil {
@@ -289,31 +347,39 @@ func sessionCmd(args []string, stdout io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var res session.Result
 	switch args[0] {
 	case "work":
 		summary := strings.Join(fs.Args(), " ")
 		var share *bool
-		if *private {
-			f := false
-			share = &f
+		if *private || *shared {
+			share = shared
 		}
-		res, err = session.SendCurrentWork(ctx, dir, "claude_code", *id, summary, refs, share)
+		res, err := session.SendCurrentWork(ctx, dir, "claude_code", *id, summary, refs, share)
+		if err != nil {
+			return err
+		}
+		if res.Rejected > 0 {
+			return fmt.Errorf("server rejected it: %s", strings.Join(res.Reasons, "; "))
+		}
+		fmt.Fprintln(stdout, "올렸다.")
 	case "off":
-		res, err = session.TurnOff(ctx, dir, "claude_code", *id)
+		outcome, err := session.TurnOff(ctx, dir, "claude_code", *id)
+		if err != nil {
+			if errors.Is(err, session.ErrNotRegistered) {
+				return err
+			}
+			return fmt.Errorf("이 세션의 보고는 멈췄지만 서버에 알리지 못했다(%v). 서버가 응답할 때 zm-baton session off를 다시 실행하면 서버에도 알린다", err)
+		}
+		switch outcome {
+		case session.OffDelivered:
+			fmt.Fprintln(stdout, "이 세션의 등록을 껐다. 이제 이 세션은 충돌 판정에서 빠진다.")
+		case session.OffAlreadyOver:
+			fmt.Fprintln(stdout, "이 세션의 보고를 멈췄다. 서버는 이 등록을 이미 끝난 것으로 본다.")
+		case session.OffBefore:
+			fmt.Fprintln(stdout, "이 세션은 이미 꺼져 있다.")
+		}
 	default:
 		return fmt.Errorf("unknown session command %q", args[0])
-	}
-	if err != nil {
-		return err
-	}
-	if res.Rejected > 0 {
-		return fmt.Errorf("server rejected it: %s", strings.Join(res.Reasons, "; "))
-	}
-	if args[0] == "off" {
-		fmt.Fprintln(stdout, "이 세션의 등록을 껐다. 이제 이 세션은 충돌 판정에서 빠진다.")
-	} else {
-		fmt.Fprintln(stdout, "올렸다.")
 	}
 	return nil
 }

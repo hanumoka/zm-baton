@@ -22,11 +22,12 @@ type Client struct {
 	http *http.Client
 }
 
-// NewClient checks the server URL. Credentials in the URL are refused so they never reach logs.
+// NewClient checks the server URL. Credentials in the URL are refused so they never reach logs,
+// and no error repeats the URL: url.Parse quotes its input, which may carry them.
 func NewClient(server string, timeout time.Duration) (*Client, error) {
 	u, err := url.Parse(server)
 	if err != nil {
-		return nil, fmt.Errorf("server URL: %w", err)
+		return nil, errors.New("server URL is not a valid URL; run zm-baton login again")
 	}
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, errors.New("server URL must look like http://host:port")

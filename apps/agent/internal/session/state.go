@@ -7,6 +7,7 @@
 package session
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"time"
 )
 
@@ -77,8 +77,17 @@ type State struct {
 	NextSeq int64 `json:"next_seq"`
 	// Waiting is set after a wait was reported, so the next tool use sends `resumed`.
 	Waiting bool `json:"waiting,omitempty"`
+	// Private is the session's sharing choice for 「지금 하는 일」. Every summary states it,
+	// so the server never has to guess it from an earlier summary.
+	Private bool `json:"private,omitempty"`
 	// Off means the person turned registration off for this session; hooks send nothing more.
 	Off bool `json:"off,omitempty"`
+	// OffPending means the server has not yet taken the deregistration. SessionID and Token
+	// are kept so `zm-baton session off` can send the same event again; once the server has
+	// it, the token is dropped.
+	OffPending bool   `json:"off_pending,omitempty"`
+	OffEventID string `json:"off_event_id,omitempty"`
+	OffSeq     int64  `json:"off_seq,omitempty"`
 }
 
 var safeName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
@@ -127,19 +136,20 @@ func removeState(dir, executor, executorSessionID string) error {
 // errLockTimeout means another hook of the same session held the state too long.
 var errLockTimeout = errors.New("session state is locked by another hook")
 
-// Update runs fn on the session's state under a file lock and saves what fn leaves, unless
-// fn returns remove=true. Hooks of one session can run in parallel (several tool calls), so
-// local_seq and the waiting flag are only changed here.
-func Update(dir, executor, executorSessionID string, wait time.Duration, fn func(st *State, exists bool) (remove bool, err error)) error {
+// Update runs fn on the session's state under the device's state lock and saves what fn
+// leaves, unless fn returns remove=true. Hooks of one session can run in parallel (several
+// tool calls), so local_seq, the waiting flag and the off marker are only changed here. It
+// waits for the lock at most wait, and never past ctx's deadline.
+func Update(ctx context.Context, dir, executor, executorSessionID string, wait time.Duration, fn func(st *State, exists bool) (remove bool, err error)) error {
 	path := statePath(dir, executor, executorSessionID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
-	unlock, err := lockFile(path+".lock", wait)
+	release, err := lockFile(ctx, filepath.Join(filepath.Dir(path), ".lock"), wait)
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer release()
 	st, exists, err := LoadState(dir, executor, executorSessionID)
 	if err != nil {
 		return err
@@ -154,29 +164,41 @@ func Update(dir, executor, executorSessionID string, wait time.Duration, fn func
 	return saveState(dir, st)
 }
 
-// lockFile takes an exclusive lock by creating path. A lock older than 10 seconds is left over
-// from a hook that was killed, and is removed. Portable on purpose: no flock or LockFileEx.
-func lockFile(path string, wait time.Duration) (func(), error) {
+// lockFile takes the operating system's exclusive lock on path (LockFileEx on Windows, flock
+// elsewhere). The file is never removed: the lock belongs to the open file, so the system
+// releases it when the holder closes it or dies, and no one ever has to guess that a lock is
+// left over. One file serves all sessions of the device; what it guards takes milliseconds.
+func lockFile(ctx context.Context, path string, wait time.Duration) (func(), error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
 	deadline := time.Now().Add(wait)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
 	for {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			_, _ = f.WriteString(strconv.Itoa(os.Getpid()))
+		ok, err := tryLock(f)
+		if err != nil {
 			_ = f.Close()
-			return func() { _ = os.Remove(path) }, nil
-		}
-		// Windows answers "access denied" while another hook is deleting the lock file: busy, not broken.
-		if !errors.Is(err, os.ErrExist) && !errors.Is(err, os.ErrPermission) {
 			return nil, err
 		}
-		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > 10*time.Second {
-			_ = os.Remove(path)
-			continue
+		if ok {
+			return func() {
+				unlock(f)
+				_ = f.Close()
+			}, nil
 		}
-		if time.Now().After(deadline) {
+		if !time.Now().Before(deadline) {
+			_ = f.Close()
 			return nil, errLockTimeout
 		}
-		time.Sleep(5 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			_ = f.Close()
+			return nil, errLockTimeout
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
 }
 

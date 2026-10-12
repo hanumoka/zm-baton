@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -37,11 +38,10 @@ var fileTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true, 
 
 // Hooks handles executor hook calls for one device.
 type Hooks struct {
-	Dir             string // zm-baton config folder
-	Executor        string // "claude_code"
-	ExecutorVersion string
-	Stdout          io.Writer // only session-start writes here: the status card for the model
-	Log             *slog.Logger
+	Dir      string    // zm-baton config folder
+	Executor string    // "claude_code"
+	Stdout   io.Writer // only session-start writes here: the status card for the model
+	Log      *slog.Logger
 	// Off is true when ZM_BATON_OFF asks this session not to register (contract: "시작 전에 끄면").
 	Off bool
 }
@@ -55,6 +55,24 @@ var hookTimeouts = map[string]time.Duration{
 	"session-end":   1 * time.Second,
 }
 
+// HookTimeout is the time limit of one hook event; ok is false for an unknown event.
+func HookTimeout(event string) (time.Duration, bool) {
+	t, ok := hookTimeouts[event]
+	return t, ok
+}
+
+// waitKinds are the Claude Code notifications that mean the session waits for a person
+// (code.claude.com/docs/en/hooks, Notification matchers). Others, such as auth_success or
+// agent_completed, are not waits and send nothing.
+var waitKinds = map[string]bool{
+	"permission_prompt": true, "idle_prompt": true, "elicitation_dialog": true,
+	"elicitation_url_dialog": true, "agent_needs_input": true,
+}
+
+// permissionMessage is the one notification text that leaves the device, because it names
+// only a tool. Any other text may hold paths, file content or secrets and stays here.
+var permissionMessage = regexp.MustCompile(`^Claude needs your permission to use [A-Za-z0-9_.:-]{1,100}$`)
+
 // Run handles one hook call. It never blocks the executor for longer than the hook's timeout
 // and the caller exits 0 whatever it returns; the error is only for the log.
 func (h *Hooks) Run(ctx context.Context, event string, stdin io.Reader) error {
@@ -67,7 +85,7 @@ func (h *Hooks) Run(ctx context.Context, event string, stdin io.Reader) error {
 	if h.Off {
 		return nil
 	}
-	data, err := io.ReadAll(io.LimitReader(stdin, 4<<20))
+	data, err := readAll(ctx, io.LimitReader(stdin, 4<<20))
 	if err != nil {
 		return fmt.Errorf("read hook input: %w", err)
 	}
@@ -89,13 +107,16 @@ func (h *Hooks) Run(ctx context.Context, event string, stdin io.Reader) error {
 	case "post-tool-use":
 		return h.postToolUse(ctx, in)
 	case "notification":
+		if !waitKinds[in.NotificationType] {
+			return nil
+		}
+		payload := map[string]any{"wait_kind": in.NotificationType}
+		if msg := strings.TrimSpace(in.Message); permissionMessage.MatchString(msg) {
+			payload["message"] = msg
+		}
 		return h.send(ctx, in, func(st *State) []Event {
 			st.Waiting = true
-			kind := in.NotificationType
-			if kind == "" {
-				kind = "unknown"
-			}
-			return []Event{{Kind: "waiting", Payload: map[string]any{"wait_kind": kind, "message": truncate(in.Message, 300)}}}
+			return []Event{{Kind: "waiting", Payload: payload}}
 		})
 	case "session-end":
 		return h.sessionEnd(ctx, in)
@@ -127,31 +148,48 @@ func (h *Hooks) sessionStart(ctx context.Context, in HookInput) error {
 	if err != nil {
 		return err
 	}
+	// No executor_version: neither the hook input nor its environment says which Claude Code
+	// runs this session, and an inherited CLAUDE_CODE_VERSION names a parent's, not this one.
 	reg, err := client.Register(ctx, RegisterRequest{
 		DeviceID:          cfg.DeviceID,
 		Executor:          h.Executor,
-		ExecutorVersion:   h.ExecutorVersion,
 		ExecutorSessionID: in.SessionID,
 		Repository:        repoInfo,
 	})
 	if err != nil {
 		return err
 	}
-	err = Update(h.Dir, h.Executor, in.SessionID, 2*time.Second, func(st *State, exists bool) (bool, error) {
+	turnedOff := false
+	err = Update(ctx, h.Dir, h.Executor, in.SessionID, 2*time.Second, func(st *State, exists bool) (bool, error) {
+		if st.Off {
+			// `zm-baton session off` finished while this registration was on its way. The off
+			// stands, and the registration the server just made is the one to turn off now.
+			turnedOff = true
+			st.NextSeq = max(st.NextSeq, time.Now().UnixMilli()) + 1
+			st.SessionID, st.Token, st.Server = reg.SessionID, reg.Token, cfg.Server
+			st.OffPending, st.OffEventID, st.OffSeq = true, report.NewEventID(time.Now()), st.NextSeq
+			return false, nil
+		}
 		if st.SessionID != reg.SessionID || st.NextSeq == 0 {
 			// local_seq only has to grow within one registration. Starting from the clock keeps it
 			// growing even when this file was lost and the server reused the registration.
 			st.NextSeq = time.Now().UnixMilli()
+			// A new registration starts with no waits: the server closed the old one's. A reused
+			// one (a resume, a compaction) keeps them until a resume is sent.
+			st.Waiting = false
 		}
 		st.SessionID, st.Token, st.Server = reg.SessionID, reg.Token, cfg.Server
 		st.RepoRoot, st.RepoKey = "", ""
 		if repo != nil {
 			st.RepoRoot, st.RepoKey = repo.Root, repo.Key
 		}
-		st.Waiting, st.Off = false, false
 		return false, nil
 	})
 	if err != nil {
+		return err
+	}
+	if turnedOff {
+		_, err := deliverOff(ctx, h.Dir, h.Executor, in.SessionID)
 		return err
 	}
 	// Plain stdout of a SessionStart hook is added to the model's context.
@@ -201,7 +239,8 @@ func (h *Hooks) sessionEnd(ctx context.Context, in HookInput) error {
 		return []Event{{Kind: "ended", Payload: map[string]any{}}}
 	})
 	// The state goes even when the server could not be told: its token is useless after the end.
-	if rmErr := Update(h.Dir, h.Executor, in.SessionID, 500*time.Millisecond, func(st *State, exists bool) (bool, error) {
+	// A turned-off session keeps its marker, and an undelivered off what a retry needs.
+	if rmErr := Update(ctx, h.Dir, h.Executor, in.SessionID, 500*time.Millisecond, func(st *State, exists bool) (bool, error) {
 		return !st.Off, nil
 	}); rmErr != nil && err == nil {
 		err = rmErr
@@ -214,7 +253,7 @@ func (h *Hooks) sessionEnd(ctx context.Context, in HookInput) error {
 func (h *Hooks) send(ctx context.Context, in HookInput, pick func(st *State) []Event) error {
 	var events []Event
 	var session State
-	err := Update(h.Dir, h.Executor, in.SessionID, 2*time.Second, func(st *State, exists bool) (bool, error) {
+	err := Update(ctx, h.Dir, h.Executor, in.SessionID, 2*time.Second, func(st *State, exists bool) (bool, error) {
 		if !exists {
 			return true, nil // nothing to save for a session this device never registered
 		}
@@ -242,12 +281,50 @@ func (h *Hooks) send(ctx context.Context, in HookInput, pick func(st *State) []E
 	}
 	res, err := client.Send(ctx, session.SessionID, session.Token, events)
 	if err != nil {
+		h.keepWaiting(ctx, in.SessionID, session.SessionID, events)
 		return err
 	}
 	if res.Rejected > 0 {
 		return fmt.Errorf("server rejected %d event(s): %s", res.Rejected, strings.Join(res.Reasons, "; "))
 	}
 	return nil
+}
+
+// keepWaiting puts the waiting flag back after a `resumed` failed to reach the server, so the
+// next tool use or prompt sends it again instead of leaving the wait open on the first screen.
+func (h *Hooks) keepWaiting(ctx context.Context, executorSessionID, sessionID string, events []Event) {
+	for _, e := range events {
+		if e.Kind != "resumed" {
+			continue
+		}
+		_ = Update(ctx, h.Dir, h.Executor, executorSessionID, 500*time.Millisecond, func(st *State, exists bool) (bool, error) {
+			if exists && !st.Off && st.SessionID == sessionID {
+				st.Waiting = true
+			}
+			return !exists, nil
+		})
+		return
+	}
+}
+
+// readAll reads the hook input but gives up at ctx's deadline: a stdin that never closes must
+// not hold the session. The reading goroutine ends with the process.
+func readAll(ctx context.Context, r io.Reader) ([]byte, error) {
+	type result struct {
+		data []byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		data, err := io.ReadAll(r)
+		done <- result{data, err}
+	}()
+	select {
+	case res := <-done:
+		return res.data, res.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // fillTouch adds the file's content hash and HEAD to a file_touch event, outside the state
@@ -270,12 +347,4 @@ func fillTouch(ctx context.Context, e *Event) {
 	if head := Head(ctx, root); head != "" {
 		e.Payload["head"] = head
 	}
-}
-
-func truncate(s string, n int) string {
-	r := []rune(strings.TrimSpace(s))
-	if len(r) <= n {
-		return string(r)
-	}
-	return string(r[:n])
 }
