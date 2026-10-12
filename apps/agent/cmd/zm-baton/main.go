@@ -7,7 +7,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -26,9 +25,8 @@ import (
 const usage = `zm-baton — connects AI sessions you open yourself to the zm-baton server
 
   zm-baton login [--server URL] [--name NAME]   register this device (once)
-  zm-baton hooks install [--project DIR] [--yes] [--dry-run]
-                                               add zm-baton hooks to Claude Code settings
-  zm-baton hooks uninstall [--project DIR] [--yes]
+  zm-baton hooks install [--project DIR]      make the Claude Code plugin and show how to turn it on
+  zm-baton hooks uninstall [--project DIR]    show how to turn it off
   zm-baton session work [--ref REF]... [--private|--share] "<what, where>"
                                                tell zm-baton what this session works on;
                                                --private keeps it and later ones unshared
@@ -54,7 +52,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "login":
 		return report(stderr, login(args[1:], stdout))
 	case "hooks":
-		return report(stderr, hooks(args[1:], stdin, stdout))
+		return report(stderr, hooks(args[1:], stdout))
 	case "session":
 		return report(stderr, sessionCmd(args[1:], stdout))
 	case "status":
@@ -163,147 +161,56 @@ func login(args []string, stdout io.Writer) error {
 	return nil
 }
 
-func hooks(args []string, stdin io.Reader, stdout io.Writer) error {
+func hooks(args []string, stdout io.Writer) error {
 	if len(args) == 0 || (args[0] != "install" && args[0] != "uninstall") {
-		return errors.New("use: zm-baton hooks install|uninstall [--project DIR] [--yes] [--dry-run]")
+		return errors.New("use: zm-baton hooks install|uninstall [--project DIR]")
 	}
 	fs := flag.NewFlagSet("hooks", flag.ContinueOnError)
-	project := fs.String("project", "", "install into <DIR>/.claude/settings.local.json instead of the user settings")
-	yes := fs.Bool("yes", false, "do not ask before writing")
-	dryRun := fs.Bool("dry-run", false, "print the new settings and write nothing")
+	project := fs.String("project", "", "turn the hooks on for this repository only (Claude Code scope local)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
-	target, err := settingsPath(*project)
+	dir, err := session.Dir()
 	if err != nil {
 		return err
 	}
-	old, err := os.ReadFile(target)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	root := filepath.Join(dir, "claude-plugin")
+	scope, cd := "user", ""
+	if *project != "" {
+		abs, err := filepath.Abs(*project)
+		if err != nil {
+			return err
+		}
+		scope, cd = "local", abs
 	}
-	existed := err == nil
-
-	var next []byte
-	var lines []string
-	if args[0] == "install" {
-		exe, err := executable()
-		if err != nil {
-			return err
+	plugin := session.PluginName + "@" + session.MarketplaceName
+	if args[0] == "uninstall" {
+		fmt.Fprintln(stdout, "zm-baton은 Claude Code 설정을 고치지 않는다. 훅을 빼려면 아래를 실행한다:")
+		if cd != "" {
+			fmt.Fprintf(stdout, "  cd \"%s\"\n", cd)
 		}
-		next, lines, err = session.InstallHooks(old, exe)
-		if err != nil {
-			return err
-		}
-		lines = append(lines, "명령: "+session.HookCommand(exe, "<event>"))
-	} else {
-		var removed int
-		next, removed, err = session.UninstallHooks(old)
-		if err != nil {
-			return err
-		}
-		lines = []string{fmt.Sprintf("zm-baton 항목 %d개를 지운다. 다른 항목은 그대로 둔다", removed)}
-	}
-	if string(next) == string(old) {
-		fmt.Fprintf(stdout, "바뀌는 것이 없다: %s\n", target)
+		fmt.Fprintf(stdout, "  claude plugin uninstall %s --scope %s\n", plugin, scope)
+		fmt.Fprintf(stdout, "모든 곳에서 뺐으면 마켓플레이스도 지운다:\n  claude plugin marketplace remove %s\n", session.MarketplaceName)
+		fmt.Fprintf(stdout, "그 뒤에는 이 폴더를 지워도 된다: %s\n", root)
 		return nil
 	}
-	fmt.Fprintf(stdout, "대상 파일: %s\n", target)
-	for _, l := range lines {
-		fmt.Fprintln(stdout, "  "+l)
-	}
-	if *dryRun {
-		fmt.Fprintln(stdout, "\n--- 쓸 내용(쓰지 않음) ---")
-		_, _ = stdout.Write(next)
-		return nil
-	}
-	if !*yes {
-		fmt.Fprint(stdout, "계속할까요? [y/N] ")
-		answer, _ := bufio.NewReader(stdin).ReadString('\n')
-		if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
-			fmt.Fprintln(stdout, "그만뒀다. 아무것도 쓰지 않았다.")
-			return nil
-		}
-	}
-	if err := writeSettings(target, old, existed, next, stdout); err != nil {
+	exe, err := executable()
+	if err != nil {
 		return err
 	}
-	fmt.Fprintln(stdout, "썼다. 새로 여는 세션부터 적용된다.")
+	if err := session.WritePlugin(root, exe); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Claude Code 플러그인을 만들었다: %s\n", root)
+	fmt.Fprintf(stdout, "훅이 부르는 명령: %s\n", session.HookCommand(exe, "<event>"))
+	fmt.Fprintln(stdout, "zm-baton은 Claude Code 설정을 고치지 않는다. 아래를 실행하면 Claude Code가 설정에 넣는다:")
+	fmt.Fprintf(stdout, "  claude plugin marketplace add \"%s\"      # 처음 한 번\n", root)
+	if cd != "" {
+		fmt.Fprintf(stdout, "  cd \"%s\"\n", cd)
+	}
+	fmt.Fprintf(stdout, "  claude plugin install %s --scope %s\n", plugin, scope)
+	fmt.Fprintln(stdout, "새로 여는 세션부터 적용된다. 실행 파일을 옮기면 이 명령만 다시 실행한다.")
 	return nil
-}
-
-// errSettingsChanged means the settings file changed after it was read: someone else's change
-// would be lost, so nothing is written.
-var errSettingsChanged = errors.New("the settings file changed while zm-baton was waiting; nothing was written. Run the command again")
-
-// writeSettings replaces target with next only if target still holds old, the content the
-// person approved a change of. It keeps old as a new backup first and writes through a fresh
-// temporary file, so neither an earlier backup nor another run's file is overwritten.
-func writeSettings(target string, old []byte, existed bool, next []byte, stdout io.Writer) error {
-	unchanged := func() error {
-		now, err := os.ReadFile(target)
-		switch {
-		case errors.Is(err, os.ErrNotExist) && !existed:
-			return nil
-		case err != nil && !errors.Is(err, os.ErrNotExist):
-			return err
-		case err != nil || !existed || string(now) != string(old):
-			return errSettingsChanged
-		}
-		return nil
-	}
-	if err := unchanged(); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		return err
-	}
-	if existed {
-		backup, err := os.OpenFile(target+".zm-baton-backup-"+time.Now().Format("20060102-150405.000000000"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err != nil {
-			return fmt.Errorf("backup: %w", err)
-		}
-		_, werr := backup.Write(old)
-		if cerr := backup.Close(); werr == nil {
-			werr = cerr
-		}
-		if werr != nil {
-			return fmt.Errorf("backup: %w", werr)
-		}
-		fmt.Fprintf(stdout, "이전 파일을 남겼다: %s\n", backup.Name())
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".zm-baton-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	_, werr := tmp.Write(next)
-	if cerr := tmp.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		return werr
-	}
-	// Checked again at the last moment; what remains is the instant between this read and the rename.
-	if err := unchanged(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), target)
-}
-
-func settingsPath(project string) (string, error) {
-	if project != "" {
-		abs, err := filepath.Abs(project)
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(abs, ".claude", "settings.local.json"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".claude", "settings.json"), nil
 }
 
 func executable() (string, error) {

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,105 +33,39 @@ func TestUsageAndUnknownCommands(t *testing.T) {
 	}
 }
 
-func TestHooksInstallAndUninstallInAProject(t *testing.T) {
+func TestHooksInstallWritesOnlyItsOwnPluginAndShowsClaudeCommands(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ZM_BATON_HOME", home)
 	project := t.TempDir()
-	settings := filepath.Join(project, ".claude", "settings.local.json")
-	if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(settings, []byte(`{"model":"opus"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	var out bytes.Buffer
-	if code := run([]string{"hooks", "install", "--project", project}, strings.NewReader("n\n"), &out, &out); code != 0 {
+	if code := run([]string{"hooks", "install", "--project", project}, nil, &out, &out); code != 0 {
 		t.Fatalf("install exited %d: %s", code, out.String())
 	}
-	if data, _ := os.ReadFile(settings); strings.Contains(string(data), "hook session-start") {
-		t.Fatal("answering n must write nothing")
-	}
-	out.Reset()
-	if code := run([]string{"hooks", "install", "--project", project, "--yes"}, nil, &out, &out); code != 0 {
-		t.Fatalf("install exited %d: %s", code, out.String())
-	}
-	data, _ := os.ReadFile(settings)
-	if !strings.Contains(string(data), "hook session-start") || !strings.Contains(string(data), `"opus"`) {
-		t.Fatalf("settings after install:\n%s", data)
-	}
-	backups, _ := filepath.Glob(settings + ".zm-baton-backup-*")
-	if len(backups) != 1 {
-		t.Errorf("backups %v", backups)
-	}
-	out.Reset()
-	if code := run([]string{"hooks", "uninstall", "--project", project, "--yes"}, nil, &out, &out); code != 0 {
-		t.Fatalf("uninstall exited %d: %s", code, out.String())
-	}
-	data, _ = os.ReadFile(settings)
-	if strings.Contains(string(data), "zm-baton") || !strings.Contains(string(data), `"opus"`) {
-		t.Fatalf("settings after uninstall:\n%s", data)
-	}
-}
-
-// editingReader stands for a person who answers y while another program changes the
-// settings file: the change lands before the answer is read.
-type editingReader struct {
-	path, content string
-	done          bool
-}
-
-func (r *editingReader) Read(p []byte) (int, error) {
-	if r.done {
-		return 0, io.EOF
-	}
-	r.done = true
-	if err := os.WriteFile(r.path, []byte(r.content), 0o600); err != nil {
-		return 0, err
-	}
-	return copy(p, "y\n"), nil
-}
-
-func TestAChangeMadeWhileWaitingForTheAnswerIsKept(t *testing.T) {
-	project := t.TempDir()
-	settings := filepath.Join(project, ".claude", "settings.local.json")
-	if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(settings, []byte(`{"model":"opus"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	changed := `{"model":"opus","permissions":{"deny":["Bash(rm:*)"]}}`
-	var out bytes.Buffer
-	in := &editingReader{path: settings, content: changed}
-	if code := run([]string{"hooks", "install", "--project", project}, in, &out, &out); code != 1 {
-		t.Fatalf("install exited %d: %s", code, out.String())
-	}
-	if data, _ := os.ReadFile(settings); string(data) != changed {
-		t.Fatalf("the other program's change was lost:\n%s", data)
-	}
-	if backups, _ := filepath.Glob(settings + ".zm-baton-backup-*"); len(backups) != 0 {
-		t.Errorf("backups %v for a write that did not happen", backups)
-	}
-	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(settings), ".*zm-baton-*")); len(left) != 0 {
-		t.Errorf("temporary files left: %v", left)
-	}
-}
-
-func TestTwoInstallsInARowKeepBothBackups(t *testing.T) {
-	project := t.TempDir()
-	settings := filepath.Join(project, ".claude", "settings.local.json")
-	if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(settings, []byte(`{"model":"opus"}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	for _, args := range [][]string{{"hooks", "install"}, {"hooks", "uninstall"}} {
-		if code := run(append(args, "--project", project, "--yes"), nil, &out, &out); code != 0 {
-			t.Fatalf("%v exited %d: %s", args, code, out.String())
+	root := filepath.Join(home, "claude-plugin")
+	for _, rel := range []string{".claude-plugin/marketplace.json", "zm-baton/.claude-plugin/plugin.json", "zm-baton/hooks/hooks.json"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Errorf("plugin file %s: %v", rel, err)
 		}
 	}
-	if backups, _ := filepath.Glob(settings + ".zm-baton-backup-*"); len(backups) != 2 {
-		t.Errorf("backups %v", backups)
+	if _, err := os.Stat(filepath.Join(project, ".claude")); !os.IsNotExist(err) {
+		t.Errorf("zm-baton touched the project's Claude Code settings: %v", err)
+	}
+	for _, want := range []string{"claude plugin marketplace add \"" + root + "\"", "cd \"" + project + "\"", "claude plugin install zm-baton@zm-baton-local --scope local"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
+	out.Reset()
+	if code := run([]string{"hooks", "install"}, nil, &out, &out); code != 0 || !strings.Contains(out.String(), "--scope user") {
+		t.Errorf("user install exited %d:\n%s", code, out.String())
+	}
+	out.Reset()
+	if code := run([]string{"hooks", "uninstall", "--project", project}, nil, &out, &out); code != 0 ||
+		!strings.Contains(out.String(), "claude plugin uninstall zm-baton@zm-baton-local --scope local") {
+		t.Errorf("uninstall exited %d:\n%s", code, out.String())
+	}
+	if _, err := os.Stat(root); err != nil {
+		t.Errorf("uninstall must leave the plugin for Claude Code to remove first: %v", err)
 	}
 }
 

@@ -72,7 +72,11 @@ go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 같은 Go 모듈의 두 번째 프로그램이다(`cmd/zm-baton`, `internal/session`). 협업 계약 v1 「직접 연 AI 세션을 서버에 등록한다」(`protocol_version` 2)를 따른다. 지금은 Claude Code 세션만 잇는다.
 
 1. `zm-baton login --server http://127.0.0.1:18081`으로 이 기기를 한 번 등록한다. 설정은 사용자 설정 폴더의 `zm-baton/config.json`에 둔다(`ZM_BATON_HOME`으로 바꿀 수 있다).
-2. `zm-baton hooks install`이 Claude Code 사용자 설정(`~/.claude/settings.json`)에 훅 다섯을 넣는다. `--project <폴더>`를 주면 그 폴더의 `.claude/settings.local.json`에만 넣는다. 바뀌는 내용을 보여 주고 묻는다. 답을 기다리는 동안 다른 프로그램이 그 파일을 바꿨으면 아무것도 쓰지 않고 멈춘다. 쓰기 전에 이전 파일을 `*.zm-baton-backup-<시각>`으로 남기고(앞선 백업을 덮어쓰지 않는다), 다른 설정과 다른 도구의 훅은 그대로 둔다. `hooks uninstall`은 zm-baton이 넣은 항목만 지운다.
+2. 훅은 Claude Code 플러그인으로 붙는다. zm-baton은 Claude Code 설정 파일을 고치지 않는다.
+   1. `zm-baton hooks install`이 zm-baton 설정 폴더의 `claude-plugin/`에 로컬 마켓플레이스(`zm-baton-local`)와 플러그인(`zm-baton`, 훅 다섯)을 만들고, 붙이는 명령을 보여 준다.
+   2. 사람이 Claude Code의 명령을 실행한다: `claude plugin marketplace add "<그 폴더>"`(처음 한 번), 그리고 `claude plugin install zm-baton@zm-baton-local --scope user`. `--project <폴더>`를 주면 그 폴더에서 `--scope local`로 설치하라고 보여 주며, 그 저장소에서 연 세션에만 붙는다. 설정 파일은 Claude Code가 고친다.
+   3. 플러그인은 그 폴더를 그대로 읽으므로, 실행 파일을 옮기면 `hooks install`만 다시 실행한다.
+   4. `zm-baton hooks uninstall`은 빼는 명령(`claude plugin uninstall …`, 마켓플레이스 지우기)을 보여 준다. 플러그인 폴더는 그 뒤에 지운다.
 3. 그 뒤 새로 여는 Claude Code 세션은 시작할 때 서버에 등록되고, 서버가 돌려준 현재 상태 카드가 AI의 맥락에 들어간다. 파일을 고치는 도구(`Edit`·`Write`·`MultiEdit`·`NotebookEdit`)가 끝나면 저장소 기준 상대 경로·`git hash-object`·HEAD를 보낸다. 알림 훅은 기다림을, 다음 입력이나 도구 실행은 재개를, 끝 훅은 세션 끝을 보낸다. 기다림으로 보내는 알림은 사람을 기다리는 다섯 종류(`permission_prompt`·`idle_prompt`·`elicitation_dialog`·`elicitation_url_dialog`·`agent_needs_input`)뿐이다. 알림 문구는 보내지 않는다. 예외는 도구 이름만 담은 `Claude needs your permission to use <도구>` 한 가지다. 재개를 보내지 못하면 다음 도구 실행에서 다시 보낸다.
 4. 세션 안에서 `zm-baton session work "<무엇을, 어디서>"`로 「지금 하는 일」을 올린다(300자 이하, `--ref`). `--private`를 한 번 주면 그 세션의 이후 요약도 다른 세션에 보이지 않는다. `--share`로 되돌린다. 요약마다 공유 여부를 함께 보내므로, 늦게 도착한 요약이 다른 요약의 공유 설정을 바꾸지 못한다.
 5. `zm-baton session off`는 먼저 이 세션의 보고를 멈추고, 그다음 서버에 등록 해제를 알린다. 서버에 알리지 못하면 보고는 멈춘 채로 다시 보낼 것을 남긴다. 같은 명령을 다시 실행하면 같은 해제를 다시 보낸다. 해제하는 동안 끝난 재등록도 해제한다. 시작 전에 끄려면 `ZM_BATON_OFF=1`을 둔다.
