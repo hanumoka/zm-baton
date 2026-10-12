@@ -2,8 +2,32 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { groupByBucket, newImmediate, repoName, shortId, since } from './inboxModel';
 import { Inbox } from './Inbox';
+import { clear, fail, lines, type Problems } from './problems';
 import { Sessions } from './Sessions';
 import type { InboxItem, SessionView } from './sessionsApi';
+import { ProblemList } from './Shell';
+
+describe('problems', () => {
+  it('a source clears only its own failure', () => {
+    let p: Problems = {};
+    p = fail(p, 'sessions', new Error('HTTP 503'));
+    p = fail(p, 'inbox', new Error('HTTP 500'));
+    p = clear(p, 'inbox'); // the first-screen poll works again
+    expect(lines(p)).toEqual(['「세션 현황」을 읽지 못했다: HTTP 503']);
+    p = fail(p, 'judge', 'HTTP 409');
+    p = clear(p, 'sessions');
+    expect(lines(p)).toEqual(['알림 처리를 서버에 보내지 못했다: HTTP 409']);
+    expect(clear(p, 'inbox')).toBe(p);
+  });
+
+  it('shows one line per source and a button to close, and nothing when all is well', () => {
+    expect(renderToStaticMarkup(<ProblemList problems={{}} onDismiss={() => {}} />)).toBe('');
+    const html = renderToStaticMarkup(<ProblemList problems={{ inbox: 'a', sessions: 'b' }} onDismiss={() => {}} />);
+    expect(html).toContain('role="alert"');
+    expect(html.match(/<li>/g)).toHaveLength(2);
+    expect(html).toContain('<button>닫기</button>');
+  });
+});
 
 const T0 = Date.parse('2026-10-11T00:00:00Z');
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { App as RunTest } from './App';
 import { BUCKETS, newImmediate } from './inboxModel';
 import { Inbox } from './Inbox';
+import { clear, fail, lines, type Problems, type Source } from './problems';
 import { Sessions } from './Sessions';
 import { sessionsApi, type InboxItem, type SessionView } from './sessionsApi';
 import { usePoll } from './usePoll';
@@ -28,11 +29,12 @@ export function Shell() {
   const [sessions, setSessions] = useState<SessionView[]>([]);
   const [includeEnded, setIncludeEnded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
-  const [error, setError] = useState<string>();
+  const [problems, setProblems] = useState<Problems>({});
   const [permission, setPermission] = useState(() => (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission));
   const seen = useRef<Set<string> | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const report = (e: unknown) => setError(e instanceof Error ? e.message : String(e));
+  const failed = (source: Source) => (e: unknown) => setProblems((p) => fail(p, source, e));
+  const cleared = (source: Source) => setProblems((p) => clear(p, source));
 
   useEffect(() => {
     const onHash = () => setTab(tabFromHash());
@@ -51,22 +53,27 @@ export function Shell() {
       for (const item of newImmediate(seen.current, list)) notify(item);
       seen.current = new Set(list.map((i) => i.id));
       setItems(list);
-      setError(undefined);
+      cleared('inbox');
     },
     3000,
     [refresh],
-    report,
+    failed('inbox'),
   );
 
   usePoll(
     async (alive, signal) => {
-      if (tab !== 'sessions') return;
+      if (tab !== 'sessions') {
+        cleared('sessions'); // not shown, not read: an old failure says nothing now
+        return;
+      }
       const list = await sessionsApi.sessions(includeEnded, signal);
-      if (alive()) setSessions(list);
+      if (!alive()) return;
+      setSessions(list);
+      cleared('sessions');
     },
     3000,
     [tab, includeEnded, refresh],
-    report,
+    failed('sessions'),
   );
 
   function go(t: Tab) {
@@ -94,14 +101,36 @@ export function Shell() {
         {permission === 'denied' && <small>브라우저 알림이 막혀 있다</small>}
         {permission === 'granted' && <small>브라우저 알림 켜짐</small>}
       </nav>
-      {error && (
-        <p role="alert" className="error" onClick={() => setError(undefined)}>
-          서버에 닿지 못했다: {error}
-        </p>
+      <ProblemList problems={problems} onDismiss={() => setProblems({})} />
+      {tab === 'inbox' && (
+        <Inbox
+          items={items}
+          now={now}
+          onChanged={() => {
+            cleared('judge');
+            setRefresh((r) => r + 1);
+          }}
+          onError={failed('judge')}
+        />
       )}
-      {tab === 'inbox' && <Inbox items={items} now={now} onChanged={() => setRefresh((r) => r + 1)} onError={report} />}
       {tab === 'sessions' && <Sessions sessions={sessions} includeEnded={includeEnded} onIncludeEnded={setIncludeEnded} now={now} />}
       {tab === 'runs' && <RunTest />}
+    </div>
+  );
+}
+
+/** What failed, one line per source. Closing hides it until the next failure of any source. */
+export function ProblemList({ problems, onDismiss }: { problems: Problems; onDismiss: () => void }) {
+  const shown = lines(problems);
+  if (shown.length === 0) return null;
+  return (
+    <div role="alert" className="problems">
+      <ul>
+        {shown.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      <button onClick={onDismiss}>닫기</button>
     </div>
   );
 }

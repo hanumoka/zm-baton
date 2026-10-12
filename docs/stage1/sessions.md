@@ -3,7 +3,8 @@
 1단계 첫 묶음이다. 터미널에서 직접 연 Claude Code 세션이 서버에 등록되고, 웹 화면에서 세션마다 하는 일과 고친 파일, 같은 파일을 두 세션이 고친 충돌, 입력을 기다리는 세션이 보인다. 근거는 협업 계약 v1의 「직접 연 AI 세션을 서버에 등록한다」·「충돌을 찾아 관계자에게 알린다」·「첫 화면」 절이다(설계 허브 zm-docs, `protocol_version` 2).
 
 - **대상**: 소유자 PC 한 대. 서버는 이 PC의 `127.0.0.1`에서만 받는다. 사람 인증이 아직 없으므로 이 PC 밖으로 열지 않는다(1단계 종료 기준 4번).
-- **소유자**: 저장소 소유자. 마지막 확인 2026-10-11.
+- **소유자**: 저장소 소유자. 마지막 확인 2026-10-12.
+- **전제**: 서버(`work/sessions-server`)·`zm-baton` 명령(`work/sessions-cli`)·웹(`work/sessions-web`) 세 PR이 모두 `main`에 들어간 판에서 따른다. 하나라도 빠지면 API나 명령이 없어 중간에 막힌다.
 
 ## 무엇이 어디에 뜨는가
 
@@ -19,7 +20,7 @@
 
 - Docker Desktop이 실행 중이다. JDK·Node.js·Go는 없어도 된다. 서버와 웹은 Docker 안에서 빌드하고, `zm-baton` 명령도 Docker로 만든다.
 - Claude Code가 설치돼 있고 소유자가 직접 로그인해 둔 상태다. zm-baton은 로그인 정보를 읽지 않는다.
-- PowerShell에서 저장소 루트를 `$repo`에 담는다. 예: `$repo = 'C:/work/zm-baton'`.
+- PowerShell에서 저장소 루트를 `$repo`에 담는다. 예: `$repo = 'C:/work/zm-baton'`. 아래 명령은 단계마다 `cd`로 자리를 옮기므로, 각 단계는 그 단계의 첫 줄부터 실행한다.
 
 ## 단계
 
@@ -55,6 +56,7 @@ $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if ($userPath -notlike "*zm-baton\bin*") {
   [Environment]::SetEnvironmentVariable('Path', "$userPath;$env:LOCALAPPDATA\zm-baton\bin", 'User')
 }
+cd $repo
 ```
 
 훅은 이 위치의 실행 파일을 부른다. 옮기거나 지우면 `hooks install`을 다시 한다. PATH는 바꾼 뒤에 새로 연 PowerShell 창과 새로 띄운 Claude Code에만 적용된다.
@@ -83,9 +85,9 @@ if ($userPath -notlike "*zm-baton\bin*") {
 
 1. 훅을 넣은 저장소에서 Claude Code를 새로 연다. 이미 열려 있던 세션에는 훅이 적용되지 않는다.
 2. 웹의 「세션 현황」에 그 세션이 나타난다. 세션의 AI는 시작할 때 현재 상태 카드(열린 작업, 나를 기다리는 것의 개수, 같은 저장소의 다른 세션이 하는 일)를 받는다.
-3. 세션 안에서 AI나 사람이 `zm-baton session work "<무엇을, 어디서>"`를 실행하면 「지금 하는 일」이 올라간다. 300자 이하다. `--private`를 붙이면 다른 세션의 상태 카드와 세션 현황에 「공유 안 함」으로만 보인다.
+3. 세션 안에서 AI나 사람이 `zm-baton session work "<무엇을, 어디서>"`를 실행하면 「지금 하는 일」이 올라간다. 300자 이하다. 공유하지 않으려면 `zm-baton session work --private "<무엇을, 어디서>"`처럼 옵션을 요약 **앞에** 쓴다(요약 뒤에 쓰면 요약의 일부가 된다). 그러면 그 세션의 이후 요약도 다른 세션의 상태 카드와 세션 현황에 「공유 안 함」으로만 보인다. 다시 공유하려면 `--share`를 붙인다. 세션 밖의 PowerShell에서 부를 때는 `--session <세션 번호>`를 함께 준다.
 4. 같은 저장소에서 세션을 하나 더 열고, 두 세션이 같은 파일을 고치게 해 본다. 「나를 기다리는 것」의 3번 묶음에 충돌이 뜨고 브라우저 알림이 온다. 「확인」·「충돌 아님(이유)」·「해결」로 처리한다.
-5. 세션이 권한 확인이나 다음 지시를 기다리면 2번 묶음에 뜬다. 그 터미널에서 이어서 입력하면 저절로 닫힌다.
+5. 세션이 권한 확인이나 다음 지시를 기다리면 2번 묶음에 뜬다. 그 터미널에서 이어서 입력하면 저절로 닫힌다. 알림 문구는 서버로 보내지 않는다. 예외는 「어떤 도구의 권한을 기다리는가」를 담은 `Claude needs your permission to use <도구>` 한 가지다.
 
 ## 완료 확인
 
@@ -95,16 +97,27 @@ if ($userPath -notlike "*zm-baton\bin*") {
 ## 실패하면
 
 1. **세션이 나타나지 않는다**: `& $zb status`로 서버 응답을 본다. 훅의 실패는 세션에 보이지 않고 `%AppData%\zm-baton\hook.log`에 남는다. 훅을 넣은 뒤 새로 연 세션인지 확인한다.
-2. **서버가 데이터베이스에 붙지 못한다**: `docker compose -f deploy/compose/compose.yaml logs server`를 본다. `.env`의 비밀번호를 볼륨을 만든 뒤에 바꿨다면, 시험 자료를 버려도 될 때만 `docker compose -f deploy/compose/compose.yaml down -v`로 볼륨을 지우고 다시 띄운다.
+2. **서버가 데이터베이스에 붙지 못한다**: `docker compose -f "$repo/deploy/compose/compose.yaml" logs server`를 본다. `.env`의 비밀번호를 볼륨을 만든 뒤에 바꿨다면, 시험 자료를 버려도 될 때만 `docker compose -f "$repo/deploy/compose/compose.yaml" --profile app down -v`로 볼륨을 지우고 다시 띄운다.
 3. **파일을 고쳤는데 고친 파일에 안 나온다**: 셸 명령(예: `sed`, 스크립트)으로 바꾼 파일은 보고되지 않는다. 파일을 고치는 도구(`Edit`·`Write`·`MultiEdit`·`NotebookEdit`)만 보고된다.
-4. **훅 때문에 세션이 느려졌다고 느낀다**: 훅마다 시간 상한이 있다(시작 4초, 끝 1초, 나머지 3초). 서버가 꺼져 있으면 훅은 연결 실패 즉시 끝난다. 그래도 문제면 「정리」의 훅 빼기를 한다.
+4. **훅 때문에 세션이 느려졌다고 느낀다**: 훅마다 시간 상한이 있다(시작 4초, 끝 1초, 나머지 3초). 상한을 넘기면 훅 프로세스가 스스로 끝난다. 서버가 꺼져 있으면 훅은 연결 실패 즉시 끝난다. 그래도 문제면 「정리」의 훅 빼기를 한다.
+5. **`hooks install`이 「the settings file changed while zm-baton was waiting」으로 멈췄다**: 확인을 기다리는 동안 다른 프로그램(예: Claude Code)이 설정 파일을 바꿨다. 아무것도 쓰지 않았으니 같은 명령을 다시 실행한다.
+6. **`session off`가 「서버에 알리지 못했다」로 끝났다**: 이 세션의 보고는 이미 멈췄다. 서버가 응답할 때 같은 명령을 다시 실행하면 서버에도 알린다. 다시 실행하지 않아도 서버는 12시간 안에 그 등록을 끝낸다.
 
 ## 정리
 
 ```powershell
 & $zb session off                                      # 지금 세션만 등록을 끈다(세션 안에서)
 & $zb hooks uninstall --project C:/work/zm-docs        # 넣은 곳과 같은 대상에서 뺀다
-docker compose -f deploy/compose/compose.yaml --profile app down   # 자료는 볼륨에 남는다
+docker compose -f "$repo/deploy/compose/compose.yaml" --profile app down   # 자료는 볼륨에 남는다
+```
+
+`zm-baton` 명령까지 지우려면 훅을 먼저 뺀다. 훅을 남긴 채 실행 파일을 지우면, 그 설정 파일의 훅이 세션마다 없는 파일을 부르다 실패한다.
+
+```powershell
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+[Environment]::SetEnvironmentVariable('Path', ((($userPath -split ';') -notlike '*zm-baton\bin*') -join ';'), 'User')
+Remove-Item -Recurse "$env:LOCALAPPDATA/zm-baton/bin"   # 실행 파일
+Remove-Item -Recurse "$env:AppData/zm-baton"            # 기기 등록·세션 토큰·로그(지우면 login부터 다시)
 ```
 
 세션을 시작하기 전에 `ZM_BATON_OFF=1`을 두면 그 세션은 등록되지 않는다.

@@ -5,6 +5,16 @@
 **/.gradle
 **/bin
 **/out
-**/.env
 agent/
 desktop/
+# Secrets that .gitignore keeps out of Git but a build context would still carry
+# (Docker reads only this file, not .gitignore). check-build-context.ps1 plants synthetic
+# files and shows which of them a build would receive; run it after changing this file.
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx
+**/*.jks
+**/.npmrc
