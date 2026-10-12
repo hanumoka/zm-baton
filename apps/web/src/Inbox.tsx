@@ -121,4 +121,3 @@ function InboxRow({ item, now, onChanged, onError }: { item: InboxItem } & Omit<
     </article>
   );
 }
-
