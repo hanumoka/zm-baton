@@ -14,7 +14,7 @@
 | 서버 API | 같은 주소의 `/api` |
 | PostgreSQL | `127.0.0.1:15432` (Docker 볼륨 `zm-baton-pg`) |
 | `zm-baton` 명령의 설정·세션 토큰·로그 | 사용자 설정 폴더의 `zm-baton\` (Windows는 `%AppData%\zm-baton\`) |
-| Claude Code 훅 | 고른 설정 파일 하나: 저장소의 `.claude\settings.local.json` 또는 사용자 `~\.claude\settings.json` |
+| Claude Code 훅 | Claude Code 플러그인 `zm-baton`. 파일은 `%AppData%\zm-baton\claude-plugin\`에 있고, 켜는 일은 Claude Code가 한다(5단계) |
 
 ## 전제조건
 
@@ -61,7 +61,7 @@ if (($parts | ForEach-Object { $_.TrimEnd('\') }) -notcontains $ours) {
 cd $repo
 ```
 
-훅은 이 위치의 실행 파일을 부른다. 옮기거나 지우면 `hooks install`을 다시 한다. PATH는 바꾼 뒤에 새로 연 PowerShell 창과 새로 띄운 Claude Code에만 적용된다.
+훅은 이 위치의 실행 파일을 부른다. 옮기면 `hooks install`을 다시 한다. PATH는 바꾼 뒤에 새로 연 PowerShell 창과 새로 띄운 Claude Code에만 적용된다.
 
 ### 4. 이 PC를 등록한다(처음 한 번)
 
@@ -72,20 +72,30 @@ cd $repo
 
 `서버 응답: 정상`이 나오면 된다.
 
-### 5. Claude Code에 훅을 넣는다
+### 5. Claude Code에 훅을 붙인다
 
-먼저 저장소 하나에만 넣어 써 보기를 권한다. 그 저장소에서 연 세션만 등록된다.
+훅은 Claude Code 플러그인으로 붙는다. zm-baton은 Claude Code 설정 파일을 고치지 않고, 설정은 Claude Code의 명령이 고친다. 먼저 저장소 하나에만 붙여 써 보기를 권한다. 그 저장소에서 연 세션만 등록된다.
 
-```powershell
-& $zb hooks install --project C:/work/zm-docs     # 그 저장소의 .claude/settings.local.json 에만
-# 모든 세션에 넣으려면:  & $zb hooks install      # 사용자 ~/.claude/settings.json
-```
+1. 플러그인 파일을 만든다. 붙일 명령이 함께 출력된다.
 
-바뀌는 내용을 보여 주고 묻는다. `y`로 답하면 이전 파일을 `*.zm-baton-backup-<시각>`으로 남긴 뒤 쓴다. 다른 설정과 다른 도구의 훅은 그대로 둔다.
+   ```powershell
+   & $zb hooks install --project C:/work/zm-docs
+   ```
+
+2. 출력된 Claude Code 명령을 그대로 실행한다. 아래와 같은 모양이다.
+
+   ```powershell
+   claude plugin marketplace add "$env:AppData\zm-baton\claude-plugin"   # 처음 한 번
+   cd C:/work/zm-docs
+   claude plugin install zm-baton@zm-baton-local --scope local
+   cd $repo
+   ```
+
+`--scope local`은 그 저장소의 `.claude\settings.local.json`에, 모든 세션에 붙이는 `--scope user`(`--project` 없이 `hooks install`)는 사용자 `~\.claude\settings.json`에 Claude Code가 기록한다. `claude plugin marketplace add`는 사용자 설정에 이 로컬 마켓플레이스를 기록한다.
 
 ### 6. 써 본다
 
-1. 훅을 넣은 저장소에서 Claude Code를 새로 연다. 이미 열려 있던 세션에는 훅이 적용되지 않는다.
+1. 훅을 붙인 저장소에서 Claude Code를 새로 연다. 이미 열려 있던 세션에는 훅이 적용되지 않는다.
 2. 웹의 「세션 현황」에 그 세션이 나타난다. 세션의 AI는 시작할 때 현재 상태 카드(열린 작업, 나를 기다리는 것의 개수, 같은 저장소의 다른 세션이 하는 일)를 받는다.
 3. 세션 안에서 AI나 사람이 `zm-baton session work "<무엇을, 어디서>"`를 실행하면 「지금 하는 일」이 올라간다. 300자 이하다. 공유하지 않으려면 `zm-baton session work --private "<무엇을, 어디서>"`처럼 옵션을 요약 **앞에** 쓴다(요약 뒤에 쓰면 요약의 일부가 된다). 그러면 그 세션의 이후 요약도 다른 세션의 상태 카드와 세션 현황에 「공유 안 함」으로만 보인다. 다시 공유하려면 `--share`를 붙인다. 세션 밖의 PowerShell에서 부를 때는 `--session <세션 번호>`를 함께 준다.
 4. 같은 저장소에서 세션을 하나 더 열고, 두 세션이 같은 파일을 고치게 해 본다. 「나를 기다리는 것」의 3번 묶음에 충돌이 뜨고 브라우저 알림이 온다. 「확인」·「충돌 아님(이유)」·「해결」로 처리한다.
@@ -98,22 +108,26 @@ cd $repo
 
 ## 실패하면
 
-1. **세션이 나타나지 않는다**: `& $zb status`로 서버 응답을 본다. 훅의 실패는 세션에 보이지 않고 `%AppData%\zm-baton\hook.log`에 남는다. 훅을 넣은 뒤 새로 연 세션인지 확인한다.
+1. **세션이 나타나지 않는다**: `& $zb status`로 서버 응답을 본다. 훅의 실패는 세션에 보이지 않고 `%AppData%\zm-baton\hook.log`에 남는다. 훅을 붙인 뒤 새로 연 세션인지, `claude plugin list`에 `zm-baton@zm-baton-local`이 켜져 있는지 확인한다.
 2. **서버가 데이터베이스에 붙지 못한다**: `docker compose -f "$repo/deploy/compose/compose.yaml" logs server`를 본다. `.env`의 비밀번호를 볼륨을 만든 뒤에 바꿨다면, 시험 자료를 버려도 될 때만 `docker compose -f "$repo/deploy/compose/compose.yaml" --profile app down -v`로 볼륨을 지우고 다시 띄운다.
 3. **파일을 고쳤는데 고친 파일에 안 나온다**: 셸 명령(예: `sed`, 스크립트)으로 바꾼 파일은 보고되지 않는다. 파일을 고치는 도구(`Edit`·`Write`·`MultiEdit`·`NotebookEdit`)만 보고된다.
 4. **훅 때문에 세션이 느려졌다고 느낀다**: 훅마다 시간 상한이 있다(시작 4초, 끝 1초, 나머지 3초). 상한을 넘기면 훅 프로세스가 스스로 끝난다. 서버가 꺼져 있으면 훅은 연결 실패 즉시 끝난다. 그래도 문제면 「정리」의 훅 빼기를 한다.
-5. **`hooks install`이 「the settings file changed while zm-baton was waiting」으로 멈췄다**: 확인을 기다리는 동안 다른 프로그램(예: Claude Code)이 설정 파일을 바꿨다. 아무것도 쓰지 않았으니 같은 명령을 다시 실행한다.
+5. **`claude plugin marketplace add`가 이미 추가되어 있다며 실패한다**: 앞서 한 번 했다는 뜻이다. `claude plugin marketplace list`에 `zm-baton-local`이 보이면 그 줄은 건너뛰고 `claude plugin install`부터 한다.
 6. **`session off`가 「서버에 알리지 못했다」로 끝났다**: 대개 이 세션의 보고는 이미 멈췄다. 서버가 응답할 때 같은 명령을 다시 실행하면 서버에도 알린다. 다시 실행하지 않아도 서버는 12시간 안에 그 등록을 끝낸다. 드물게 이 PC에 해제 표시를 저장하지 못했을 때도 같은 문구가 나와 보고가 계속될 수 있다. 그래서 같은 명령을 한 번 더 실행해 「껐다」 또는 「이미 꺼져 있다」를 확인한다(고도화 후보 H-02).
 
 ## 정리
 
 ```powershell
 & $zb session off                                      # 지금 세션만 등록을 끈다(세션 안에서)
-& $zb hooks uninstall --project C:/work/zm-docs        # 넣은 곳과 같은 대상에서 뺀다
+cd C:/work/zm-docs
+claude plugin uninstall zm-baton@zm-baton-local --scope local   # 붙인 곳과 같은 범위에서 뗀다
+cd $repo
 docker compose -f "$repo/deploy/compose/compose.yaml" --profile app down   # 자료는 볼륨에 남는다
 ```
 
-`zm-baton` 명령까지 지우려면 훅을 먼저 뺀다. 훅을 남긴 채 실행 파일을 지우면, 그 설정 파일의 훅이 세션마다 없는 파일을 부르다 실패한다.
+`& $zb hooks uninstall --project <폴더>`도 같은 명령을 보여 준다.
+
+`zm-baton` 명령까지 지우려면 플러그인을 먼저 뗀다. 플러그인을 남긴 채 실행 파일을 지우면, 훅이 세션마다 없는 파일을 부르다 실패한다. 모든 곳에서 뗐으면 `claude plugin marketplace remove zm-baton-local`로 마켓플레이스도 지운다.
 
 ```powershell
 # 3단계에서 더한 항목과 똑같은 것만 PATH에서 뺀다. 이름이 비슷한 다른 항목은 남는다.
