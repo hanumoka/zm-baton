@@ -51,10 +51,12 @@ docker run --rm -v "${PWD}:/src" -w /src -e GOOS=windows -e GOARCH=amd64 golang:
 New-Item -ItemType Directory -Force "$env:LOCALAPPDATA/zm-baton/bin" | Out-Null
 Copy-Item bin/zm-baton.exe "$env:LOCALAPPDATA/zm-baton/bin/"
 $zb = "$env:LOCALAPPDATA/zm-baton/bin/zm-baton.exe"
-# 세션 안의 AI가 `zm-baton session work`를 부를 수 있게 사용자 PATH에 더한다(새로 연 창부터 적용)
-$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-if ($userPath -notlike "*zm-baton\bin*") {
-  [Environment]::SetEnvironmentVariable('Path', "$userPath;$env:LOCALAPPDATA\zm-baton\bin", 'User')
+# 세션 안의 AI가 `zm-baton session work`를 부를 수 있게 사용자 PATH에 더한다(새로 연 창부터 적용).
+# 이 경로와 똑같은 항목이 없을 때만 더하고, 다른 항목은 건드리지 않는다.
+$ours = "$env:LOCALAPPDATA\zm-baton\bin"
+$parts = @(([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') | Where-Object { $_ })
+if (($parts | ForEach-Object { $_.TrimEnd('\') }) -notcontains $ours) {
+  [Environment]::SetEnvironmentVariable('Path', (($parts + $ours) -join ';'), 'User')
 }
 cd $repo
 ```
@@ -101,7 +103,7 @@ cd $repo
 3. **파일을 고쳤는데 고친 파일에 안 나온다**: 셸 명령(예: `sed`, 스크립트)으로 바꾼 파일은 보고되지 않는다. 파일을 고치는 도구(`Edit`·`Write`·`MultiEdit`·`NotebookEdit`)만 보고된다.
 4. **훅 때문에 세션이 느려졌다고 느낀다**: 훅마다 시간 상한이 있다(시작 4초, 끝 1초, 나머지 3초). 상한을 넘기면 훅 프로세스가 스스로 끝난다. 서버가 꺼져 있으면 훅은 연결 실패 즉시 끝난다. 그래도 문제면 「정리」의 훅 빼기를 한다.
 5. **`hooks install`이 「the settings file changed while zm-baton was waiting」으로 멈췄다**: 확인을 기다리는 동안 다른 프로그램(예: Claude Code)이 설정 파일을 바꿨다. 아무것도 쓰지 않았으니 같은 명령을 다시 실행한다.
-6. **`session off`가 「서버에 알리지 못했다」로 끝났다**: 이 세션의 보고는 이미 멈췄다. 서버가 응답할 때 같은 명령을 다시 실행하면 서버에도 알린다. 다시 실행하지 않아도 서버는 12시간 안에 그 등록을 끝낸다.
+6. **`session off`가 「서버에 알리지 못했다」로 끝났다**: 대개 이 세션의 보고는 이미 멈췄다. 서버가 응답할 때 같은 명령을 다시 실행하면 서버에도 알린다. 다시 실행하지 않아도 서버는 12시간 안에 그 등록을 끝낸다. 드물게 이 PC에 해제 표시를 저장하지 못했을 때도 같은 문구가 나와 보고가 계속될 수 있다. 그래서 같은 명령을 한 번 더 실행해 「껐다」 또는 「이미 꺼져 있다」를 확인한다(고도화 후보 H-02).
 
 ## 정리
 
@@ -114,8 +116,10 @@ docker compose -f "$repo/deploy/compose/compose.yaml" --profile app down   # 자
 `zm-baton` 명령까지 지우려면 훅을 먼저 뺀다. 훅을 남긴 채 실행 파일을 지우면, 그 설정 파일의 훅이 세션마다 없는 파일을 부르다 실패한다.
 
 ```powershell
-$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-[Environment]::SetEnvironmentVariable('Path', ((($userPath -split ';') -notlike '*zm-baton\bin*') -join ';'), 'User')
+# 3단계에서 더한 항목과 똑같은 것만 PATH에서 뺀다. 이름이 비슷한 다른 항목은 남는다.
+$ours = "$env:LOCALAPPDATA\zm-baton\bin"
+$parts = @(([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') | Where-Object { $_ -and $_.TrimEnd('\') -ne $ours })
+[Environment]::SetEnvironmentVariable('Path', ($parts -join ';'), 'User')
 Remove-Item -Recurse "$env:LOCALAPPDATA/zm-baton/bin"   # 실행 파일
 Remove-Item -Recurse "$env:AppData/zm-baton"            # 기기 등록·세션 토큰·로그(지우면 login부터 다시)
 ```
