@@ -1,49 +1,47 @@
-# Checks that the server image's build context (apps/) leaves secret files out.
+# Checks which files server.Dockerfile.dockerignore keeps out of the server image's build context.
 #
-# 1. Plants synthetic files under apps/: secret-like names that must stay out, and one plain
-#    file that must get in (it proves the probe sees the context at all).
-# 2. Builds a probe image from apps/ with a copy of server.Dockerfile.dockerignore and lists
-#    which planted files reached it.
-# 3. Removes the planted files and the probe image, whatever happened.
+# 1. Builds a synthetic build context in a new temporary folder: the folders the Dockerfile
+#    copies (web/, server/ and their src/), secret-like files that must stay out, and one
+#    plain file that must get in (it proves the probe sees the context at all).
+# 2. Builds a probe image from that folder with a copy of the ignore file and lists which of
+#    the files reached it.
+# 3. Removes the temporary folder and the probe image, whatever happened.
 #
+# Nothing is written in the working tree: the check never touches files a person keeps there.
 # Prerequisites: Docker running, PowerShell 7. Run from anywhere:
 #   pwsh deploy/compose/check-build-context.ps1
 # Exit code 0: only the plain file got in. Anything else: read the printed list.
 
 $ErrorActionPreference = 'Stop'
-$apps = (Resolve-Path (Join-Path $PSScriptRoot '../../apps')).Path
 $marker = 'SYNTHETIC_CONTEXT_PROBE'
-# Only folders that already exist, so cleaning up never has to remove a folder.
 $mustStayOut = @(
 	'web/.env', 'web/.env.local', 'web/.env.production', 'web/src/.env.development',
 	'server/.env', 'server/.env.local', 'server/src/.env',
 	'web/dev.pem', 'server/dev.key', 'server/keystore.jks', 'web/client.p12', 'web/.npmrc'
 )
 $mustGetIn = 'web/context-probe-visible.txt'
-$planted = @()
-$probe = Join-Path ([IO.Path]::GetTempPath()) ("zm-baton-context-" + [guid]::NewGuid())
+$root = Join-Path ([IO.Path]::GetTempPath()) ("zm-baton-context-" + [guid]::NewGuid())
+$context = Join-Path $root 'apps'
 $image = 'zm-baton-context-probe:local'
+$code = 1
 try {
 	foreach ($rel in $mustStayOut + $mustGetIn) {
-		$path = Join-Path $apps $rel
-		if (-not (Test-Path (Split-Path $path))) { throw "folder for $rel does not exist" }
-		if (Test-Path $path) { throw "$rel already exists; this check plants its own files and leaves yours alone" }
+		$path = Join-Path $context $rel
+		New-Item -ItemType Directory -Force (Split-Path $path) | Out-Null
 		Set-Content -LiteralPath $path -Value "$marker $rel" -NoNewline
-		$planted += $path
 	}
-	New-Item -ItemType Directory $probe | Out-Null
-	Copy-Item (Join-Path $PSScriptRoot 'server.Dockerfile.dockerignore') (Join-Path $probe 'probe.Dockerfile.dockerignore')
-	Set-Content -LiteralPath (Join-Path $probe 'probe.Dockerfile') -Value @(
+	Copy-Item (Join-Path $PSScriptRoot 'server.Dockerfile.dockerignore') (Join-Path $root 'probe.Dockerfile.dockerignore')
+	Set-Content -LiteralPath (Join-Path $root 'probe.Dockerfile') -Value @(
 		'FROM busybox:1.37',
 		'COPY . /ctx',
 		"RUN grep -rl $marker /ctx | sed 's|^/ctx/||' | sort > /found.txt || true",
 		'CMD ["cat", "/found.txt"]'
 	)
-	docker build --quiet --no-cache -t $image -f (Join-Path $probe 'probe.Dockerfile') $apps | Out-Null
+	docker build --quiet --no-cache -t $image -f (Join-Path $root 'probe.Dockerfile') $context | Out-Null
 	if ($LASTEXITCODE -ne 0) { throw 'probe build failed' }
 	$found = @(docker run --rm $image | Where-Object { $_ })
 	if ($LASTEXITCODE -ne 0) { throw 'probe run failed' }
-	Write-Output 'Planted files that reached the build context:'
+	Write-Output 'Files that reached the build context:'
 	$found | ForEach-Object { Write-Output "  $_" }
 	if ($found.Count -eq 1 -and $found[0] -eq $mustGetIn) {
 		Write-Output 'OK: no secret-like file got in, and the plain file did.'
@@ -56,8 +54,7 @@ try {
 		$code = 1
 	}
 } finally {
-	foreach ($path in $planted) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
-	if (Test-Path $probe) { Remove-Item -LiteralPath $probe -Recurse -Force }
+	if (Test-Path $root) { Remove-Item -LiteralPath $root -Recurse -Force }
 	docker image rm $image 2>$null | Out-Null
 }
 exit $code
