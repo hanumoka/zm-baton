@@ -120,6 +120,10 @@ export function Sessions({ onError, onRead, chipHost, query, onClearQuery, inbox
       {view.ended ? '서버가 이 세션 번호를 돌려주지 않았다. 지워졌거나 번호가 틀렸다.' : '끝났거나, 등록을 껐거나, 만료된 세션일 수 있다.'} 세션 번호{' '}
       <code>{shortId(selected)}</code>
     </EmptyState>
+  ) : state.kind === 'rows' ? (
+    <EmptyState kind="empty" title="고른 세션이 없다">
+      목록에서 세션을 고르면 여기에 보인다.
+    </EmptyState>
   ) : null; // an empty list already says why in its own pane
 
   return (

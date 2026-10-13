@@ -8,7 +8,7 @@ import { SessionList } from './sessions/SessionList';
 import { Sessions } from './sessions/Sessions';
 import {
   conditions,
-  conflictItem,
+  conflictItems,
   filterSessions,
   groupSessions,
   listState,
@@ -236,13 +236,22 @@ describe('detail', () => {
     const html = detail(live);
     expect(html).toContain('겹친 파일 <span class="num">1</span>');
     expect(html).toContain(`href="${inboxHref('inb_c')}"`);
-    expect(html).toContain('나를 기다리는 것에서 판정하기');
+    expect(html).toContain('상대 세션 <code>ses_other</code> 충돌 판정하기');
     const acknowledged = detail(live, []);
     expect(acknowledged).toContain('확인함으로 남은 충돌이다');
     expect(acknowledged).not.toContain('href="#inbox');
-    expect(conflictItem([notice], live.id, 'docs/a.md')?.id).toBe('inb_c');
-    expect(conflictItem([notice], 'ses_nobody', 'docs/a.md')).toBeNull();
-    expect(conflictItem([notice], live.id, 'docs/b.md')).toBeNull();
+    expect(conflictItems([notice], live.id, 'docs/a.md')).toEqual([{ item: notice, partner: 'ses_other' }]);
+    expect(conflictItems([notice], 'ses_nobody', 'docs/a.md')).toEqual([]);
+    expect(conflictItems([notice], live.id, 'docs/b.md')).toEqual([]);
+    expect(conflictItems(null, live.id, 'docs/a.md')).toEqual([]);
+  });
+
+  it('links each conflict on the same file, one per other session', () => {
+    const second: InboxItem = { ...notice, id: 'inb_d', source_id: 'ntc_d', detail: { path: 'docs/a.md', sessions: [{ session_id: 'ses_third' }, { session_id: live.id }] } };
+    const html = detail(live, [notice, second]);
+    expect(html).toContain(`href="${inboxHref('inb_c')}"`);
+    expect(html).toContain(`href="${inboxHref('inb_d')}"`);
+    expect(html).toContain('상대 세션 <code>ses_third</code> 충돌 판정하기');
   });
 
   it('lists the files it touched last, the overlapping ones marked, and what the server cannot see', () => {
@@ -279,4 +288,5 @@ describe('session screen', () => {
     expect(html).not.toContain('<header>');
     expect(html).not.toContain('<table');
   });
+
 });

@@ -4,7 +4,7 @@ import { executorLabel, inboxHref, repoName, shortId, since, stateLabel } from '
 import type { InboxItem, SessionView } from '../sessionsApi';
 import { Path } from '../ui/Path';
 import { at } from '../workModel';
-import { conflictItem, workLine } from './sessionView';
+import { conflictItems, workLine } from './sessionView';
 
 type Props = {
   session: SessionView;
@@ -113,7 +113,7 @@ export function SessionDetail({ session: s, inbox, now, titleRef, inSheet = fals
               <ul className="ss-files">
                 {s.conflicted_files.map((f) => (
                   <li key={f}>
-                    <Overlap path={f} item={conflictItem(inbox, s.id, f)} inboxRead={inbox !== null} />
+                    <Overlap path={f} items={conflictItems(inbox, s.id, f)} inboxRead={inbox !== null} />
                   </li>
                 ))}
               </ul>
@@ -164,8 +164,11 @@ function When({ iso, now }: { iso: string; now: number }) {
   );
 }
 
-/** A file this session and another both touched, linked to its item on the first screen while it still waits there. */
-function Overlap({ path, item, inboxRead }: { path: string; item: InboxItem | null; inboxRead: boolean }) {
+/**
+ * A file this session and another both touched. Each conflict that still waits on the first screen
+ * links to its item there, named by the other session; an acknowledged one only says so.
+ */
+function Overlap({ path, items, inboxRead }: { path: string; items: { item: InboxItem; partner: string | null }[]; inboxRead: boolean }) {
   return (
     <div className="ss-ovl-row">
       <p className="ss-ovl-path">
@@ -175,10 +178,22 @@ function Overlap({ path, item, inboxRead }: { path: string; item: InboxItem | nu
         </span>
         <Path path={path} />
       </p>
-      {item ? (
-        <a className="btn" href={inboxHref(item.id)}>
-          나를 기다리는 것에서 판정하기
-        </a>
+      {items.length > 0 ? (
+        <ul className="ss-judge">
+          {items.map(({ item, partner }) => (
+            <li key={item.id}>
+              <a className="btn" href={inboxHref(item.id)}>
+                {partner ? (
+                  <>
+                    상대 세션 <code>{shortId(partner)}</code> 충돌 판정하기
+                  </>
+                ) : (
+                  '나를 기다리는 것에서 판정하기'
+                )}
+              </a>
+            </li>
+          ))}
+        </ul>
       ) : (
         <p className="ss-sub">{inboxRead ? '확인함으로 남은 충돌이다. 나를 기다리는 것에는 열린 항목이 없다.' : '나를 기다리는 것을 읽는 중이다.'}</p>
       )}

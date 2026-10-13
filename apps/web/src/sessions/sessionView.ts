@@ -136,16 +136,28 @@ export function workLine(s: Pick<SessionView, 'shared' | 'current_work'>): { tex
   return { text: s.current_work, shown: true };
 }
 
+/** The other session in a conflict, from its evidence: the first one named that is not [sessionId]. */
+function partnerOf(item: InboxItem, sessionId: string): string | null {
+  const sessions = item.detail?.sessions;
+  if (!Array.isArray(sessions)) return null;
+  for (const s of sessions) {
+    const id = typeof s === 'object' && s !== null ? (s as { session_id?: unknown }).session_id : null;
+    if (typeof id === 'string' && id !== sessionId) return id;
+  }
+  return null;
+}
+
 /**
- * The open first-screen item for a conflict this session is in on [path]. None when the conflict
- * was acknowledged: it still marks the file here, but it no longer waits for anyone.
+ * The open first-screen items for conflicts this session is in on [path], one per other session,
+ * each with that session's id. None when the conflicts were acknowledged: they still mark the file
+ * here, but they no longer wait for anyone.
  */
-export function conflictItem(inbox: InboxItem[] | null, sessionId: string, path: string): InboxItem | null {
-  return (
-    inbox?.find((i) => {
-      if (i.kind !== 'notice' || i.detail?.path !== path) return false;
-      const sessions = i.detail?.sessions;
-      return Array.isArray(sessions) && sessions.some((s) => typeof s === 'object' && s !== null && (s as { session_id?: unknown }).session_id === sessionId);
-    }) ?? null
-  );
+export function conflictItems(inbox: InboxItem[] | null, sessionId: string, path: string): { item: InboxItem; partner: string | null }[] {
+  return (inbox ?? []).flatMap((i) => {
+    if (i.kind !== 'notice' || i.detail?.path !== path) return [];
+    const sessions = i.detail?.sessions;
+    const named =
+      Array.isArray(sessions) && sessions.some((s) => typeof s === 'object' && s !== null && (s as { session_id?: unknown }).session_id === sessionId);
+    return named ? [{ item: i, partner: partnerOf(i, sessionId) }] : [];
+  });
 }
