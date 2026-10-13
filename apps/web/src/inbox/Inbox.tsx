@@ -98,6 +98,10 @@ export function Inbox({ items, error, sessions, now, onChanged, onError, onReloa
     <EmptyState kind="empty" title="이 항목은 더는 기다리지 않는다">
       판정됐거나, 세션이 다시 움직여 저절로 닫혔다. 목록에서 다음 항목을 고른다.
     </EmptyState>
+  ) : state.kind === 'rows' ? (
+    <EmptyState kind="empty" title="고른 항목이 없다">
+      목록에서 항목을 고르면 여기에 보인다.
+    </EmptyState>
   ) : null; // an empty list already says why in its own pane
 
   const sheetTitle = current ? (BUCKETS.find((b) => b.bucket === current.bucket)?.label ?? kindOf(current).label) : '나를 기다리는 것';
