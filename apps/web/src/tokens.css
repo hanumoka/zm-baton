@@ -23,6 +23,7 @@
   --c-accent-hover: #08585d;
   --c-accent-tint: #d3e4e4;
   --c-on-accent: #ffffff;
+  --c-on-accent-line: rgba(255, 255, 255, 0.45);
 
   /* Colour: status meanings, never mixed with the accent */
   --c-block: #a12f3b;
@@ -88,14 +89,36 @@
   --w-rail: 56px;
   --w-side: 232px;
   --w-list: 380px;
+  --w-cmd: 720px;
+  --w-tip: 240px;
+  --w-cell: 200px;
+  --w-state: 128px;
   --h-cmd: 40px;
   --h-chip: 32px;
+  --h-ctl: 32px;
   --h-btn: 40px;
   --h-btn-sm: 28px;
+  --h-nav: 32px;
+  --h-rail-item: 36px;
+  --h-tab: 58px;
+  --tile: 24px;
+  --tile-rail: 32px;
+  --sheet-top: 44px;
+  --grab-w: 36px;
+  --grab-h: 4px;
   --icon: 16px;
   --stroke: 1.5px;
   --ring: 2px;
   --rule: 1px;
   --check: 14px;
   --w-scroll: 10px;
+  --underline-gap: 3px;
+
+  /* Stacking: what lies on top of what */
+  --z-sticky: 1;
+  --z-side: 2;
+  --z-scrim: 3;
+  --z-sheet: 4;
+  --z-tab: 5;
+  --z-tip: 6;
 }

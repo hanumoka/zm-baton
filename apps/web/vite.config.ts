@@ -12,5 +12,6 @@ export default defineConfig({
     proxy: { '/api': 'http://127.0.0.1:18081' },
   },
   build: { outDir: 'dist', emptyOutDir: true },
-  test: { environment: 'node' },
+  // Vitest empties CSS imports; the design kit reads tokens.css as text (`?raw`), so keep those.
+  test: { environment: 'node', css: { include: [/\.css\?raw$/] } },
 });
