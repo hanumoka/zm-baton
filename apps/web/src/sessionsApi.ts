@@ -48,8 +48,9 @@ async function call<T>(method: string, path: string, body?: unknown, signal?: Ab
 
 export const sessionsApi = {
   inbox: (signal?: AbortSignal) => call<InboxItem[]>('GET', '/api/inbox', undefined, signal),
-  sessions: (includeEnded: boolean, signal?: AbortSignal) =>
-    call<SessionView[]>('GET', `/api/sessions?include_ended=${includeEnded}&limit=100`, undefined, signal),
+  /** Newest signal first; [limit] 1 asks only whether any exists. */
+  sessions: (includeEnded: boolean, signal?: AbortSignal, limit = 100) =>
+    call<SessionView[]>('GET', `/api/sessions?include_ended=${includeEnded}&limit=${limit}`, undefined, signal),
   judgeNotice: (id: string, status: NoticeStatus, note?: string) =>
     call<{ id: string; status: NoticeStatus }>('POST', `/api/notices/${encodeURIComponent(id)}/status`, { status, note }),
 };

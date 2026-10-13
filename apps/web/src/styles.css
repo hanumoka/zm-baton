@@ -28,19 +28,10 @@ ol.events code { color: var(--c-ink-3); }
 .problems { margin: var(--s-2) var(--s-4); }
 .problems > button { padding: var(--s-1) var(--s-3); border: var(--rule) solid var(--c-rule-strong); background: var(--c-paper); border-radius: var(--r-sm); }
 
-/* Session list. */
-label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-md); }
-label.inline input { flex: none; }
-.tablewrap { overflow-x: auto; border: 1px solid var(--c-rule); border-radius: var(--r-md); background: var(--c-paper); }
+/* Tables: Markdown tables in the decisions screen take these; ui/prose.css adds to them. */
 table { border-collapse: collapse; width: 100%; font-size: var(--fs-md); }
 th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--c-rule-soft); }
 th { background: var(--c-canvas-2); white-space: nowrap; }
-tr.gone td { color: var(--c-ink-3); }
-ul.files { margin: 0; padding: 0; list-style: none; }
-ul.files li.conflict code { background: var(--c-block-tint); }
-ul.files li.conflict b { color: var(--c-block); font-size: var(--fs-xs); }
-.empty { color: var(--c-ink-2); }
-.note { margin: var(--s-3) 0 0; font-size: var(--fs-sm); color: var(--c-ink-2); }
 
 /* The run test screen's list rows (App.tsx). */
 ul.list button span { min-width: 0; overflow-wrap: anywhere; }

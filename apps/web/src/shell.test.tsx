@@ -155,8 +155,9 @@ describe('command line that also finds', () => {
     expect(html).toContain('role="search"');
   });
 
-  it('finds on the work and decisions screens, each saying what its words match', () => {
-    expect(Object.keys(FINDS).sort()).toEqual(['decisions', 'work']);
+  it('finds on the work, decisions and session screens, each saying what its words match', () => {
+    expect(Object.keys(FINDS).sort()).toEqual(['decisions', 'sessions', 'work']);
+    expect(FINDS.sessions?.label).toBe('세션 찾기(세션 번호·하는 일·브랜치) 또는 화면 이동');
     expect(FINDS.decisions).toEqual({ placeholder: '결정 찾기, 화면 이동은 > 로 시작', label: '결정 찾기(번호·질문·결정) 또는 화면 이동' });
     expect(FINDS.work?.label).toBe('작업 찾기(제목·번호·다음 행동) 또는 화면 이동');
   });

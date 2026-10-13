@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { groupByBucket, newImmediate, repoName, shortId, since } from './inboxModel';
 import { Inbox } from './inbox/Inbox';
 import { clear, fail, lines, type Problems } from './problems';
-import { Sessions } from './Sessions';
+import { SessionDetail } from './sessions/SessionDetail';
+import { SessionList } from './sessions/SessionList';
+import { groupSessions, type ListState } from './sessions/sessionView';
 import type { InboxItem, SessionView } from './sessionsApi';
 import { ProblemList } from './Shell';
 
@@ -125,23 +127,35 @@ describe('Sessions', () => {
     ...over,
   });
 
-  it('marks conflicted files and hides unshared work', () => {
-    const html = renderToStaticMarkup(
-      <Sessions
-        sessions={[session(), session({ id: 'ses_ffffffffffffffff', shared: false, current_work: null, touched_files: [], conflicted_files: [] })]}
-        includeEnded={false}
-        onIncludeEnded={() => {}}
+  const sessionList = (state: ListState, sessions: SessionView[] = []) =>
+    renderToStaticMarkup(
+      <SessionList
+        state={state}
+        groups={groupSessions(sessions, false)}
+        head={{ base: '살아 있는 세션', count: sessions.length, narrowed: false }}
+        selected={null}
         now={T0}
+        onSelect={() => {}}
+        onPick={() => {}}
+        onOpen={() => {}}
+        onShowEnded={() => {}}
+        onClearFilters={() => {}}
+        onReload={() => {}}
       />,
     );
+
+  it('marks conflicted files and hides unshared work', () => {
+    const html = sessionList({ kind: 'rows' }, [session(), session({ id: 'ses_ffffffffffffffff', shared: false, current_work: null, touched_files: [], conflicted_files: [] })]);
     expect(html).toContain('결정 문서 셋 쓰는 중');
-    expect(html).toContain('공유 안 함');
+    expect(html).toContain('하는 일을 공유하지 않는다');
     expect(html).toContain('겹침');
     expect(html).toContain('hanumoka/zm-docs');
+    const detail = renderToStaticMarkup(<SessionDetail session={session()} inbox={[]} now={T0} />);
+    expect(detail).toContain('<code>docs/<wbr/>a.md</code>');
+    expect(detail).toContain('겹침');
   });
 
   it('says so when nothing is registered', () => {
-    const html = renderToStaticMarkup(<Sessions sessions={[]} includeEnded={false} onIncludeEnded={() => {}} now={T0} />);
-    expect(html).toContain('등록된 세션이 없다');
+    expect(sessionList({ kind: 'unused' })).toContain('등록된 세션이 없다');
   });
 });
