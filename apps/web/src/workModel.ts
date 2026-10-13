@@ -47,32 +47,42 @@ export function decisionStatusLabel(status: Decision['status']): string {
 }
 
 /**
- * Work items per stage, in stage order, skipping empty closed stages. Inside a stage the work
- * changed most recently comes first, so what is moving is on top.
+ * 「완료로」, 「수행으로」: the particle 로/으로 follows the word's last syllable (no final consonant or
+ * ㄹ takes 로), so a stage an organisation renames still reads right. Not Korean: 「(으)로」.
  */
-export function groupByStage(items: WorkItem[], skipped: Stage[] = []): { stage: Stage; label: string; items: WorkItem[] }[] {
-  return STAGES.map(({ stage, label }) => ({
-    stage,
-    label,
-    items: items
-      .filter((i) => i.stage === stage)
-      .sort((a, b) => b.updated_at.localeCompare(a.updated_at) || (b.external_ref ?? '').localeCompare(a.external_ref ?? '')),
-  })).filter((g) => g.items.length > 0 || !(['done', 'cancelled'].includes(g.stage) || skipped.includes(g.stage)));
+export function toward(word: string): string {
+  const code = word.charCodeAt(word.length - 1);
+  if (Number.isNaN(code) || code < 0xac00 || code > 0xd7a3) return `${word}(으)로`;
+  const last = (code - 0xac00) % 28;
+  return last === 0 || last === 8 ? `${word}로` : `${word}으로`;
 }
 
+export type MoveParts = {
+  /** What the button does, 「완료로 옮기기」. */
+  label: string;
+  /** What else happens on the way, 「결과 검토 건너뜀」. */
+  note?: string;
+};
+
 /**
- * The button for a move from [from]: "완료(으)로 (결과 검토 건너뜀)" when it passes through a
- * skipped stage, and the two moves backwards by what they mean.
+ * The button for a move from [from]: where it ends, the stages it passes through because the
+ * organisation skips them, and the two moves backwards by what they mean.
  */
-export function moveLabel(move: Move, from: Stage): string {
+export function moveParts(move: Move, from: Stage): MoveParts {
   const end = stageLabel(move.path[move.path.length - 1]);
   const passed = move.path.slice(0, -1).map(stageLabel);
-  if (move.target === 'cancelled') return '취소';
+  if (move.target === 'cancelled') return { label: '취소하기' };
   if (move.target === 'plan_review' && (from === 'in_progress' || from === 'result_review')) {
-    return passed.length > 0 ? `다시 계획 (${end}(으)로)` : '다시 계획';
+    return { label: '다시 계획하기', note: passed.length > 0 ? `${passed.join(', ')} 건너뛰고 ${toward(end)}` : undefined };
   }
-  if (move.target === 'in_progress' && from === 'result_review') return '돌려보내기 (수행으로)';
-  return passed.length > 0 ? `${end}(으)로 (${passed.join(', ')} 건너뜀)` : `${end}(으)로`;
+  if (move.target === 'in_progress' && from === 'result_review') return { label: '돌려보내기', note: '수행으로' };
+  return { label: `${toward(end)} 옮기기`, note: passed.length > 0 ? `${passed.join(', ')} 건너뜀` : undefined };
+}
+
+/** The same in one line: 「완료로 옮기기 (결과 검토 건너뜀)」. */
+export function moveLabel(move: Move, from: Stage): string {
+  const { label, note } = moveParts(move, from);
+  return note ? `${label} (${note})` : label;
 }
 
 /** One line for an entry of a work item's history. */

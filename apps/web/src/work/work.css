@@ -1,0 +1,286 @@
+/*
+ * The work screen (DESIGN.md 「화면 배치」 3, 4 and 6). The list (--w-list) and the detail sit side
+ * by side; the list stays in view under the header (its height is measured into --h-tool by the
+ * shell) while the page scrolls the detail. Narrow, only the list shows and the detail is a sheet.
+ * Every value is a token.
+ */
+
+main.wk {
+  --wk-top: var(--h-tool, calc(var(--h-cmd) + var(--h-chip) + var(--s-3) * 2 + var(--s-2) + var(--rule)));
+  display: grid;
+  grid-template-columns: var(--w-list) minmax(0, 1fr);
+  align-items: start;
+  max-width: none;
+  min-height: calc(100dvh - var(--wk-top));
+  padding: 0;
+}
+
+/* Chips, drawn into the row under the command line */
+.wk-chips { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: var(--s-2); min-width: 0; }
+.wk-chips .chip select { field-sizing: content; }
+.wk-chips .chip .glyph { flex: none; }
+.chip.wk-review { margin-left: auto; padding-right: var(--s-2); font-weight: var(--fw-medium); color: var(--c-ink); }
+.chip.wk-review .ico { color: var(--c-ink-2); }
+/* Before the setting has been read the button is the part's loading state (ui.css `.chip.is-loading`). */
+.chip.wk-review:disabled { background: var(--c-canvas-2); border-color: var(--c-rule); color: var(--c-ink-2); cursor: progress; }
+
+.wk-pop {
+  position: fixed;
+  inset: auto;
+  width: var(--w-pop);
+  max-width: calc(100vw - var(--s-4) * 2);
+  margin: 0;
+  padding: var(--s-3) var(--s-2) var(--s-3) var(--s-3);
+  background: var(--c-paper);
+  border: var(--rule) solid var(--c-rule-strong);
+  border-radius: var(--r-md);
+  box-shadow: var(--sh-tip);
+  color: var(--c-ink);
+}
+.wk-pop-t { margin: 0 0 var(--s-1); font-size: var(--fs-sm); font-weight: var(--fw-semi); }
+.wk-pop .check { display: flex; padding-left: 0; }
+/* styles.css stretches every input (`input { flex: 1 }`); a checkbox keeps its own size. */
+.wk-pop .check input { flex: none; }
+.wk-pop-note { margin: var(--s-2) 0 0; font-size: var(--fs-xs); line-height: var(--lh-row); color: var(--c-ink-2); }
+
+/* List */
+.wk-list {
+  position: sticky;
+  top: var(--wk-top);
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - var(--wk-top));
+  min-width: 0;
+  background: var(--c-canvas);
+  border-right: var(--rule) solid var(--c-rule);
+}
+.wk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-4);
+  border-bottom: var(--rule) solid var(--c-rule);
+}
+.wk-count { margin: 0; font-size: var(--fs-xs); line-height: var(--lh-row); color: var(--c-ink-2); }
+.wk-count strong { font-size: var(--fs-md); font-weight: var(--fw-semi); color: var(--c-ink); }
+.wk-by { margin-left: var(--s-2); }
+.wk-body { flex: 1; min-height: 0; overflow: auto; padding-bottom: var(--s-3); }
+.wk-body > .empty-state { padding-top: var(--s-4); }
+.wk-body .grp { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--c-canvas); }
+/* Each group has its own wrapper, so ui.css's first-of-type rule would take every line away. */
+.wk-grp + .wk-grp .grp { border-top: var(--rule) solid var(--c-rule); }
+.wk-rows { margin: 0; padding: 0; list-style: none; }
+
+.wrow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-0);
+  width: 100%;
+  padding: var(--s-2) var(--s-4);
+  border: 0;
+  background: transparent;
+  color: var(--c-ink);
+  text-align: left;
+}
+.wrow:hover { background: var(--c-canvas-2); }
+.wrow[aria-current="true"] { background: var(--c-accent-tint); }
+.wrow:focus-visible { outline: var(--ring) solid var(--c-accent); outline-offset: calc(var(--ring) * -1); }
+.wrow-l1 { display: flex; align-items: center; gap: var(--s-2); min-width: 0; line-height: var(--lh-row); }
+.wrow-stage { flex: none; font-size: var(--fs-xs); font-weight: var(--fw-semi); color: var(--c-ink); }
+.wrow-ref { flex: none; min-width: var(--w-ref); font-size: var(--fs-xs); color: var(--c-ink-2); }
+.wrow-title { flex: 1; min-width: 0; overflow: hidden; font-weight: var(--fw-medium); white-space: nowrap; text-overflow: ellipsis; }
+.wrow-sub {
+  display: block;
+  padding-left: calc(var(--icon) + var(--s-2));
+  overflow: hidden;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-row);
+  color: var(--c-ink-2);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.wrow-proj { margin-right: var(--s-3); color: var(--c-ink); }
+.wrow-why { margin-right: var(--s-2); font-weight: var(--fw-semi); color: var(--c-block); }
+
+.wk-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1) var(--s-4);
+  margin: 0;
+  padding: var(--s-2) var(--s-4);
+  border-top: var(--rule) solid var(--c-rule);
+  font-size: var(--fs-xs);
+  color: var(--c-ink-2);
+}
+.wk-keys span { display: inline-flex; align-items: center; gap: var(--s-1); }
+
+/* Detail */
+.wk-detail { min-width: 0; min-height: calc(100dvh - var(--wk-top)); background: var(--c-paper); }
+.wk-detail > .empty-state,
+.wk-detail > .skel-list { padding: var(--s-6) var(--s-8); }
+
+.wd { max-width: calc(var(--w-text) + var(--s-8) + var(--w-aside) * 2); padding: var(--s-4) var(--s-8) var(--s-10); }
+.wd-crumb { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); line-height: var(--lh-row); color: var(--c-ink-2); }
+.wd-crumb code { color: var(--c-ink); }
+.wd-title {
+  max-width: var(--w-text);
+  margin: var(--s-2) 0;
+  font-size: var(--fs-2xl);
+  font-weight: var(--fw-bold);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  text-wrap: pretty;
+}
+.wd-facts { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-5); margin: 0 0 var(--s-3); font-size: var(--fs-sm); line-height: var(--lh-row); }
+.wd-facts div { display: flex; align-items: baseline; gap: var(--s-2); }
+.wd-facts dt { color: var(--c-ink-2); }
+.wd-facts dd { display: flex; align-items: baseline; gap: var(--s-2); margin: 0; }
+.wd-facts code { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.wd-wait { color: var(--c-ink-2); }
+.wd-ro { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); margin: 0 0 var(--s-3); font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.wd-ro strong { font-weight: var(--fw-semi); color: var(--c-ink); }
+.wd-ro code { color: var(--c-ink); }
+
+/* Stage path: the glyphs joined by a line; a skipped stage is dimmed and joined by a dashed one */
+.wd-track { display: flex; align-items: flex-start; gap: var(--s-4); padding: var(--s-4) 0 var(--s-3); border-top: var(--rule) solid var(--c-rule); }
+.wd-track ol { flex: 1; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); margin: 0; padding: 0; list-style: none; }
+.wd-t {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-tight);
+  text-align: center;
+  color: var(--c-ink-2);
+}
+.wd-t + .wd-t::before {
+  content: "";
+  position: absolute;
+  top: calc(var(--icon) / 2 - var(--rule));
+  left: calc(-50% + var(--s-3));
+  right: calc(50% + var(--s-3));
+  border-top: var(--stroke) solid var(--c-ink-2);
+}
+.wd-t.is-now::before,
+.wd-t.is-next::before { border-top-color: var(--c-rule-strong); }
+.wd-t.is-past + .wd-t.is-now::before,
+.wd-t.is-past + .wd-t.is-past::before { border-top-color: var(--c-ink-2); }
+.wd-t.is-skip::before,
+.wd-t.is-skip + .wd-t::before { border-top-style: dashed; border-top-color: var(--c-rule-strong); }
+.wd-t .glyph { color: var(--c-ink-2); }
+.wd-t.is-skip .glyph,
+.wd-t.is-next .glyph,
+.wd-t.is-off .glyph { color: var(--c-ink-3); }
+.wd-t.is-now .glyph { color: var(--c-ink); }
+.wd-t.is-now .glyph.is-block { color: var(--c-block); }
+.wd-t-lb { font-weight: var(--fw-medium); color: var(--c-ink); }
+.wd-t.is-skip .wd-t-lb,
+.wd-t.is-next .wd-t-lb,
+.wd-t.is-off .wd-t-lb { font-weight: var(--fw-regular); color: var(--c-ink-2); }
+.wd-t.is-now .wd-t-lb { font-weight: var(--fw-bold); }
+.wd-t small { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.wd-t.is-now small { font-weight: var(--fw-semi); color: var(--c-block); }
+.wd-off { flex: none; width: var(--w-off); padding-left: var(--s-4); border-left: var(--rule) solid var(--c-rule); }
+
+.wd-grid {
+  display: grid;
+  grid-template-columns: minmax(0, var(--w-text)) minmax(var(--w-aside), 1fr);
+  gap: var(--s-8);
+  border-top: var(--rule) solid var(--c-rule);
+}
+.wd-sec { padding: var(--s-4) 0; border-top: var(--rule) solid var(--c-rule-soft); }
+.wd-main > .wd-sec:first-child,
+.wd-main > .wd-refused + .wd-sec { border-top: 0; }
+.wd-sec h3,
+.wd-aside h3 { margin: 0 0 var(--s-2); font-size: var(--fs-sm); font-weight: var(--fw-semi); line-height: var(--lh-row); color: var(--c-ink-2); }
+.wd-text { margin: 0; white-space: pre-wrap; }
+.wd-none { margin: 0; color: var(--c-ink-2); }
+.wd-waits { display: flex; flex-direction: column; gap: var(--s-2); margin: 0; padding: 0; list-style: none; }
+.wd-wait-k { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin: 0 0 var(--s-1); font-weight: var(--fw-semi); color: var(--c-block); }
+.wd-wait-k .btn { color: var(--c-ink); }
+.wd-refused {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  margin: var(--s-4) 0 0;
+  padding: var(--s-2) var(--s-3);
+  background: var(--c-block-tint);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+}
+.wd-refused .ico { margin-top: var(--s-0); color: var(--c-block); }
+
+.wd-moves { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.wd-moves .btn { flex-direction: column; align-items: flex-start; gap: 0; min-height: var(--h-btn); padding: var(--s-1) var(--s-3); }
+.wd-moves .btn small { font-size: var(--fs-xs); font-weight: var(--fw-regular); color: var(--c-ink-2); }
+.wd-moves .btn-primary small { color: var(--c-on-accent); }
+.wd-moves .btn:disabled small { color: var(--c-ink-3); }
+.wd-why { display: flex; align-items: flex-start; gap: var(--s-2); max-width: var(--w-text); margin: var(--s-3) 0 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.wd-why .ico { margin-top: var(--s-0); }
+
+/* Forms in the detail: a reason, a wait note, the edit form and a new work item */
+.wd-form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s-2); margin: 0; }
+.wd-sec .wd-form { margin-top: var(--s-1); }
+.wd-sec .wd-ask { margin-top: var(--s-3); }
+.wd-form label,
+.wd-edit label,
+.wn label { display: flex; flex-direction: column; gap: var(--s-1); font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.wd-form label { flex: 1 1 var(--w-cell); }
+.wd-form .field,
+.wd-edit .field,
+.wn .field,
+.wd-edit .select,
+.wn .select,
+.wd-edit .select select,
+.wn .select select { width: 100%; }
+.wd-edit .field,
+.wn .field { color: var(--c-ink); }
+.wd .select select,
+.wn .select select { font-size: var(--fs-md); }
+textarea.field { height: auto; padding: var(--s-1) var(--s-2); line-height: var(--lh-body); resize: vertical; }
+.wd-edit,
+.wn { display: grid; gap: var(--s-3); max-width: var(--w-text); margin: 0; }
+.wn { padding: var(--s-4) var(--s-8) var(--s-10); }
+.wn .wd-title { margin: 0; }
+.wn-lead { margin: 0; font-size: var(--fs-sm); color: var(--c-ink-2); }
+.wn-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--w-cell)), 1fr)); gap: var(--s-3); }
+.wd-acts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
+.wn .ctl-why { margin-top: calc(var(--s-2) * -1); }
+
+/* History beside the fields: it is read less, so it takes the narrower column */
+.wd-aside { min-width: 0; padding: var(--s-4) 0 0 var(--s-5); border-left: var(--rule) solid var(--c-rule-soft); }
+.wd-hist { display: flex; flex-direction: column; gap: var(--s-2); margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.wd-hist li { display: flex; flex-direction: column; }
+.wd-hist time { font-size: var(--fs-xs); color: var(--c-ink-2); }
+
+/* Middle width: a narrower list, no project on the row's second line, history under the fields */
+@media (max-width: 1180px) {
+  main.wk { grid-template-columns: var(--w-list-mid) minmax(0, 1fr); }
+  .wrow-proj { display: none; }
+  .wd,
+  .wn { padding: var(--s-4) var(--s-6) var(--s-10); }
+  .wd-grid { grid-template-columns: minmax(0, var(--w-text)); gap: 0; }
+  .wd-aside { padding: var(--s-4) 0 0; border-top: var(--rule) solid var(--c-rule); border-left: 0; }
+}
+
+/* Narrow: the list alone; the detail and the new work form open as a sheet (shell/Sheet.tsx) */
+@media (max-width: 760px) {
+  main.wk { display: block; min-height: 0; }
+  .wk-list { position: static; height: auto; border-right: 0; }
+  .wk-body { overflow: visible; }
+  .wk-body .grp { position: static; }
+  .wk-keys { display: none; }
+  .wk-by { display: none; }
+  .wk-chips { flex: none; flex-wrap: nowrap; }
+  .chip.wk-review { margin-left: 0; }
+  .wd,
+  .wn { padding: var(--s-2) var(--s-2) var(--s-4); }
+  .wd-title { font-size: var(--fs-xl); }
+  .wd-track { gap: var(--s-2); }
+  .wd-off { width: auto; padding-left: var(--s-2); }
+  /* Two-word stage names wrap between the words, never inside one (base.css lets long paths wrap anywhere). */
+  .wd-t-lb { width: min-content; overflow-wrap: normal; }
+}

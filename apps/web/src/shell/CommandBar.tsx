@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../icons/Icon';
-import { matchScreen, type ScreenId } from './screens';
+import { commandTarget, isCommand, type ScreenId } from './screens';
 
 /** Ctrl+K, or Cmd+K on a Mac, puts the cursor in the command line from anywhere. */
 export function isCommandShortcut(e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey'>): boolean {
@@ -13,11 +13,27 @@ function modifierKey(): 'Cmd' | 'Ctrl' {
 }
 
 /**
- * The find-and-command line at the top of the content (DESIGN.md 「화면 배치」 2). For now it only
- * moves between screens: type a screen's name and press Enter. Finding work comes next.
+ * A screen that finds through the command line (the work screen finds work by title, number
+ * and next action). The screen owns the words; the line only types them.
  */
-export function CommandBar({ onGo }: { onGo: (id: ScreenId) => void }) {
-  const [q, setQ] = useState('');
+export type Find = {
+  value: string;
+  onChange: (q: string) => void;
+  placeholder: string;
+  label: string;
+  /** Enter on plain words, or the down arrow: move into the screen's results. */
+  onSubmit: () => void;
+};
+
+/**
+ * The find-and-command line at the top of the content (DESIGN.md 「화면 배치」 2). Typing a
+ * screen's name and Enter opens it. On a screen that finds, plain words find on that screen and
+ * a leading `>` (or a screen's exact name) opens another screen.
+ */
+export function CommandBar({ onGo, find }: { onGo: (id: ScreenId) => void; find?: Find }) {
+  const [local, setLocal] = useState('');
+  const q = find ? find.value : local;
+  const setQ = find ? find.onChange : setLocal;
   const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -32,8 +48,15 @@ export function CommandBar({ onGo }: { onGo: (id: ScreenId) => void }) {
   }, []);
 
   const typed = q.trim() !== '';
-  const match = typed ? matchScreen(q) : null;
-  const status = !typed ? '' : match ? `Enter를 누르면 「${match.label}」 화면을 연다` : '이름이 맞는 화면이 없다';
+  const target = typed ? commandTarget(q, find !== undefined) : null;
+  const finding = find !== undefined && typed && !isCommand(q) && target === null;
+  const status = !typed
+    ? ''
+    : target
+      ? `Enter를 누르면 「${target.label}」 화면을 연다`
+      : finding
+        ? 'Enter나 아래 화살표를 누르면 찾은 목록으로 간다'
+        : '이름이 맞는 화면이 없다';
 
   return (
     <div className="cmd" role="search">
@@ -44,17 +67,20 @@ export function CommandBar({ onGo }: { onGo: (id: ScreenId) => void }) {
         value={q}
         onChange={(e) => setQ(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && match) {
+          if (e.key === 'Enter' && target) {
             e.preventDefault();
             setQ('');
-            onGo(match.id);
+            onGo(target.id);
+          } else if (find && (e.key === 'ArrowDown' || (e.key === 'Enter' && finding))) {
+            e.preventDefault();
+            find.onSubmit();
           } else if (e.key === 'Escape') {
             setQ('');
             e.currentTarget.blur();
           }
         }}
-        placeholder="화면 이름을 쓰고 Enter로 이동"
-        aria-label="화면 이름으로 이동"
+        placeholder={find ? find.placeholder : '화면 이름을 쓰고 Enter로 이동'}
+        aria-label={find ? find.label : '화면 이름으로 이동'}
         autoComplete="off"
         spellCheck={false}
       />
@@ -64,12 +90,17 @@ export function CommandBar({ onGo }: { onGo: (id: ScreenId) => void }) {
           <kbd>K</kbd>
         </span>
       )}
-      {typed && match && (
+      {typed && target && (
         <span className="cmd-hint" aria-hidden="true">
-          <kbd>Enter</kbd> 「{match.label}」 열기
+          <kbd>Enter</kbd> 「{target.label}」 열기
         </span>
       )}
-      {typed && !match && (
+      {finding && (
+        <span className="cmd-hint" aria-hidden="true">
+          <kbd>Enter</kbd> 찾은 목록으로
+        </span>
+      )}
+      {typed && !target && !finding && (
         <span className="cmd-hint" aria-hidden="true">
           맞는 화면 없음
         </span>

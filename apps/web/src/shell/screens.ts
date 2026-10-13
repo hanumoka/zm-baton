@@ -54,13 +54,17 @@ export function screenById(id: ScreenId): Screen {
   return SCREENS.find((s) => s.id === id)!;
 }
 
-/** `#work` and `#/work` both open the work screen; anything else opens the first screen. */
+/**
+ * `#work` and `#/work` both open the work screen, and so does `#work?item=...`: what follows `?`
+ * belongs to the screen (its filters and selection). Anything else opens the first screen.
+ */
 export function screenFromHash(hash: string): ScreenId {
-  const id = hash.replace(/^#\/?/, '');
+  const id = hash.replace(/^#\/?/, '').split(/[?/]/)[0];
   return SCREENS.find((s) => s.id === id)?.id ?? 'inbox';
 }
 
 const norm = (s: string) => s.replace(/\s+/g, '').toLowerCase();
+const names = (s: Screen) => [s.label, s.short, ...s.aliases].map(norm);
 
 /**
  * The screen a command-line query names: an exact name first, then a name that starts with the
@@ -70,7 +74,6 @@ const norm = (s: string) => s.replace(/\s+/g, '').toLowerCase();
 export function matchScreen(query: string): Screen | null {
   const q = norm(query.replace(/^\s*>/, ''));
   if (q === '') return null;
-  const names = (s: Screen) => [s.label, s.short, ...s.aliases].map(norm);
   const offered = SCREENS.filter((s) => s.inNav);
   return (
     offered.find((s) => names(s).includes(q)) ??
@@ -78,4 +81,24 @@ export function matchScreen(query: string): Screen | null {
     offered.find((s) => names(s).some((n) => n.includes(q))) ??
     null
   );
+}
+
+/** The screen whose name is exactly the query, ignoring spaces and case; used while the line also finds. */
+export function exactScreen(query: string): Screen | null {
+  const q = norm(query);
+  if (q === '') return null;
+  return SCREENS.find((s) => s.inNav && names(s).includes(q)) ?? null;
+}
+
+/** A leading `>` marks a command (a screen to open), not words to find. */
+export const isCommand = (query: string) => /^\s*>/.test(query);
+
+/**
+ * Where Enter goes. On a screen that does not find, any name that matches (as before). On a
+ * screen that finds, plain words are a search, so only an exact screen name or a `>` command
+ * opens a screen; 「세」 should find work about sessions, not jump to 「세션 현황」.
+ */
+export function commandTarget(query: string, finding: boolean): Screen | null {
+  if (!finding || isCommand(query)) return matchScreen(query);
+  return exactScreen(query);
 }
