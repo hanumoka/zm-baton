@@ -22,5 +22,46 @@ ol.events li { padding: 4px 0; border-bottom: 1px solid #eee; white-space: pre-w
 ol.events code { color: #888; }
 .kind-error { color: #b00020; }
 .error { background: #fde8ea; padding: 8px; border-radius: 6px; cursor: pointer; }
+.problems { display: flex; align-items: flex-start; gap: 8px; background: #fde8ea; color: #1a1a1a; padding: 8px; border-radius: 6px; margin: 8px 0; }
+.problems ul { flex: 1; margin: 0; padding-left: 18px; }
 .undecided { margin: 0 0 8px; padding-left: 18px; font-size: 13px; color: #666; }
 .undecided .relevant { color: #8a5a00; font-weight: 600; }
+
+/* Shell: tabs for the first screen, the session list and the compat test screen. */
+nav.tabs {
+  position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 8px 16px; background: #fff; border-bottom: 1px solid #e3e3e3;
+}
+nav.tabs button { padding: 6px 12px; border: 1px solid #ddd; background: #fff; border-radius: 999px; cursor: pointer; }
+nav.tabs .spacer { flex: 1; }
+nav.tabs .count { margin-left: 6px; padding: 0 7px; border-radius: 999px; background: #2f6fed; color: #fff; font-size: 12px; }
+
+/* First screen ("나를 기다리는 것"). */
+section.bucket { margin: 12px 0; border: 1px solid #e3e3e3; border-radius: 10px; background: #fff; }
+section.bucket h2 {
+  display: flex; justify-content: space-between; gap: 8px; margin: 0; padding: 8px 12px;
+  font-size: 15px; background: #f4f5f7; border-bottom: 1px solid #e3e3e3; border-radius: 10px 10px 0 0;
+}
+article.item { padding: 10px 12px; border-bottom: 1px dashed #e3e3e3; }
+article.item:last-child { border-bottom: none; }
+article.item .row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+article.item .what { min-width: 0; overflow-wrap: anywhere; }
+article.item .acts { display: flex; gap: 6px; }
+article.item .acts button, .reason button { padding: 4px 10px; border: 1px solid #ccd; background: #fff; border-radius: 6px; cursor: pointer; }
+ul.evidence { margin: 6px 0 0; padding-left: 18px; font-size: 13px; color: #555; }
+.hint { margin: 6px 0 0; font-size: 13px; color: #555; }
+.reason { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-top: 8px; }
+.reason label { display: flex; flex-direction: column; flex: 1; font-size: 13px; color: #555; }
+
+/* Session list. */
+label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+label.inline input { flex: none; }
+.tablewrap { overflow-x: auto; border: 1px solid #e3e3e3; border-radius: 10px; background: #fff; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid #eee; }
+th { background: #f4f5f7; white-space: nowrap; }
+tr.gone td { color: #888; }
+ul.files { margin: 0; padding: 0; list-style: none; }
+ul.files li.conflict code { background: #fde8ea; }
+ul.files li.conflict b { color: #b00020; font-size: 12px; }
+.empty { color: #666; }
