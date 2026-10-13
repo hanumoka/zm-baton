@@ -158,6 +158,7 @@ export function Decisions({ onError, onRead, chipHost, query, onClearQuery }: Pr
       detail={detail?.decision ?? null}
       related={detail?.decision.decision.id === current.id ? detail.related : null}
       onJump={jump}
+      resolveDecision={(ref) => items?.find((d) => d.external_ref === ref)?.id ?? null}
       titleRef={titleRef}
       inSheet={narrow}
     />

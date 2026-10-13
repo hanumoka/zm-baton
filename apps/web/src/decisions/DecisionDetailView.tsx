@@ -2,6 +2,7 @@ import { useId, type Ref } from 'react';
 import { DecisionMark } from '../icons/DecisionMark';
 import { StageGlyph } from '../icons/StageGlyph';
 import { RowSkeleton } from '../ui/Group';
+import { Prose } from '../ui/Prose';
 import { ReadOnly } from '../ui/ReadOnly';
 import { isBlocked } from '../work/workView';
 import type { Decision, DecisionDetail, DecisionRef, WorkItem } from '../workApi';
@@ -15,8 +16,10 @@ type Props = {
   detail: DecisionDetail | null;
   /** Work that writes this decision's number; null until read. */
   related: WorkItem[] | null;
-  /** Go to another decision (a supersession link). */
+  /** Go to another decision (a supersession link, or a link to its file in the text). */
   onJump: (id: string) => void;
+  /** A decision number in the text (DEC-0048) to its id on this screen; null when not read. */
+  resolveDecision?: (ref: string) => string | null;
   /** The question takes the focus when Enter opens the decision from the list. */
   titleRef?: Ref<HTMLHeadingElement>;
   /** In the narrow sheet the sheet's bar already says where this is. */
@@ -29,7 +32,7 @@ type Props = {
  * what was chosen, what replaced what, the rest of the file in its own order, and beside it the
  * work that writes this decision's number.
  */
-export function DecisionDetailView({ decision, detail, related, onJump, titleRef, inSheet = false }: Props) {
+export function DecisionDetailView({ decision, detail, related, onJump, resolveDecision, titleRef, inSheet = false }: Props) {
   const titleId = useId();
   const d = detail !== null && detail.decision.id === decision.id ? detail : null;
   const it = d ? d.decision : decision;
@@ -85,7 +88,7 @@ export function DecisionDetailView({ decision, detail, related, onJump, titleRef
           <div className="dt-main">
             <section className="dt-sec">
               <h3>고른 안</h3>
-              {d.choice ? <p className="dt-text">{d.choice}</p> : <p className="dt-none">「결정」 절을 찾지 못했다. 정본 파일에서 본다.</p>}
+              {d.choice ? <Prose text={d.choice} resolveDecision={resolveDecision} onJump={onJump} /> : <p className="dt-none">「결정」 절을 찾지 못했다. 정본 파일에서 본다.</p>}
             </section>
             {(it.superseded_by || it.supersedes) && (
               <section className="dt-sec">
@@ -99,7 +102,7 @@ export function DecisionDetailView({ decision, detail, related, onJump, titleRef
             {otherSections(d).map((s, i) => (
               <section key={`${i}-${s.heading}`} className="dt-sec">
                 <h3>{s.heading}</h3>
-                {s.body ? <p className="dt-text">{s.body}</p> : <p className="dt-none">비어 있다.</p>}
+                {s.body ? <Prose text={s.body} resolveDecision={resolveDecision} onJump={onJump} /> : <p className="dt-none">비어 있다.</p>}
               </section>
             ))}
           </div>

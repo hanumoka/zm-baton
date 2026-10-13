@@ -147,13 +147,22 @@ export function writeView(v: DecisionsView): string {
 /**
  * The decision's first paragraph for a row's second line. Most zm-docs decisions open with the day
  * they were made (「2026-10-12 소유자가 정했다.」); the row already shows that day just before, so
- * the same day at the start is left out. Nothing else is changed.
+ * the same day at the start is left out. The preview is Markdown, so its marks (bold, code, a link's
+ * address) are taken off; the words stay.
  */
 export function previewText(d: Pick<Decision, 'choice_preview' | 'decided_on'>): string | null {
-  const text = d.choice_preview?.trim() ?? '';
+  const text = plainMarks(d.choice_preview?.trim() ?? '');
   const day = d.decided_on;
   const rest = day && (text === day || text.startsWith(`${day} `)) ? text.slice(day.length).trim() : text;
   return rest === '' ? null : rest;
+}
+
+/** Inline Markdown marks off one line of text: `[words](address)` keeps the words, `**`, `__` and backticks go. */
+export function plainMarks(text: string): string {
+  return text
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*|__|`/g, '')
+    .trim();
 }
 
 /**

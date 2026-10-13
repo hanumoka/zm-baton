@@ -354,6 +354,12 @@ describe('detail parts', () => {
     expect(previewText({ decided_on: '2026-10-12', choice_preview: null })).toBeNull();
   });
 
+  it('takes Markdown marks off the preview and keeps the words', () => {
+    expect(previewText({ decided_on: null, choice_preview: '1. **파일을 고치는 세션은** `worktree`에서 [DEC-0089](DEC-0089-guard.md)대로' })).toBe(
+      '1. 파일을 고치는 세션은 worktree에서 DEC-0089대로',
+    );
+  });
+
   it('opens closed work with closed work shown', () => {
     expect(workHref({ id: 'w', stage: 'in_progress' })).toBe('#work?item=w');
     expect(workHref({ id: 'w', stage: 'cancelled' })).toBe('#work?closed=1&item=w');
