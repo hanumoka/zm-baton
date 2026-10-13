@@ -32,27 +32,30 @@ var ClaudeHooks = []HookSpec{
 	{"SessionEnd", "session-end", 2},
 }
 
-// HookCommand is the command line of one hook. Forward slashes work in every shell Claude Code
-// uses for hooks, and the quotes keep a path with spaces in one piece.
-func HookCommand(exe, arg string) string {
-	return `"` + filepath.ToSlash(exe) + `" hook ` + arg
-}
+// HookExecutable is the executable a hook runs. Each hook names it apart from its arguments
+// (Claude Code's exec form: `command` plus `args`), so no shell reads the path and characters
+// such as spaces, quotes or `$` stay part of it.
+func HookExecutable(exe string) string { return filepath.ToSlash(exe) }
+
+// HookArgs are the arguments of one hook.
+func HookArgs(arg string) []string { return []string{"hook", arg} }
 
 // PluginFiles returns the marketplace folder's files, by path relative to its root, for the
 // executable at exe. The plugin loads in place, so writing them again takes effect at the
 // next session without reinstalling.
 func PluginFiles(exe string) (map[string][]byte, error) {
 	type hook struct {
-		Type    string `json:"type"`
-		Command string `json:"command"`
-		Timeout int    `json:"timeout"`
+		Type    string   `json:"type"`
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+		Timeout int      `json:"timeout"`
 	}
 	type entry struct {
 		Hooks []hook `json:"hooks"`
 	}
 	events := map[string][]entry{}
 	for _, spec := range ClaudeHooks {
-		events[spec.Event] = []entry{{Hooks: []hook{{"command", HookCommand(exe, spec.Arg), spec.Timeout}}}}
+		events[spec.Event] = []entry{{Hooks: []hook{{"command", HookExecutable(exe), HookArgs(spec.Arg), spec.Timeout}}}}
 	}
 	docs := map[string]any{
 		".claude-plugin/marketplace.json": map[string]any{

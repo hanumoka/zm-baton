@@ -185,9 +185,9 @@ func hooks(args []string, stdout io.Writer) error {
 	}
 	plugin := session.PluginName + "@" + session.MarketplaceName
 	if args[0] == "uninstall" {
-		fmt.Fprintln(stdout, "zm-baton은 Claude Code 설정을 고치지 않는다. 훅을 빼려면 아래를 실행한다:")
+		fmt.Fprintln(stdout, "zm-baton은 Claude Code 설정을 고치지 않는다. 훅을 빼려면 PowerShell에서 아래를 실행한다:")
 		if cd != "" {
-			fmt.Fprintf(stdout, "  cd \"%s\"\n", cd)
+			fmt.Fprintf(stdout, "  cd %s\n", psQuote(cd))
 		}
 		fmt.Fprintf(stdout, "  claude plugin uninstall %s --scope %s\n", plugin, scope)
 		fmt.Fprintf(stdout, "모든 곳에서 뺐으면 마켓플레이스도 지운다:\n  claude plugin marketplace remove %s\n", session.MarketplaceName)
@@ -202,15 +202,21 @@ func hooks(args []string, stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "Claude Code 플러그인을 만들었다: %s\n", root)
-	fmt.Fprintf(stdout, "훅이 부르는 명령: %s\n", session.HookCommand(exe, "<event>"))
-	fmt.Fprintln(stdout, "zm-baton은 Claude Code 설정을 고치지 않는다. 아래를 실행하면 Claude Code가 설정에 넣는다:")
-	fmt.Fprintf(stdout, "  claude plugin marketplace add \"%s\"      # 처음 한 번\n", root)
+	fmt.Fprintf(stdout, "훅이 부르는 실행 파일: %s\n", session.HookExecutable(exe))
+	fmt.Fprintln(stdout, "zm-baton은 Claude Code 설정을 고치지 않는다. PowerShell에서 아래를 실행하면 Claude Code가 설정에 넣는다:")
+	fmt.Fprintf(stdout, "  claude plugin marketplace add %s      # 처음 한 번\n", psQuote(root))
 	if cd != "" {
-		fmt.Fprintf(stdout, "  cd \"%s\"\n", cd)
+		fmt.Fprintf(stdout, "  cd %s\n", psQuote(cd))
 	}
 	fmt.Fprintf(stdout, "  claude plugin install %s --scope %s\n", plugin, scope)
 	fmt.Fprintln(stdout, "새로 여는 세션부터 적용된다. 실행 파일을 옮기면 이 명령만 다시 실행한다.")
 	return nil
+}
+
+// psQuote quotes a path for PowerShell as a single-quoted string, which PowerShell never
+// expands: `$`, backticks and double quotes stay literal, and a single quote is doubled.
+func psQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
 }
 
 func executable() (string, error) {

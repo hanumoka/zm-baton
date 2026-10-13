@@ -35,6 +35,7 @@ func TestPluginFilesCarryTheFiveHooksForTheExecutable(t *testing.T) {
 			Hooks []struct {
 				Type    string
 				Command string
+				Args    []string
 				Timeout int
 			}
 		}
@@ -45,14 +46,15 @@ func TestPluginFilesCarryTheFiveHooksForTheExecutable(t *testing.T) {
 	if len(hooks.Hooks) != len(ClaudeHooks) {
 		t.Fatalf("%d events, want %d", len(hooks.Hooks), len(ClaudeHooks))
 	}
-	want := `"` + filepath.ToSlash(exe) + `" hook `
 	for _, spec := range ClaudeHooks {
 		entries := hooks.Hooks[spec.Event]
 		if len(entries) != 1 || len(entries[0].Hooks) != 1 {
 			t.Fatalf("%s: %+v", spec.Event, entries)
 		}
 		h := entries[0].Hooks[0]
-		if h.Type != "command" || h.Command != want+spec.Arg || h.Timeout != spec.Timeout {
+		// Exec form: the executable alone in command, the rest in args, so no shell reads the path.
+		if h.Type != "command" || h.Command != filepath.ToSlash(exe) || len(h.Args) != 2 ||
+			h.Args[0] != "hook" || h.Args[1] != spec.Arg || h.Timeout != spec.Timeout {
 			t.Errorf("%s: %+v", spec.Event, h)
 		}
 		if strings.Contains(h.Command, `\`) {

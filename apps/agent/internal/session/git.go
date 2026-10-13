@@ -60,7 +60,10 @@ func (r *Repo) Rel(path string) (string, bool) {
 	if !filepath.IsAbs(p) {
 		return "", false
 	}
-	root := r.Root
+	// Claude Code and git may spell the same folder differently (a link, or on Windows a short
+	// 8.3 name such as RUNNER~1); both sides are resolved to one spelling before comparing.
+	p = canonical(p)
+	root := canonical(r.Root)
 	if runtime.GOOS == "windows" {
 		// Drive letters and folder names compare case-insensitively on Windows.
 		if !strings.HasPrefix(strings.ToLower(p)+`\`, strings.ToLower(root)+`\`) && !strings.EqualFold(p, root) {
@@ -73,6 +76,24 @@ func (r *Repo) Rel(path string) (string, bool) {
 		return "", false
 	}
 	return filepath.ToSlash(rel), true
+}
+
+// canonical resolves links and, on Windows, short names and letter case (filepath.EvalSymlinks
+// does both), so two spellings of one path compare equal. A path whose end does not exist, such
+// as a deleted file, resolves its nearest existing parent and keeps the rest.
+func canonical(p string) string {
+	tail := ""
+	for cur := p; ; {
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(resolved, tail)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		tail = filepath.Join(filepath.Base(cur), tail)
+		cur = parent
+	}
 }
 
 // HashObject is `git hash-object` of one file without storing an object. Empty when it fails.

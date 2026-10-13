@@ -50,7 +50,7 @@ func TestHooksInstallWritesOnlyItsOwnPluginAndShowsClaudeCommands(t *testing.T) 
 	if _, err := os.Stat(filepath.Join(project, ".claude")); !os.IsNotExist(err) {
 		t.Errorf("zm-baton touched the project's Claude Code settings: %v", err)
 	}
-	for _, want := range []string{"claude plugin marketplace add \"" + root + "\"", "cd \"" + project + "\"", "claude plugin install zm-baton@zm-baton-local --scope local"} {
+	for _, want := range []string{"claude plugin marketplace add " + psQuote(root), "cd " + psQuote(project), "claude plugin install zm-baton@zm-baton-local --scope local"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("output lacks %q:\n%s", want, out.String())
 		}
@@ -66,6 +66,24 @@ func TestHooksInstallWritesOnlyItsOwnPluginAndShowsClaudeCommands(t *testing.T) 
 	}
 	if _, err := os.Stat(root); err != nil {
 		t.Errorf("uninstall must leave the plugin for Claude Code to remove first: %v", err)
+	}
+}
+
+func TestPrintedPathsReachPowerShellUnchanged(t *testing.T) {
+	odd := `C:\work\it's $(Remove-Item x) ` + "`" + `n "quoted"`
+	if got := psQuote(odd); got != `'C:\work\it''s $(Remove-Item x) `+"`"+`n "quoted"'` {
+		t.Fatalf("psQuote = %s", got)
+	}
+	pwsh, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("pwsh is not installed")
+	}
+	out, err := exec.Command(pwsh, "-NoProfile", "-NonInteractive", "-Command", "Write-Output "+psQuote(odd)).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimRight(string(out), "\r\n"); got != odd {
+		t.Errorf("PowerShell read %q, want %q", got, odd)
 	}
 }
 
