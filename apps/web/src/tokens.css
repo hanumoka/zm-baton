@@ -1,0 +1,101 @@
+/*
+ * Design tokens: the only place where colours, type sizes, spacing, radii, shadows and motion
+ * get values. Everything else uses these names. See apps/web/DESIGN.md.
+ * Values come from the confirmed direction (2026-10-13): graphite neutrals in three layers,
+ * one petrol-teal accent, and status colours kept apart from the accent.
+ */
+:root {
+  /* Colour: neutrals from back to front (sidebar < canvas < paper), lines, ink */
+  --c-side: #e2e6e9;
+  --c-side-hover: #d8dde1;
+  --c-canvas: #eceff1;
+  --c-canvas-2: #dfe3e6;
+  --c-paper: #f8f9f9;
+  --c-rule: #cdd3d7;
+  --c-rule-soft: #d6dcdf;
+  --c-rule-strong: #aeb6bc;
+  --c-ink: #1c2125;
+  --c-ink-2: #535c64;
+  --c-ink-3: #868e95;
+
+  /* Colour: the one accent, only for the primary action, the current selection and focus */
+  --c-accent: #0b6a70;
+  --c-accent-hover: #08585d;
+  --c-accent-tint: #d3e4e4;
+  --c-on-accent: #ffffff;
+
+  /* Colour: status meanings, never mixed with the accent */
+  --c-block: #a12f3b;
+  --c-block-tint: #f4e4e6;
+  --c-warn: #855f0c;
+  --c-warn-tint: #f6eedb;
+
+  /* Colour: surfaces the browser draws */
+  --c-select: rgba(11, 106, 112, 0.22);
+  --c-scrim: rgba(28, 33, 37, 0.38);
+  --c-scroll: #b7bfc4;
+  --c-scroll-hover: #959ea5;
+  --c-tip: #1c2125;
+  --c-on-tip: #f8f9f9;
+
+  /* Type: Pretendard for text, a monospace for numbers, paths and keys */
+  --font-sans: "Pretendard Variable", Pretendard, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 18px;
+  --fs-2xl: 21px;
+  --lh-tight: 1.3;
+  --lh-row: 1.45;
+  --lh-body: 1.6;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semi: 600;
+  --fw-bold: 700;
+  --tracking-tight: -0.01em;
+
+  /* Spacing: a 4px grid */
+  --s-0: 2px;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+
+  /* Radius: tighter inside, softer outside; pills only for small labels */
+  --r-xs: 3px;
+  --r-sm: 5px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-pill: 999px;
+
+  /* Elevation: only where something lies on top of something else */
+  --sh-seg: 0 1px 2px rgba(28, 33, 37, 0.14), 0 0 0 1px rgba(28, 33, 37, 0.06);
+  --sh-tip: 0 2px 8px rgba(28, 33, 37, 0.2);
+  --sh-sheet: 0 -6px 24px rgba(28, 33, 37, 0.22);
+
+  /* Motion: only when a state changes */
+  --dur-fast: 150ms;
+  --dur-sheet: 220ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Sizes used by the layout */
+  --w-rail: 56px;
+  --w-side: 232px;
+  --w-list: 380px;
+  --h-cmd: 40px;
+  --h-chip: 32px;
+  --h-btn: 40px;
+  --h-btn-sm: 28px;
+  --icon: 16px;
+  --stroke: 1.5px;
+  --ring: 2px;
+  --rule: 1px;
+  --check: 14px;
+  --w-scroll: 10px;
+}
