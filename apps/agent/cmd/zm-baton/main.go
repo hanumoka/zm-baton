@@ -34,6 +34,8 @@ const usage = `zm-baton — connects AI sessions you open yourself to the zm-bat
   zm-baton import zm-docs [--repo DIR] [--ref REV] [--apply]
                                                copy zm-docs work items and decisions to the
                                                server; shows what would change unless --apply
+  zm-baton export --out FILE                   write every record of the server, with where it
+                                               came from, to a new JSON file
   zm-baton status                              show this device's connection
   zm-baton hook <event>                        called by executor hooks; not for people
 
@@ -60,6 +62,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return report(stderr, sessionCmd(args[1:], stdout))
 	case "import":
 		return report(stderr, importCmd(args[1:], stdout))
+	case "export":
+		return report(stderr, exportCmd(args[1:], stdout))
 	case "status":
 		return report(stderr, status(stdout))
 	case "help", "-h", "--help":
