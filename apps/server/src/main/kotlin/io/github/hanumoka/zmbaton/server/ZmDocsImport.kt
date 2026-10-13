@@ -31,6 +31,8 @@ data class ZmDocsImportIn(
 	val files: List<ImportFile>,
 	/** False (the default) only reports what would change. */
 	val apply: Boolean = false,
+	/** The commit the files were read from. Stored with each copy that this import changes. */
+	val commit: String? = null,
 )
 
 data class ImportCount(var created: Int = 0, var updated: Int = 0, var unchanged: Int = 0, var skipped: Int = 0)
@@ -73,7 +75,7 @@ class ZmDocsImportService(
 		private val DECISION_PATH = Regex("^docs/governance/decisions/(DEC-[0-9]{4,})-[^/]+\\.md$")
 		private val TASK_REF = Regex("^TSK-[0-9]{3,}$")
 		private val PROJECT_REF = Regex("^PRJ-[0-9]{3,}$")
-		private val DECISION_REF = Regex("^DEC-[0-9]{4,}$")
+		private val COMMIT = Regex("^[0-9a-f]{7,64}$")
 
 		/** zm-docs task states (registry/schemas/tasks.schema.json) as a stage and wait reasons. */
 		val STATE_TO_STAGE = mapOf(
@@ -90,7 +92,9 @@ class ZmDocsImportService(
 		val repoKey = req.repoKey.trim()
 		if (!SessionService.isRepoKey(repoKey)) throw BadRequestException("repo_key is missing or not a key")
 		if (req.files.size > MAX_FILES) throw BadRequestException("at most $MAX_FILES files")
-		val run = Run(repoKey)
+		val commit = req.commit?.trim()?.lowercase()?.ifEmpty { null }
+		if (commit != null && !COMMIT.matches(commit)) throw BadRequestException("commit must be a hex commit id")
+		val run = Run(repoKey, commit)
 		for (file in req.files) {
 			if (file.content.length > MAX_FILE_CHARS) throw BadRequestException("${file.path} is larger than $MAX_FILE_CHARS characters")
 		}
@@ -98,16 +102,16 @@ class ZmDocsImportService(
 			run.go(req.files)
 			sessions.audit(
 				"person", SessionService.OWNER, if (req.apply) "import.zm_docs.applied" else "import.zm_docs.dry_run", null, null,
-				mapOf("repo_key" to repoKey, "projects" to run.projects, "work_items" to run.workItems, "decisions" to run.decisions),
+				mapOf("repo_key" to repoKey, "commit" to commit, "projects" to run.projects, "work_items" to run.workItems, "decisions" to run.decisions),
 			)
 			if (!req.apply) status.setRollbackOnly()
 			ZmDocsImportOut(req.apply, run.projects, run.workItems, run.decisions, run.changes, run.warnings)
 		}
-		return result!!
+		return result
 	}
 
 	/** One import: counts, changes and warnings collected while it runs. */
-	private inner class Run(val repoKey: String) {
+	private inner class Run(val repoKey: String, val commit: String?) {
 		val projects = ImportCount()
 		val workItems = ImportCount()
 		val decisions = ImportCount()
@@ -218,7 +222,7 @@ class ZmDocsImportService(
 		}
 
 		private fun upsertTask(ref: String, fields: Map<String, Any?>) {
-			val gitRef = json.writeValueAsString(mapOf("repo_key" to repoKey, "path" to TASKS_PATH))
+			val gitRef = json.writeValueAsString(gitRef(TASKS_PATH))
 			val existing = jdbc.sql(
 				"""
 				select id, source_of_truth, git_ref ->> 'repo_key', title, stage, wait_reasons, wait_note, project_id,
@@ -335,7 +339,7 @@ class ZmDocsImportService(
 			val params = mapOf(
 				"id" to id, "org" to WorkItemService.ORG, "ref" to ref, "question" to question.take(1000), "status" to status,
 				"decided_on" to date(doc.front["date"], ref, "date"), "choice" to doc.choice(),
-				"sections" to json.writeValueAsString(doc.sections), "git" to json.writeValueAsString(mapOf("repo_key" to repoKey, "path" to path)),
+				"sections" to json.writeValueAsString(doc.sections), "git" to json.writeValueAsString(gitRef(path)),
 				"sha" to sha,
 			)
 			if (existing == null) {
@@ -385,6 +389,10 @@ class ZmDocsImportService(
 				.optional().orElse(null) ?: null.also { warnings += "$from: 대체 관계의 $ref 을(를) 찾지 못했다" }
 
 		// ------------------------------------------------------------ helpers
+
+		/** Where a copy came from: the repository, the file and, when known, the commit read. */
+		private fun gitRef(path: String): Map<String, String> =
+			listOfNotNull("repo_key" to repoKey, "path" to path, commit?.let { "commit" to it }).toMap()
 
 		private fun parseJson(content: String, path: String): Map<String, Any?>? =
 			try {

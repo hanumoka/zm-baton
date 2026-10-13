@@ -56,8 +56,8 @@ class ZmDocsImportTests @Autowired constructor(
 		"## 재검토 조건", "", "| 조건 | 판정일 |", "|---|---|", "| 불편하면 | 사건 발생 시 |",
 	)
 
-	private fun run(repo: String, apply: Boolean, vararg files: Pair<String, String>) =
-		imports.import(ZmDocsImportIn(repo, files.map { ImportFile(it.first, it.second) }, apply))
+	private fun run(repo: String, apply: Boolean, vararg files: Pair<String, String>, commit: String? = null) =
+		imports.import(ZmDocsImportIn(repo, files.map { ImportFile(it.first, it.second) }, apply, commit))
 
 	private fun byRef(ref: String): WorkItemDetail {
 		val id = jdbc.sql("select id from work_items where external_ref = :ref").param("ref", ref).query(String::class.java).single()
@@ -104,6 +104,7 @@ class ZmDocsImportTests @Autowired constructor(
 				task(refs[0], "open", prj), task(refs[1], "doing", prj), task(refs[2], "blocked", prj, blocker = "컨테이너가 안 뜬다"),
 				task(refs[3], "done", prj, closed = "2026-10-05"), task(refs[4], "dropped", null, closed = "2026-10-06"),
 			),
+			commit = "ABC1234DEF",
 		)
 		val stages = refs.map { byRef(it).item.stage }
 		assertEquals(listOf("ready", "in_progress", "in_progress", "done", "cancelled"), stages)
@@ -119,6 +120,7 @@ class ZmDocsImportTests @Autowired constructor(
 		assertNull(byRef(refs[4]).item.project)
 		assertEquals("git", done.item.sourceOfTruth)
 		assertEquals("registry/tasks.json", done.gitRef!!["path"])
+		assertEquals("abc1234def", done.gitRef["commit"])
 	}
 
 	@Test
@@ -176,7 +178,7 @@ class ZmDocsImportTests @Autowired constructor(
 		assertEquals("새 결정: 콜론이 있는 제목", d.decision.question)
 		assertEquals("accepted", d.decision.status)
 		assertEquals("2026-10-12", d.decision.decidedOn.toString())
-		assertEquals(listOf(p1, p2), d.decision.projects.map { it.externalRef })
+		assertEquals(listOf(p1, p2).sorted(), d.decision.projects.map { it.externalRef })
 		assertEquals(listOf("맥락", "결정", "재검토 조건"), d.sections.map { it.heading })
 		assertContains(d.sections.first().body, "## 이것은 코드 안의 줄이라 절이 아니다")
 		assertEquals("이렇게 한다. 첫 문단이다.\n\n둘째 문단이다.", d.choice)
@@ -202,6 +204,7 @@ class ZmDocsImportTests @Autowired constructor(
 		assertEquals(0, result.decisions.created)
 		assertEquals(3, result.warnings.size)
 		assertFailsWith<BadRequestException> { run("C:/Users/someone/repo", false) }
+		assertFailsWith<BadRequestException> { run(repo, false, commit = "not-a-commit") }
 	}
 
 	@Test
