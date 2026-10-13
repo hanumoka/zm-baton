@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { FINDS } from './Shell';
 import { CommandBar, isCommandShortcut } from './shell/CommandBar';
 import { commandTarget, exactScreen, matchScreen, NAV_GROUPS, screenFromHash, SCREENS, TAB_ITEMS } from './shell/screens';
 import { readSideOpen, SIDE_KEY, writeSideOpen } from './shell/sidePref';
@@ -152,6 +153,12 @@ describe('command line that also finds', () => {
     expect(html).toContain('placeholder="작업 찾기, 화면 이동은 &gt; 로 시작"');
     expect(html).toContain('aria-label="작업 찾기 또는 화면 이동"');
     expect(html).toContain('role="search"');
+  });
+
+  it('finds on the work and decisions screens, each saying what its words match', () => {
+    expect(Object.keys(FINDS).sort()).toEqual(['decisions', 'work']);
+    expect(FINDS.decisions).toEqual({ placeholder: '결정 찾기, 화면 이동은 > 로 시작', label: '결정 찾기(번호·질문·결정) 또는 화면 이동' });
+    expect(FINDS.work?.label).toBe('작업 찾기(제목·번호·다음 행동) 또는 화면 이동');
   });
 
   it('shows what Enter does for typed words', () => {

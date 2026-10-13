@@ -59,19 +59,6 @@ ul.files li.conflict b { color: var(--c-block); font-size: var(--fs-xs); }
 .empty { color: var(--c-ink-2); }
 .note { margin: var(--s-3) 0 0; font-size: var(--fs-sm); color: var(--c-ink-2); }
 
-/* Decision records (the work screen has its own styles in work/work.css). */
-.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
-.filters input.search { flex: 1; min-width: 160px; }
+/* The run test screen's list rows (App.tsx). */
 ul.list button span { min-width: 0; overflow-wrap: anywhere; }
-ul.list code { color: var(--c-ink-2); font-size: var(--fs-xs); }
 ul.list button small { white-space: nowrap; }
-em.wait { font-style: normal; font-size: var(--fs-xs); color: var(--c-warn); }
-section.detail { min-width: 0; padding: 12px 16px; border: 1px solid var(--c-rule); border-radius: var(--r-md); background: var(--c-paper); }
-section.detail h2 { margin: 0 0 4px; font-size: var(--fs-xl); overflow-wrap: anywhere; }
-section.detail h3 { font-size: var(--fs-md); margin: 16px 0 6px; color: var(--c-ink-2); }
-.meta { margin: 0 0 8px; font-size: var(--fs-sm); color: var(--c-ink-2); }
-.source { margin: 0 0 8px; padding: 6px 8px; font-size: var(--fs-sm); background: var(--c-canvas-2); border-radius: var(--r-sm); overflow-wrap: anywhere; }
-.filters button, .links button {
-  padding: 6px 12px; border: 1px solid var(--c-accent); background: var(--c-paper); color: var(--c-accent); border-radius: var(--r-sm); cursor: pointer; }
-section.doc .body { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-md); line-height: var(--lh-body); }
-.links { font-size: var(--fs-md); }

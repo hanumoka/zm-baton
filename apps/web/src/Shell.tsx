@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { App as RunTest } from './App';
-import { Decisions } from './Decisions';
+import { Decisions } from './decisions/Decisions';
 import { BUCKETS, newImmediate } from './inboxModel';
 import { Inbox } from './Inbox';
 import { Kit } from './kit/Kit';
@@ -16,6 +16,12 @@ import { usePoll } from './usePoll';
 import { Work } from './work/Work';
 
 const currentHash = () => (typeof window === 'undefined' ? '' : window.location.hash);
+
+/** What the command line says on a screen that finds through it; the words mean what the server's `q` matches. */
+export const FINDS: Partial<Record<ScreenId, Pick<Find, 'placeholder' | 'label'>>> = {
+  work: { placeholder: '작업 찾기, 화면 이동은 > 로 시작', label: '작업 찾기(제목·번호·다음 행동) 또는 화면 이동' },
+  decisions: { placeholder: '결정 찾기, 화면 이동은 > 로 시작', label: '결정 찾기(번호·질문·결정) 또는 화면 이동' },
+};
 
 /**
  * The Web screen: a sidebar on the left (a bottom tab bar on narrow screens), the command line
@@ -118,17 +124,14 @@ export function Shell() {
   }
 
   const counts = { inbox: items.length, sessions: sessions.filter((s) => s.state === 'live').length };
-  // The work screen finds through the command line; a leading > still opens a screen.
-  const find: Find | undefined =
-    screen === 'work'
-      ? {
-          value: findQ,
-          onChange: setFindQ,
-          placeholder: '작업 찾기, 화면 이동은 > 로 시작',
-          label: '작업 찾기(제목·번호·다음 행동) 또는 화면 이동',
-          onSubmit: () => content.current?.querySelector<HTMLElement>('[data-row][tabindex="0"]')?.focus(),
-        }
-      : undefined;
+  // The work and decisions screens find through the command line; a leading > still opens a screen.
+  const finds = FINDS[screen];
+  const find: Find | undefined = finds && {
+    value: findQ,
+    onChange: setFindQ,
+    ...finds,
+    onSubmit: () => content.current?.querySelector<HTMLElement>('[data-row][tabindex="0"]')?.focus(),
+  };
 
   return (
     <div className="app" ref={app} data-side={sideOpen ? 'open' : 'rail'}>
@@ -165,7 +168,15 @@ export function Shell() {
               onClearQuery={() => setFindQ('')}
             />
           )}
-          {screen === 'decisions' && <Decisions onError={failed('decisions')} onRead={() => cleared('decisions')} />}
+          {screen === 'decisions' && (
+            <Decisions
+              onError={failed('decisions')}
+              onRead={() => cleared('decisions')}
+              chipHost={chipHost}
+              query={isCommand(findQ) ? '' : findQ}
+              onClearQuery={() => setFindQ('')}
+            />
+          )}
           {screen === 'runs' && <RunTest />}
           {screen === 'kit' && <Kit />}
         </div>

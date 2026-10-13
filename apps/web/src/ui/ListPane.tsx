@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from 'react';
+import { useId, type ReactNode, type Ref } from 'react';
 import { Icon } from '../icons/Icon';
 import { rowKeys } from './rowKeys';
 
@@ -31,10 +31,12 @@ type Props = {
   onSelect: (id: string) => void;
   /** Enter on a row: the detail takes the focus (wide) or opens as a sheet (narrow). */
   onOpen: (id: string) => void;
+  /** The scrolling box that holds the rows. */
+  bodyRef?: Ref<HTMLDivElement>;
   children: ReactNode;
 };
 
-export function ListPane({ title, head, by, action, order, onSelect, onOpen, children }: Props) {
+export function ListPane({ title, head, by, action, order, onSelect, onOpen, bodyRef, children }: Props) {
   const titleId = useId();
   return (
     <section className="pane-list" aria-labelledby={titleId}>
@@ -54,7 +56,7 @@ export function ListPane({ title, head, by, action, order, onSelect, onOpen, chi
         </p>
         {action}
       </div>
-      <div className="pane-body" onKeyDown={rowKeys(order, onSelect, onOpen)}>
+      <div className="pane-body" ref={bodyRef} onKeyDown={rowKeys(order, onSelect, onOpen)}>
         {children}
       </div>
       <ListKeys />

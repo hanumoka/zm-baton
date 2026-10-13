@@ -35,6 +35,13 @@ kbd .ico { width: var(--fs-xs); height: var(--fs-xs); vertical-align: -1px; }
 .glyph .fill { fill: currentColor; stroke: none; }
 .glyph.is-block { color: var(--c-block); }
 
+/* Decision marks: diamonds, so a decision never reads as a work stage (icons/DecisionMark.tsx). */
+.dmark { width: var(--icon); height: var(--icon); flex: none; color: var(--c-ink); }
+.dmark .ring { fill: none; stroke: currentColor; stroke-width: var(--stroke); stroke-linecap: round; stroke-linejoin: round; }
+.dmark .fill { fill: currentColor; stroke: currentColor; stroke-width: var(--stroke); stroke-linejoin: round; }
+.dmark .dot { fill: currentColor; stroke: none; }
+.dmark:is(.is-superseded, .is-rejected) { color: var(--c-ink-2); }
+
 /* Tooltip: on hover and on keyboard focus, to the right of the element. */
 .tipped { position: relative; }
 .tipped::after {
@@ -250,7 +257,8 @@ kbd .ico { width: var(--fs-xs); height: var(--fs-xs); vertical-align: -1px; }
 .grp:first-of-type { border-top: 0; }
 .grp .n { color: var(--c-ink); }
 .grp .ico,
-.grp .glyph { color: var(--c-ink-2); }
+.grp .glyph,
+.grp .dmark { color: var(--c-ink-2); }
 .grp .glyph.is-block { color: var(--c-block); }
 .grp .grp-r { margin-left: auto; font-weight: var(--fw-regular); }
 .sub {

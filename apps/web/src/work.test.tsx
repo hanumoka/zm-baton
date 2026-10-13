@@ -1,6 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { DecisionList, DecisionView } from './Decisions';
 import { NewWork } from './work/NewWork';
 import { Work } from './work/Work';
 import { ChipRow, reviewSummary } from './work/WorkChips';
@@ -20,7 +19,7 @@ import {
   writeView,
   type ListState,
 } from './work/workView';
-import type { Decision, DecisionDetail, Move, Project, WorkItem, WorkItemDetail } from './workApi';
+import type { Move, Project, WorkItem, WorkItemDetail } from './workApi';
 import { historyLine, moveLabel, moveParts, toward, waitLabel, workTitle } from './workModel';
 
 const item = (over: Partial<WorkItem> = {}): WorkItem => ({
@@ -434,48 +433,5 @@ describe('work screen', () => {
     expect(html).not.toContain('<header>');
     // The search box moved to the command line.
     expect(html).not.toContain('type="search"');
-  });
-});
-
-const decision = (over: Partial<Decision> = {}): Decision => ({
-  id: 'dcs_a',
-  external_ref: 'DEC-0106',
-  question: '질문',
-  status: 'accepted',
-  decided_on: '2026-10-12',
-  projects: [{ id: 'prj_a', external_ref: 'PRJ-009', name: 'zm-baton' }],
-  choice_preview: '한다.',
-  supersedes: null,
-  superseded_by: null,
-  updated_at: '2026-10-13T00:00:00Z',
-  ...over,
-});
-
-describe('decision screens', () => {
-  it('lists decisions and marks the ones not accepted', () => {
-    const html = renderToStaticMarkup(
-      <DecisionList list={[decision(), decision({ id: 'dcs_b', external_ref: 'DEC-0001', status: 'superseded' })]} selected="dcs_a" onSelect={() => {}} />,
-    );
-    expect(html).toContain('class="selected"');
-    expect(html).toContain('대체됨');
-  });
-
-  it('shows every section, the source file and the supersession links', () => {
-    const d: DecisionDetail = {
-      decision: decision({ supersedes: { id: 'dcs_old', external_ref: 'DEC-0050', question: '예전' } }),
-      choice: '한다.',
-      sections: [
-        { heading: '맥락', body: '배경' },
-        { heading: '결정', body: '한다.' },
-      ],
-      source_of_truth: 'git',
-      git_ref: { path: 'docs/governance/decisions/DEC-0106-x.md', commit: 'abcdef1234567' },
-    };
-    const html = renderToStaticMarkup(<DecisionView detail={d} onSelect={() => {}} />);
-    expect(html).toContain('<h3>맥락</h3>');
-    expect(html).toContain('<h3>결정</h3>');
-    expect(html).toContain('docs/governance/decisions/DEC-0106-x.md');
-    expect(html).toContain('대체한 결정: <button>DEC-0050</button>');
-    expect(html).toContain('PRJ-009');
   });
 });
