@@ -70,20 +70,27 @@ func TestHooksInstallWritesOnlyItsOwnPluginAndShowsClaudeCommands(t *testing.T) 
 }
 
 func TestPrintedPathsReachPowerShellUnchanged(t *testing.T) {
-	odd := `C:\work\it's $(Remove-Item x) ` + "`" + `n "quoted"`
-	if got := psQuote(odd); got != `'C:\work\it''s $(Remove-Item x) `+"`"+`n "quoted"'` {
+	if got := psQuote(`C:\work\it's`); got != `'C:\work\it''s'` {
 		t.Fatalf("psQuote = %s", got)
 	}
 	pwsh, err := exec.LookPath("pwsh")
 	if err != nil {
 		t.Skip("pwsh is not installed")
 	}
-	out, err := exec.Command(pwsh, "-NoProfile", "-NonInteractive", "-Command", "Write-Output "+psQuote(odd)).Output()
-	if err != nil {
-		t.Fatal(err)
+	// Each PowerShell single-quote character tries to close the string early and run a command.
+	cases := []string{`C:\work\it's $(Remove-Item x) ` + "`" + `n "quoted"`}
+	for _, q := range psSingleQuotes {
+		cases = append(cases, `C:\work\a`+q+`; Write-Output INJECTED; `+q+`b`)
 	}
-	if got := strings.TrimRight(string(out), "\r\n"); got != odd {
-		t.Errorf("PowerShell read %q, want %q", got, odd)
+	for _, odd := range cases {
+		cmd := "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Write-Output " + psQuote(odd)
+		out, err := exec.Command(pwsh, "-NoProfile", "-NonInteractive", "-Command", cmd).Output()
+		if err != nil {
+			t.Fatalf("%q: %v", odd, err)
+		}
+		if got := strings.TrimRight(string(out), "\r\n"); got != odd {
+			t.Errorf("PowerShell read %q, want %q", got, odd)
+		}
 	}
 }
 

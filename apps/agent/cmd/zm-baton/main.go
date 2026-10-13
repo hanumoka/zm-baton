@@ -213,10 +213,18 @@ func hooks(args []string, stdout io.Writer) error {
 	return nil
 }
 
+// psSingleQuotes are the characters PowerShell reads as a single quote: the ASCII one and four
+// typographic ones (PowerShell language specification, "single-quote-character").
+var psSingleQuotes = []string{"'", "‘", "’", "‚", "‛"}
+
 // psQuote quotes a path for PowerShell as a single-quoted string, which PowerShell never
-// expands: `$`, backticks and double quotes stay literal, and a single quote is doubled.
+// expands: `$`, backticks and double quotes stay literal. Each single-quote character is
+// doubled with itself, which PowerShell reads back as that one character.
 func psQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	for _, q := range psSingleQuotes {
+		s = strings.ReplaceAll(s, q, q+q)
+	}
+	return "'" + s + "'"
 }
 
 func executable() (string, error) {
