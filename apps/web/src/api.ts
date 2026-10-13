@@ -21,6 +21,9 @@ export type Run = {
   late_reports: boolean;
   created_at: string;
   last_event_at: string | null;
+  // Added with the third stage-1 slice; an older server leaves them out.
+  claimed_at?: string | null;
+  last_activity_at?: string | null;
 };
 
 export type RunEvent = {

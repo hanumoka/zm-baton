@@ -147,6 +147,8 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
     update: (fields) => swallow(act((d) => workApi.update(d.item.id, d.item.version, fields))()),
     addWait: (reason, note) => swallow(act((d) => workApi.addWait(d.item.id, d.item.version, reason, note))()),
     removeWait: (reason) => swallow(act((d) => workApi.removeWait(d.item.id, d.item.version, reason))()),
+    delegate: (choice) => swallow(act((d) => workApi.delegate(d.item.id, d.item.version, choice))()),
+    withdraw: (runId) => swallow(act((d) => workApi.withdraw(runId, d.item.version))()),
   };
 
   function select(id: string) {
