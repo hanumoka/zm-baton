@@ -31,6 +31,9 @@ const usage = `zm-baton — connects AI sessions you open yourself to the zm-bat
                                                tell zm-baton what this session works on;
                                                --private keeps it and later ones unshared
   zm-baton session off                         stop reporting this session
+  zm-baton import zm-docs [--repo DIR] [--ref REV] [--apply]
+                                               copy zm-docs work items and decisions to the
+                                               server; shows what would change unless --apply
   zm-baton status                              show this device's connection
   zm-baton hook <event>                        called by executor hooks; not for people
 
@@ -55,6 +58,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return report(stderr, hooks(args[1:], stdout))
 	case "session":
 		return report(stderr, sessionCmd(args[1:], stdout))
+	case "import":
+		return report(stderr, importCmd(args[1:], stdout))
 	case "status":
 		return report(stderr, status(stdout))
 	case "help", "-h", "--help":

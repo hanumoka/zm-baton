@@ -80,13 +80,17 @@ type Result struct {
 	Reasons    []string `json:"reasons"`
 }
 
-// StatusError is a non-2xx answer.
+// StatusError is a non-2xx answer. Message is the server's reason when it gave one.
 type StatusError struct {
-	Op     string
-	Status int
+	Op      string
+	Status  int
+	Message string
 }
 
 func (e *StatusError) Error() string {
+	if e.Message != "" {
+		return fmt.Sprintf("%s: server answered HTTP %d: %s", e.Op, e.Status, e.Message)
+	}
 	return fmt.Sprintf("%s: server answered HTTP %d", e.Op, e.Status)
 }
 
@@ -161,7 +165,12 @@ func (c *Client) do(ctx context.Context, method, path, token string, in any, wan
 		return fmt.Errorf("%s: read answer: %w", op, err)
 	}
 	if resp.StatusCode != want {
-		return &StatusError{Op: op, Status: resp.StatusCode}
+		// The server's own refusals carry a reason written for a person; nothing else is kept.
+		var refusal struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(data, &refusal)
+		return &StatusError{Op: op, Status: resp.StatusCode, Message: oneLine(refusal.Message, 300)}
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -169,4 +178,13 @@ func (c *Client) do(ctx context.Context, method, path, token string, in any, wan
 		}
 	}
 	return nil
+}
+
+// oneLine keeps a server message on one line and at most max runes, so it cannot fake output.
+func oneLine(s string, max int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > max {
+		return string(r[:max-1]) + "…"
+	}
+	return s
 }
