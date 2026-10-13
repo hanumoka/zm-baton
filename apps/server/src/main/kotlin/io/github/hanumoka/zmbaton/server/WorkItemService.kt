@@ -84,7 +84,12 @@ data class WorkItemDetail(
 	@JsonProperty("read_only_reason") val readOnlyReason: String?,
 	val moves: List<MoveView>,
 	val history: List<HistoryEntry>,
+	/** Added with the third stage-1 slice: whether the work item can be handed to an AI now. */
+	val delegation: DelegationAvailability,
 )
+
+/** Whether a person can hand the work item to an AI now, and if not, why (contract "위임"). */
+data class DelegationAvailability(val allowed: Boolean, val reason: String?)
 
 data class TransitionIn(val to: String, val version: Long, val note: String? = null)
 
@@ -278,6 +283,7 @@ class WorkItemService(
 			facts.readOnlyReason,
 			Workflow.moves(facts).map { MoveView(it.target, it.path, it.allowed, it.reason, it.needsNote) },
 			history,
+			Workflow.delegationRefusal(facts).let { DelegationAvailability(it == null, it) },
 		)
 	}
 
@@ -308,6 +314,59 @@ class WorkItemService(
 		sessions.audit("person", SessionService.OWNER, "workflow.skipped_stages", "org", ORG,
 			mapOf("before" to before.sorted(), "after" to skipped.sorted()))
 		return workflow()
+	}
+
+	// ---------------------------------------------------------------- delegated runs
+
+	/** What a run reported that moves its work item (contract "단계"). */
+	enum class RunStep { STARTED, SUBMITTED }
+
+	/**
+	 * Locks the work item, checks the version the caller saw and returns the facts its moves and
+	 * its handoff depend on. For DelegationService, which writes in the same transaction.
+	 */
+	fun lockFacts(id: String, version: Long): Workflow.Facts = facts(lockEditable(id, version, checkSource = false))
+
+	/** Writes one line of the work item's history, acted by the owner. */
+	fun record(id: String, action: String, details: Map<String, Any?>) = history(id, action, details)
+
+	/**
+	 * Moves a work item along with its delegated run. A run that started takes `ready` to
+	 * `in_progress`: the run was accepted. A submitted result takes `in_progress` on to
+	 * `result_review`, or through it to `done` when the organisation skips result review. A work
+	 * item a person has moved elsewhere meanwhile stays where the person put it. Failed, cancelled
+	 * and lost runs leave the stage alone; the caller adds `outcome_unknown` when the contract says so.
+	 * The caller holds the run and work item locks in its transaction (RunService.ingest).
+	 */
+	fun followRun(id: String, runId: String, step: RunStep) {
+		val row = load(id, forUpdate = true) ?: return
+		if (row.sourceOfTruth != "product") return // a Git copy is changed only by an import
+		var stage = row.stage
+		if (stage == "ready") {
+			systemMove(id, runId, stage, listOf("in_progress"))
+			stage = "in_progress"
+		}
+		if (step == RunStep.SUBMITTED && stage == "in_progress") {
+			val move = Workflow.move(facts(row).copy(stage = stage, hasLiveRun = false), "result_review")
+			if (move.allowed) systemMove(id, runId, stage, move.path)
+		}
+	}
+
+	/** A move made by the server for a run; written to the history with the run as the actor. */
+	private fun systemMove(id: String, runId: String, from: String, path: List<String>) {
+		val stage = path.last()
+		val closing = stage in Workflow.CLOSED
+		jdbc.sql(
+			"""
+			update work_items
+			   set stage = :stage, version = version + 1, updated_at = now(),
+			       wait_reasons = case when :closing then '{}'::text[] else wait_reasons end,
+			       wait_note = case when :closing then null else wait_note end,
+			       closed_at = case when :closing then now() else null end
+			 where id = :id
+			""".trimIndent(),
+		).param("stage", stage).param("closing", closing).param("id", id).update()
+		sessions.audit("system", runId, "work_item.stage_changed", "wrk", id, mapOf("from" to from, "to" to stage, "path" to path, "run_id" to runId))
 	}
 
 	// ---------------------------------------------------------------- internals

@@ -1,5 +1,6 @@
 // Command zm-baton connects AI sessions a person opens directly (Claude Code for now) to the
-// zm-baton server (contract v1 "직접 연 AI 세션을 서버에 등록한다", protocol_version 2).
+// zm-baton server (contract v1 "직접 연 AI 세션을 서버에 등록한다", protocol_version 2), and
+// runs the work items a person hands to an AI on this device (`zm-baton agent`, contract "위임").
 //
 // Executor hooks call `zm-baton hook <event>`; a person runs login, hooks install, session
 // work and session off. Hooks always exit 0 and never print errors, so a stopped server never
@@ -36,6 +37,12 @@ const usage = `zm-baton — connects AI sessions you open yourself to the zm-bat
                                                server; shows what would change unless --apply
   zm-baton export --out FILE                   write every record of the server, with where it
                                                came from, to a new JSON file
+  zm-baton repo add [DIR] [--worktrees DIR]    let this device run handed-over work in a repository
+  zm-baton repo list                           show the repositories registered on this device
+  zm-baton repo remove DIR|KEY                 stop running handed-over work in a repository
+  zm-baton agent [--once] [--claude PATH] [--run-timeout D]
+                                               run the work handed to this device, each run in
+                                               its own worktree and branch; Ctrl+C stops
   zm-baton status                              show this device's connection
   zm-baton hook <event>                        called by executor hooks; not for people
 
@@ -64,6 +71,10 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return report(stderr, importCmd(args[1:], stdout))
 	case "export":
 		return report(stderr, exportCmd(args[1:], stdout))
+	case "repo":
+		return report(stderr, repoCmd(args[1:], stdout))
+	case "agent":
+		return agentCmd(args[1:], stderr)
 	case "status":
 		return report(stderr, status(stdout))
 	case "help", "-h", "--help":

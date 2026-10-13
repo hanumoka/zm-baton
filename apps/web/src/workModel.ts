@@ -98,8 +98,16 @@ export function historyLine(h: HistoryEntry): string {
     case 'work_item.stage_changed': {
       const path = (d.path as string[] | undefined) ?? [String(d.to ?? '')];
       const note = d.note ? ` — ${String(d.note)}` : '';
-      return `${stageLabel(String(d.from ?? ''))} → ${path.map(stageLabel).join(' → ')}${note}`;
+      // A delegated run moves its work item itself: started, then submitted.
+      const by = h.actor_kind === 'system' ? ' (AI 실행이 옮김)' : '';
+      return `${stageLabel(String(d.from ?? ''))} → ${path.map(stageLabel).join(' → ')}${note}${by}`;
     }
+    case 'work_item.delegated': {
+      const tools = (d.allowed_tools as string[] | undefined)?.join(', ') ?? '';
+      return `AI에게 맡김 (도구 ${tools}${d.base_branch ? `, 기준 ${String(d.base_branch)}` : ''})`;
+    }
+    case 'work_item.delegation_withdrawn':
+      return '맡긴 일을 거둠';
     case 'work_item.updated':
       return `고침: ${Object.keys(d).join(', ')}`;
     case 'work_item.wait_added':

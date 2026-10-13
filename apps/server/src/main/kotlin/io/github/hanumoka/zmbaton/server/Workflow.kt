@@ -8,7 +8,8 @@ package io.github.hanumoka.zmbaton.server
  * the two review stages, and the server then passes through them on its own. What the server
  * always checks is only what safety and conflict checks need: a responsible person, a matching
  * `version` (checked by the caller), no move into `in_progress` for an AI executor except by an
- * accepted run, and no cancelling while a run is alive.
+ * accepted run, and no cancelling while a run is alive. A delegated run moves its work item on its
+ * own (WorkItemService.followRun): started into `in_progress`, submitted on to `result_review`.
  */
 object Workflow {
 
@@ -96,6 +97,23 @@ object Workflow {
 			else -> null
 		}
 		return Move(target, path, reason == null, reason, needsNote)
+	}
+
+	/**
+	 * Why this work item cannot be handed to an AI now, or null when it can (contract "실행 권리
+	 * 청구" 1). Stage 1 hands over only the first run of a `ready` work item. Continuing an
+	 * `in_progress` one (an answer arrived, a result was sent back, a cut run resumes) comes with
+	 * resuming. A Git copy is refused: a run moves its stage, and only an import changes that copy.
+	 */
+	fun delegationRefusal(facts: Facts): String? = when {
+		facts.readOnlyReason != null ->
+			"${facts.readOnlyReason}. AI가 실행하면 단계가 바뀌므로 이 복사본은 맡길 수 없다. 「새 작업」으로 만들어 맡긴다"
+		facts.hasLiveRun -> "살아 있는 실행 시도가 있다. 끝나거나 거둔 뒤에 다시 맡긴다"
+		facts.stage == "ready" -> null
+		facts.stage in CLOSED -> "${label(facts.stage)}된 작업은 맡길 수 없다"
+		facts.stage in setOf("in_progress", "result_review") ->
+			"${label(facts.stage)} 단계다. 이어서 맡기기(반려·끊김 뒤 다시 실행)는 아직 없다. 「다시 계획하기」로 수행 준비까지 돌린 뒤 맡긴다"
+		else -> "${label(facts.stage)} 단계다. 수행 준비로 옮긴 뒤에 맡긴다"
 	}
 
 	private fun path(target: String, skipped: Set<String>): List<String> {

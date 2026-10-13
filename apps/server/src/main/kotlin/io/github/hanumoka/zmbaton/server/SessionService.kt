@@ -641,7 +641,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 	 * an scp-style `user@host:path`. Anything else, and local paths, give null. The length limit
 	 * applies to the result, so cutting can never leave half a credential behind.
 	 */
-	private fun cleanRemote(raw: String?): String? {
+	fun cleanRemote(raw: String?): String? {
 		val s = raw?.trim().orEmpty()
 		if (s.isEmpty() || s.length > 2000 || looksAbsolute(s) || s.startsWith(".") || s.startsWith("file:", ignoreCase = true)) {
 			return null
@@ -662,7 +662,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 	}
 
 	/** A path from the repository root with `/` separators, or null when it is absolute or climbs out. */
-	private fun relativePath(raw: String?): String? {
+	fun relativePath(raw: String?): String? {
 		val path = raw?.trim() ?: return null
 		if (path.isEmpty() || path.length > 500 || '\\' in path || looksAbsolute(path)) return null
 		val parts = path.split('/')

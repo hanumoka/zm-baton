@@ -71,6 +71,39 @@ func fakeClaude(mode string, args []string) int {
 	case "hang":
 		time.Sleep(60 * time.Second)
 		return 0
+	case "edit":
+		// A delegated run: it must run with zm-baton's own hooks off, then change files in its folder.
+		if os.Getenv("ZM_BATON_OFF") != "1" {
+			fmt.Fprintln(os.Stderr, "fake claude: ZM_BATON_OFF is not set")
+			return 7
+		}
+		tools, restricted := "", false
+		for i, a := range args {
+			if a == "--allowedTools" && i+1 < n {
+				tools = args[i+1]
+			}
+			restricted = restricted || a == "--restricted"
+		}
+		if !restricted {
+			fmt.Fprintln(os.Stderr, "fake claude: a delegated run must be restricted")
+			return 5
+		}
+		if err := os.WriteFile("README.md", []byte("changed by the run\n"), 0o644); err != nil {
+			return 6
+		}
+		if err := os.WriteFile("made-by-run.txt", []byte("new\n"), 0o644); err != nil {
+			return 6
+		}
+		// Tools report absolute paths; the connector must cut the worktree's out.
+		cwd, _ := os.Getwd()
+		made := filepath.Join(cwd, "made-by-run.txt")
+		emit(blocks("assistant", map[string]any{"type": "tool_use", "id": "toolu_w", "name": "Write",
+			"input": map[string]any{"file_path": made}}))
+		emit(blocks("user", map[string]any{"type": "tool_result", "tool_use_id": "toolu_w",
+			"content": "File created successfully at: " + made + " (also " + filepath.ToSlash(made) + ")"}))
+		emit(blocks("assistant", map[string]any{"type": "text", "text": "tools: " + tools + "; prompt: " + args[n-1]}))
+		emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": "done"})
+		return 0
 	}
 	return 8
 }
@@ -85,15 +118,19 @@ type fakeServer struct {
 
 	eventsStatus int  // if set, every event batch gets this HTTP status
 	rejectAll    bool // if set, every event is answered as rejected with HTTP 200
+
+	answers map[string]api.Claim // a claim answer per run id; others get a compat-test claim
+	queries []string             // the raw query of every poll
 }
 
 func newFakeServer(t *testing.T) (*fakeServer, *api.Client) {
 	t.Helper()
-	f := &fakeServer{taken: map[string]bool{}, events: map[string][]api.Event{}}
+	f := &fakeServer{taken: map[string]bool{}, events: map[string][]api.Event{}, answers: map[string]api.Claim{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		f.queries = append(f.queries, r.URL.RawQuery)
 		json.NewEncoder(w).Encode(f.pending)
 	})
 	mux.HandleFunc("POST /api/runs/{id}/claim", func(w http.ResponseWriter, r *http.Request) {
@@ -106,11 +143,15 @@ func newFakeServer(t *testing.T) (*fakeServer, *api.Client) {
 			return
 		}
 		f.taken[id] = true
+		if a, ok := f.answers[id]; ok {
+			json.NewEncoder(w).Encode(a)
+			return
+		}
 		json.NewEncoder(w).Encode(api.Claim{RunID: id, WorkItemID: "wrk_test", Generation: 3, LeaseSeconds: 45})
 	})
 	mux.HandleFunc("POST /api/runs/{id}/events", func(w http.ResponseWriter, r *http.Request) {
 		var b api.EventBatch
-		if err := json.NewDecoder(r.Body).Decode(&b); err != nil || b.ProtocolVersion != 1 {
+		if err := json.NewDecoder(r.Body).Decode(&b); err != nil || b.ProtocolVersion != api.ProtocolVersion {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -202,7 +243,7 @@ func TestExecuteReportsASuccessfulRun(t *testing.T) {
 	if sid, _ := started["session_id"].(string); len(sid) != 36 {
 		t.Fatalf("session id %v", started["session_id"])
 	}
-	if ended["phase"] != "ended" || ended["end_reason"] != "submitted" || ended["exit_code"] != 0.0 {
+	if ended["phase"] != "ended" || ended["end_reason"] != "submitted" || ended["exit_code"] != 0.0 || ended["executor_started"] != true {
 		t.Fatalf("ended payload %v", ended)
 	}
 	if evs[4].Payload["text"] != "echo: say hi" {
@@ -232,8 +273,13 @@ func TestExecuteMissingExecutorEndsFailed(t *testing.T) {
 	if got := r.Execute(context.Background(), api.Claim{RunID: "run_ms", Generation: 3}); got.EndReason != EndFailed {
 		t.Fatalf("result %+v", got)
 	}
-	if got := checkSequence(t, "run_ms", f.runEvents("run_ms")); !slices.Equal(got, []string{"error", "lifecycle"}) {
+	evs := f.runEvents("run_ms")
+	if got := checkSequence(t, "run_ms", evs); !slices.Equal(got, []string{"error", "lifecycle"}) {
 		t.Fatalf("kinds %v", got)
+	}
+	// The executor never started: the server must not mark the work item outcome_unknown.
+	if p := evs[1].Payload; p["executor_started"] != false || p["result_seen"] != false {
+		t.Fatalf("ended payload %v", p)
 	}
 }
 
@@ -301,6 +347,21 @@ func TestRunOnceSkipsOtherExecutorsAndLostClaims(t *testing.T) {
 	}
 	if len(f.runEvents("run_mine")) == 0 || len(f.runEvents("run_lost")) != 0 {
 		t.Fatal("events went to the wrong run")
+	}
+}
+
+func TestRunOnceLeavesDelegatedRunsToTheHandoffLoop(t *testing.T) {
+	f, c := newFakeServer(t)
+	f.pending = []api.PendingRun{
+		{ID: "run_dlg", WorkItemID: "wrk_1", Executor: "claude_code", DelegationID: "dlg_1", DeviceID: "dev_test", RepoKey: "git:x"},
+		{ID: "run_plain", WorkItemID: "wrk_2", Executor: "claude_code"},
+	}
+	r := newTestRunner(t, c, "success", 0)
+	if got, err := r.Run(context.Background(), true); err != nil || got.EndReason != EndSubmitted {
+		t.Fatalf("Run once: %+v %v", got, err)
+	}
+	if !slices.Equal(f.claims, []string{"run_plain"}) {
+		t.Fatalf("the compat loop claimed %v", f.claims)
 	}
 }
 

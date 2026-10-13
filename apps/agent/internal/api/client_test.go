@@ -70,7 +70,7 @@ func TestWireFormat(t *testing.T) {
 	if err != nil || res.Stored != 1 {
 		t.Fatalf("send %+v err %v", res, err)
 	}
-	if gotBody["protocol_version"] != 1.0 {
+	if gotBody["protocol_version"] != 2.0 {
 		t.Fatalf("protocol_version missing: %v", gotBody)
 	}
 	sent := gotBody["events"].([]any)[0].(map[string]any)
@@ -78,6 +78,32 @@ func TestWireFormat(t *testing.T) {
 		if _, ok := sent[k]; !ok {
 			t.Errorf("event field %q missing: %v", k, sent)
 		}
+	}
+}
+
+func TestDelegatedRunsForOneDevice(t *testing.T) {
+	var gotQuery string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		io.WriteString(w, `[{"id":"run_1","work_item_id":"wrk_1","executor":"claude_code","delegation_id":"dlg_1","device_id":"dev a","repo_key":"git:abc"}]`)
+	})
+	mux.HandleFunc("POST /api/runs/{id}/claim", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"run_id":"run_1","work_item_id":"wrk_1","generation":1,"lease_seconds":45,`+
+			`"delegation":{"id":"dlg_1","executor":"claude_code","repo_key":"git:abc","base_branch":"main","allowed_tools":["Read","Edit"]},`+
+			`"instruction":"do it","unknown_field":true}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c, _ := NewClient(srv.URL)
+	runs, err := c.PendingRunsFor(context.Background(), "dev a")
+	if err != nil || gotQuery != "state=requested&device_id=dev+a" || runs[0].RepoKey != "git:abc" || runs[0].DelegationID != "dlg_1" {
+		t.Fatalf("runs %+v query %q err %v", runs, gotQuery, err)
+	}
+	claim, err := c.Claim(context.Background(), "run_1", "dev a")
+	if err != nil || claim.Delegation == nil || claim.Delegation.BaseBranch != "main" ||
+		len(claim.Delegation.AllowedTools) != 2 || claim.Instruction != "do it" {
+		t.Fatalf("claim %+v err %v", claim, err)
 	}
 }
 
