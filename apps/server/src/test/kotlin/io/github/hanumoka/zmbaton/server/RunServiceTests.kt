@@ -197,7 +197,32 @@ class RunServiceTests @Autowired constructor(
 		val gen = service.claim(runId, "dev_1").generation
 		val result = service.ingest(runId, EventBatch(1, listOf(event(gen, 1, "chatter"), event(gen + 5, 2))))
 		assertEquals(EventResult(0, 0, 0, 2), result)
-		assertFailsWith<BadRequestException> { service.ingest(runId, EventBatch(2, listOf(event(gen, 3)))) }
+		assertFailsWith<BadRequestException> { service.ingest(runId, EventBatch(3, listOf(event(gen, 3)))) }
+		// Version 2 is known: the same event is stored.
+		assertEquals(EventResult(1, 0, 0, 0), service.ingest(runId, EventBatch(2, listOf(event(gen, 3)))))
+	}
+
+	@Test
+	fun `from protocol 2 a started executor that ended without its result leaves outcome_unknown whatever the reason`() {
+		for ((reason, unknown) in listOf("failed" to true, "cancelled" to true, "lost" to true)) {
+			val (workId, runId) = newRun()
+			val gen = service.claim(runId, "dev_1").generation
+			val ended = mapOf("phase" to "ended", "end_reason" to reason, "executor_started" to true, "result_seen" to false)
+			service.ingest(runId, EventBatch(2, listOf(event(gen, 1, "lifecycle", ended))))
+			assertEquals(if (unknown) "{outcome_unknown}" else "{}", workRow(workId)["wait_reasons"], reason)
+		}
+		// Not started: nothing was changed, so nothing is unknown. Version 1 without the flag: failed is not unknown.
+		val (notStarted, run1) = newRun()
+		val gen1 = service.claim(run1, "dev_1").generation
+		service.ingest(run1, EventBatch(2, listOf(event(gen1, 1, "lifecycle",
+			mapOf("phase" to "ended", "end_reason" to "failed", "executor_started" to false, "result_seen" to false)))))
+		assertEquals("{}", workRow(notStarted)["wait_reasons"])
+		val (legacy, run2) = newRun()
+		val gen2 = service.claim(run2, "dev_1").generation
+		service.ingest(run2, EventBatch(1, listOf(event(gen2, 1, "lifecycle", mapOf("phase" to "ended", "end_reason" to "failed")))))
+		assertEquals("{}", workRow(legacy)["wait_reasons"])
+		// A compat-test run (no delegation) does not move its work item.
+		assertEquals("ready", workRow(legacy)["stage"])
 	}
 
 	@Test

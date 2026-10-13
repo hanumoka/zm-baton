@@ -26,6 +26,12 @@ data class PendingRun(
 	val id: String,
 	@JsonProperty("work_item_id") val workItemId: String,
 	val executor: String,
+	// Added with the third stage-1 slice; null for a compat-test run, which has no delegation.
+	@JsonProperty("delegation_id") val delegationId: String? = null,
+	/** The device the delegation names: only it may claim the run. */
+	@JsonProperty("device_id") val deviceId: String? = null,
+	/** The repository the run works in, so a connector claims only runs for repositories it has. */
+	@JsonProperty("repo_key") val repoKey: String? = null,
 )
 
 data class ClaimRequest(@JsonProperty("device_id") val deviceId: String)
@@ -35,6 +41,19 @@ data class Claimed(
 	@JsonProperty("work_item_id") val workItemId: String,
 	val generation: Long,
 	@JsonProperty("lease_seconds") val leaseSeconds: Int,
+	// Added with the third stage-1 slice; null for a compat-test run.
+	val delegation: ClaimedDelegation? = null,
+	/** What the executor is asked to do, built by the server from the work item. */
+	val instruction: String? = null,
+)
+
+/** The part of a delegation the connector turns into executor options (contract "실행할 때 넘기는 것"). */
+data class ClaimedDelegation(
+	val id: String,
+	val executor: String,
+	@JsonProperty("repo_key") val repoKey: String,
+	@JsonProperty("base_branch") val baseBranch: String?,
+	@JsonProperty("allowed_tools") val allowedTools: List<String>,
 )
 
 data class EventIn(
@@ -71,14 +90,18 @@ class ApiController(private val service: RunService) {
 	fun createRun(@PathVariable id: String, @RequestBody body: CreateRun): RunCreated =
 		service.createRun(id, body.executor)
 
-	/** Work poll (contract v1 "전송 경로" 2): runs waiting to be claimed. */
+	/**
+	 * Work poll (contract v1 "전송 경로" 2): runs waiting to be claimed. With `device_id`, only the
+	 * delegated runs that device may claim.
+	 */
 	@GetMapping("/runs")
 	fun pendingRuns(
 		@RequestParam(defaultValue = "requested") state: String,
 		@RequestParam(defaultValue = "20") limit: Int,
+		@RequestParam(name = "device_id", required = false) deviceId: String?,
 	): List<PendingRun> {
 		if (state != "requested") throw BadRequestException("only state=requested can be polled")
-		return service.pendingRuns(limit.coerceIn(1, 100))
+		return service.pendingRuns(limit.coerceIn(1, 100), deviceId?.trim()?.ifEmpty { null })
 	}
 
 	@PostMapping("/runs/{id}/claim")
