@@ -1,11 +1,15 @@
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { Icon } from '../icons/Icon';
 import { StageGlyph } from '../icons/StageGlyph';
 import { EmptyState } from '../ui/EmptyState';
 import { GroupHead, RowSkeleton } from '../ui/Group';
+import { ListPane, type ListHead } from '../ui/ListPane';
+import { tabStop } from '../ui/rowKeys';
 import type { WorkItem } from '../workApi';
 import { stageLabel, waitLabel } from '../workModel';
-import { isBlocked, rowOrder, step, type Holder, type HolderGroup, type ListState } from './workView';
+import { isBlocked, rowOrder, type Holder, type HolderGroup, type ListState } from './workView';
+
+export type { ListHead } from '../ui/ListPane';
 
 const MARKS: Record<Holder, ReactNode> = {
   wait: <StageGlyph stage="in_progress" blocked />,
@@ -24,15 +28,6 @@ const GROUP_EMPTY: Record<Holder, { title: string; body?: string; sessions?: boo
   },
   person: { title: '사람이 든 작업이 없다' },
   done: { title: '완료하거나 취소한 작업이 없다' },
-};
-
-export type ListHead = {
-  /** 「열린 작업」 or 「모든 작업」. */
-  base: string;
-  /** How many rows show; null before the first read. */
-  count: number | null;
-  /** True when something narrows the list, so the count reads 「열린 작업 중 3건」. */
-  narrowed: boolean;
 };
 
 type Props = {
@@ -59,76 +54,32 @@ type Props = {
  */
 export function WorkList({ state, groups, head, selected, onSelect, onPick, onOpen, onNew, onClearFilters, onShowClosed, onReload }: Props) {
   const order = rowOrder(groups);
-  const tabbable = selected !== null && order.includes(selected) ? selected : (order[0] ?? null);
-
-  function onKeyDown(e: KeyboardEvent<HTMLDivElement>) {
-    const row = (e.target as HTMLElement).closest<HTMLElement>('[data-row]');
-    if (!row) return;
-    const id = row.dataset.row ?? null;
-    if (e.key === 'Enter' && id) {
-      e.preventDefault();
-      onOpen(id);
-      return;
-    }
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
-    e.preventDefault();
-    const next = step(order, id, e.key);
-    if (next === null || next === id) return;
-    onSelect(next);
-    e.currentTarget.querySelector<HTMLElement>(`[data-row="${CSS.escape(next)}"]`)?.focus();
-  }
-
   return (
-    <section className="wk-list" aria-labelledby="wk-list-t">
-      <div className="wk-head">
-        <h2 id="wk-list-t" className="sr">
-          작업 목록
-        </h2>
-        <p className="wk-count">
-          {head.base}
-          {head.count !== null && (
-            <>
-              {head.narrowed ? ' 중 ' : ' '}
-              <strong className="num">{head.count}</strong>건
-            </>
-          )}
-          <span className="wk-by">들고 있는 쪽으로 묶음</span>
-        </p>
+    <ListPane
+      title="작업 목록"
+      head={head}
+      by="들고 있는 쪽으로 묶음"
+      action={
         <button type="button" className="btn btn-primary" onClick={onNew}>
           <Icon name="plus" />새 작업
         </button>
-      </div>
-      <div className="wk-body" onKeyDown={onKeyDown}>
-        <ListBody
-          state={state}
-          groups={groups}
-          selected={selected}
-          tabbable={tabbable}
-          onPick={onPick}
-          onNew={onNew}
-          onClearFilters={onClearFilters}
-          onShowClosed={onShowClosed}
-          onReload={onReload}
-        />
-      </div>
-      <p className="wk-keys" aria-hidden="true">
-        <span>
-          <kbd>
-            <Icon name="arrow-up" />
-          </kbd>
-          <kbd>
-            <Icon name="arrow-down" />
-          </kbd>
-          옮기기
-        </span>
-        <span>
-          <kbd>Enter</kbd> 상세로
-        </span>
-        <span>
-          <kbd>Esc</kbd> 목록으로
-        </span>
-      </p>
-    </section>
+      }
+      order={order}
+      onSelect={onSelect}
+      onOpen={onOpen}
+    >
+      <ListBody
+        state={state}
+        groups={groups}
+        selected={selected}
+        tabbable={tabStop(order, selected)}
+        onPick={onPick}
+        onNew={onNew}
+        onClearFilters={onClearFilters}
+        onShowClosed={onShowClosed}
+        onReload={onReload}
+      />
+    </ListPane>
   );
 }
 
@@ -207,7 +158,7 @@ function ListBody({
       return (
         <>
           {groups.map((g) => (
-            <div key={g.holder} className="wk-grp" data-holder={g.holder}>
+            <div key={g.holder} className="pane-grp" data-holder={g.holder}>
               <GroupHead mark={MARKS[g.holder]} label={g.label} count={g.items.length} />
               {g.items.length === 0 ? (
                 <EmptyState
@@ -224,7 +175,7 @@ function ListBody({
                   {GROUP_EMPTY[g.holder].body}
                 </EmptyState>
               ) : (
-                <ul className="wk-rows">
+                <ul className="pane-rows">
                   {g.items.map((i) => (
                     <li key={i.id}>
                       <WorkRow item={i} selected={i.id === selected} tabbable={i.id === tabbable} onPick={onPick} />
@@ -242,7 +193,7 @@ function ListBody({
 /**
  * One row: the stage glyph and name, the number in monospace and the title; under them the
  * project, then the wait reason when the item is blocked or else its next action, cut to a line.
- * Below 1180px the project drops out of the second line (work.css), so the reason keeps its room.
+ * Below 1180px the project drops out of the second line (ui/panes.css), so the reason keeps its room.
  */
 export function WorkRow({
   item,
@@ -259,20 +210,20 @@ export function WorkRow({
   return (
     <button
       type="button"
-      className="wrow"
+      className="lrow"
       data-row={item.id}
       aria-current={selected ? 'true' : undefined}
       tabIndex={tabbable ? 0 : -1}
       onClick={() => onPick(item.id)}
     >
-      <span className="wrow-l1">
+      <span className="lrow-l1">
         <StageGlyph stage={item.stage} blocked={blocked} />
-        <span className="wrow-stage">{stageLabel(item.stage)}</span>
-        {item.external_ref && <code className="wrow-ref">{item.external_ref}</code>}
-        <span className="wrow-title">{item.title}</span>
+        <span className="lrow-state">{stageLabel(item.stage)}</span>
+        {item.external_ref && <code className="lrow-ref">{item.external_ref}</code>}
+        <span className="lrow-title">{item.title}</span>
       </span>
-      <span className="wrow-sub">
-        {item.project && <span className="wrow-proj">{item.project.name}</span>}
+      <span className="lrow-sub">
+        {item.project && <span className="lrow-proj">{item.project.name}</span>}
         {blocked ? (
           <>
             <span className="wrow-why">{item.wait_reasons.map(waitLabel).join(', ')}</span>

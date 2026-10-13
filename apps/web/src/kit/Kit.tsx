@@ -1,9 +1,11 @@
 import tokensCss from '../tokens.css?raw';
+import { STATUSES as DECISION_STATUSES } from '../decisions/decisionView';
 import { Icon, ICONS } from '../icons/Icon';
+import { DecisionMark } from '../icons/DecisionMark';
 import { StageGlyph } from '../icons/StageGlyph';
 import { EmptyState } from '../ui/EmptyState';
 import { GroupHead, GroupSubHead, RowSkeleton } from '../ui/Group';
-import { STAGES } from '../workModel';
+import { decisionStatusLabel, STAGES } from '../workModel';
 import { StateGallery } from './States';
 import { byPrefix, colourGroups, otherTokens, parseTokens, type Token } from './tokenList';
 
@@ -21,7 +23,7 @@ function TokenName({ t }: { t: Token }) {
 
 /**
  * The design kit (opened only by its address, #kit): the token values, every icon, each part in
- * its seven states, the stage glyphs, group heads, empty states and keys. A screen PR checks its
+ * its seven states, the stage glyphs, the decision marks, group heads, empty states and keys. A screen PR checks its
  * parts against this page; a new token or part shows here first.
  */
 export function Kit() {
@@ -139,6 +141,19 @@ export function Kit() {
             <li key={s.stage}>
               <StageGlyph stage={s.stage} blocked />
               <span>{s.label}, 막힘</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section aria-labelledby="kit-decisions">
+        <h2 id="kit-decisions">결정 상태 기호</h2>
+        <p className="kit-note">결정은 마름모라 작업 단계(원)와 섞이지 않는다. 모양만으로 넷이 갈리고, 옆에는 늘 상태 이름을 쓴다.</p>
+        <ul className="stage-list">
+          {DECISION_STATUSES.map((s) => (
+            <li key={s}>
+              <DecisionMark status={s} />
+              <span>{decisionStatusLabel(s)}</span>
             </li>
           ))}
         </ul>

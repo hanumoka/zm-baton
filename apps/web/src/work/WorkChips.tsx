@@ -2,6 +2,7 @@ import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '../icons/Icon';
 import { StageGlyph } from '../icons/StageGlyph';
+import { CheckChip, SelectChip } from '../ui/Chip';
 import type { Project, Stage } from '../workApi';
 import { SKIPPABLE, stageLabel } from '../workModel';
 import type { StageOption, WorkFilters } from './workView';
@@ -29,40 +30,30 @@ export function WorkChips({ host, ...props }: Props & { host: HTMLElement | null
 
 export function ChipRow({ filters, onFilters, projects, stages, blockedCount, skipped, onSkipped }: Props) {
   return (
-    <div className="wk-chips" role="group" aria-label="작업 거르기">
-      <label className="chip">
-        프로젝트
-        <select value={filters.projectId} onChange={(e) => onFilters({ projectId: e.target.value })} aria-label="프로젝트">
-          <option value="">전체</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name} ({p.open_work_items})
-            </option>
-          ))}
-        </select>
-        <Icon name="chevron-down" className="chev" />
-      </label>
-      <label className="chip">
-        단계
-        <select value={filters.stage} onChange={(e) => onFilters({ stage: e.target.value as Stage | '' })} aria-label="단계">
-          <option value="">전체</option>
-          {stages.map((o) => (
-            <option key={o.stage} value={o.stage}>
-              {o.label} ({o.count})
-            </option>
-          ))}
-        </select>
-        <Icon name="chevron-down" className="chev" />
-      </label>
-      <label className="chip">
-        <input type="checkbox" checked={filters.blocked} onChange={(e) => onFilters({ blocked: e.target.checked })} />
+    <div className="chip-row" role="group" aria-label="작업 거르기">
+      <SelectChip label="프로젝트" value={filters.projectId} onChange={(projectId) => onFilters({ projectId })}>
+        <option value="">전체</option>
+        {projects.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name} ({p.open_work_items})
+          </option>
+        ))}
+      </SelectChip>
+      <SelectChip label="단계" value={filters.stage} onChange={(stage) => onFilters({ stage: stage as Stage | '' })}>
+        <option value="">전체</option>
+        {stages.map((o) => (
+          <option key={o.stage} value={o.stage}>
+            {o.label} ({o.count})
+          </option>
+        ))}
+      </SelectChip>
+      <CheckChip checked={filters.blocked} onChange={(blocked) => onFilters({ blocked })}>
         <StageGlyph stage="in_progress" blocked />
         막힘만 <span className="n num">{blockedCount}</span>
-      </label>
-      <label className="chip">
-        <input type="checkbox" checked={filters.showClosed} onChange={(e) => onFilters({ showClosed: e.target.checked })} />
+      </CheckChip>
+      <CheckChip checked={filters.showClosed} onChange={(showClosed) => onFilters({ showClosed })}>
         완료·취소 보기
-      </label>
+      </CheckChip>
       <ReviewSetting skipped={skipped} onChange={onSkipped} />
     </div>
   );

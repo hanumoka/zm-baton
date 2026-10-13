@@ -1,6 +1,6 @@
 /*
- * Shared parts: icons, stage glyphs, tooltips, buttons, fields, checkboxes, selects, chips,
- * group heads, empty states and loading rows. Each part has seven states (DESIGN.md 「상태와 문구」);
+ * Shared parts: icons, stage glyphs, decision marks, tooltips, buttons, fields, checkboxes, selects,
+ * chips, group heads, empty states and loading rows. Each part has seven states (DESIGN.md 「상태와 문구」);
  * `is-hover`, `is-focus` and `is-active` hold a state on for the design kit.
  */
 
@@ -34,6 +34,13 @@ kbd .ico { width: var(--fs-xs); height: var(--fs-xs); vertical-align: -1px; }
 .glyph .ring { fill: none; stroke: currentColor; stroke-width: var(--stroke); stroke-linecap: round; }
 .glyph .fill { fill: currentColor; stroke: none; }
 .glyph.is-block { color: var(--c-block); }
+
+/* Decision marks: diamonds, so a decision never reads as a work stage (icons/DecisionMark.tsx). */
+.dmark { width: var(--icon); height: var(--icon); flex: none; color: var(--c-ink); }
+.dmark .ring { fill: none; stroke: currentColor; stroke-width: var(--stroke); stroke-linecap: round; stroke-linejoin: round; }
+.dmark .fill { fill: currentColor; stroke: currentColor; stroke-width: var(--stroke); stroke-linejoin: round; }
+.dmark .dot { fill: currentColor; stroke: none; }
+.dmark:is(.is-superseded, .is-rejected) { color: var(--c-ink-2); }
 
 /* Tooltip: on hover and on keyboard focus, to the right of the element. */
 .tipped { position: relative; }
@@ -226,6 +233,14 @@ kbd .ico { width: var(--fs-xs); height: var(--fs-xs); vertical-align: -1px; }
 .chip.is-loading select { color: var(--c-ink-2); }
 .chip.is-error { border-color: var(--c-block); }
 
+/* The row of chips a screen draws under the command line (#screen-chips); one line on narrow screens */
+.chip-row { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: var(--s-2); min-width: 0; }
+.chip-row .chip select { field-sizing: content; }
+.chip-row .chip :is(.glyph, .dmark) { flex: none; }
+@media (max-width: 760px) {
+  .chip-row { flex: none; flex-wrap: nowrap; }
+}
+
 /* Group heads: who holds the work now */
 .grp {
   display: flex;
@@ -242,7 +257,8 @@ kbd .ico { width: var(--fs-xs); height: var(--fs-xs); vertical-align: -1px; }
 .grp:first-of-type { border-top: 0; }
 .grp .n { color: var(--c-ink); }
 .grp .ico,
-.grp .glyph { color: var(--c-ink-2); }
+.grp .glyph,
+.grp .dmark { color: var(--c-ink-2); }
 .grp .glyph.is-block { color: var(--c-block); }
 .grp .grp-r { margin-left: auto; font-weight: var(--fw-regular); }
 .sub {

@@ -1,6 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { DecisionList, DecisionView } from './Decisions';
 import { NewWork } from './work/NewWork';
 import { Work } from './work/Work';
 import { ChipRow, reviewSummary } from './work/WorkChips';
@@ -20,7 +19,7 @@ import {
   writeView,
   type ListState,
 } from './work/workView';
-import type { Decision, DecisionDetail, Move, Project, WorkItem, WorkItemDetail } from './workApi';
+import type { Move, Project, WorkItem, WorkItemDetail } from './workApi';
 import { historyLine, moveLabel, moveParts, toward, waitLabel, workTitle } from './workModel';
 
 const item = (over: Partial<WorkItem> = {}): WorkItem => ({
@@ -260,10 +259,10 @@ describe('work list', () => {
 
   it('draws a row as glyph, stage, number and title, then the wait reason or the next action', () => {
     const html = list({ kind: 'rows' }, [blocked, plain], 'wrk_b');
-    expect(html).toContain('<span class="wrow-stage">수행</span><code class="wrow-ref">TSK-021</code><span class="wrow-title">Temporal을 배운다</span>');
+    expect(html).toContain('<span class="lrow-state">수행</span><code class="lrow-ref">TSK-021</code><span class="lrow-title">Temporal을 배운다</span>');
     expect(html).toContain('data-stage="in_progress"');
     expect(html).toContain('glyph is-block');
-    expect(html).toContain('<span class="wrow-proj">hanumoka-site</span><span class="wrow-why">다른 사정으로 막힘</span>');
+    expect(html).toContain('<span class="lrow-proj">hanumoka-site</span><span class="wrow-why">다른 사정으로 막힘</span>');
     expect(html).toContain('<span class="wrow-note">컨테이너가 안 뜬다</span>');
     // A blocked row says why it waits, not what comes next.
     expect(html).not.toContain('재시작 후 확인');
@@ -428,54 +427,11 @@ describe('work detail', () => {
 describe('work screen', () => {
   it('lays out the list and the detail with no description paragraph in its head', () => {
     const html = renderToStaticMarkup(<Work onError={() => {}} onRead={() => {}} chipHost={null} query="" onClearQuery={() => {}} />);
-    expect(html).toMatch(/^<main class="wk"><h1 class="sr">작업<\/h1><section class="wk-list"/);
-    expect(html).toContain('<section class="wk-detail" aria-label="작업 상세">');
+    expect(html).toMatch(/^<main class="panes wk"><h1 class="sr">작업<\/h1><section class="pane-list"/);
+    expect(html).toContain('<section class="pane-detail" aria-label="작업 상세">');
     expect(html).toContain('aria-busy="true"');
     expect(html).not.toContain('<header>');
     // The search box moved to the command line.
     expect(html).not.toContain('type="search"');
-  });
-});
-
-const decision = (over: Partial<Decision> = {}): Decision => ({
-  id: 'dcs_a',
-  external_ref: 'DEC-0106',
-  question: '질문',
-  status: 'accepted',
-  decided_on: '2026-10-12',
-  projects: [{ id: 'prj_a', external_ref: 'PRJ-009', name: 'zm-baton' }],
-  choice_preview: '한다.',
-  supersedes: null,
-  superseded_by: null,
-  updated_at: '2026-10-13T00:00:00Z',
-  ...over,
-});
-
-describe('decision screens', () => {
-  it('lists decisions and marks the ones not accepted', () => {
-    const html = renderToStaticMarkup(
-      <DecisionList list={[decision(), decision({ id: 'dcs_b', external_ref: 'DEC-0001', status: 'superseded' })]} selected="dcs_a" onSelect={() => {}} />,
-    );
-    expect(html).toContain('class="selected"');
-    expect(html).toContain('대체됨');
-  });
-
-  it('shows every section, the source file and the supersession links', () => {
-    const d: DecisionDetail = {
-      decision: decision({ supersedes: { id: 'dcs_old', external_ref: 'DEC-0050', question: '예전' } }),
-      choice: '한다.',
-      sections: [
-        { heading: '맥락', body: '배경' },
-        { heading: '결정', body: '한다.' },
-      ],
-      source_of_truth: 'git',
-      git_ref: { path: 'docs/governance/decisions/DEC-0106-x.md', commit: 'abcdef1234567' },
-    };
-    const html = renderToStaticMarkup(<DecisionView detail={d} onSelect={() => {}} />);
-    expect(html).toContain('<h3>맥락</h3>');
-    expect(html).toContain('<h3>결정</h3>');
-    expect(html).toContain('docs/governance/decisions/DEC-0106-x.md');
-    expect(html).toContain('대체한 결정: <button>DEC-0050</button>');
-    expect(html).toContain('PRJ-009');
   });
 });

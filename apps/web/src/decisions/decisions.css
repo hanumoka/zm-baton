@@ -1,0 +1,66 @@
+/*
+ * The decisions screen's own parts. The list-and-detail layout, the row and the detail head are
+ * the work screen's (ui/panes.css); here are the row's second line, the folded past group, the
+ * status on the facts line and the links to other decisions and to work. Every value is a token.
+ */
+
+/* Row: the date first, then the projects (gone below 1180px), what replaced it and the decision */
+.dc-date { margin-right: var(--s-3); }
+.dc-by { margin-right: var(--s-2); font-weight: var(--fw-semi); color: var(--c-ink); }
+
+/* 지난 것, folded: a line under the head says so and unfolds it */
+.dc-fold {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-1) var(--s-2);
+  margin: 0;
+  padding: var(--s-1) var(--s-2) var(--s-3) calc(var(--s-4) + var(--icon) + var(--s-2));
+  font-size: var(--fs-xs);
+  line-height: var(--lh-row);
+  color: var(--c-ink-2);
+}
+.dc-fold .btn { min-height: var(--h-btn-sm); padding: 0 var(--s-2); font-size: var(--fs-xs); }
+.dc-fold .btn:hover { background: var(--c-canvas-2); }
+
+/* Facts line */
+.dc-status { align-items: center; font-weight: var(--fw-semi); }
+.dt-facts .dc-status { align-self: center; }
+.dc-projects { flex-wrap: wrap; column-gap: var(--s-3); }
+.dc-projects span { display: inline-flex; align-items: baseline; gap: var(--s-1); }
+
+/* Links to other decisions and to work: the number, then the question or title, two lines at most */
+.dc-links { display: flex; flex-direction: column; gap: var(--s-2); margin: 0; padding: 0; list-style: none; }
+.dc-link-k { display: block; margin-bottom: var(--s-1); font-size: var(--fs-xs); line-height: var(--lh-row); color: var(--c-ink-2); }
+.dc-link {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-0);
+  width: 100%;
+  max-width: var(--w-text);
+  margin: 0 0 0 calc(var(--s-2) * -1);
+  padding: var(--s-1) var(--s-2);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-row);
+  color: var(--c-ink);
+  text-align: left;
+  text-decoration: none;
+}
+.dc-link:hover { background: var(--c-canvas-2); }
+.dc-link:hover .dc-link-t { text-decoration: underline; text-underline-offset: var(--underline-gap); }
+.dc-link:active { background: var(--c-side-hover); }
+.dc-link code { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.dc-link-l1 { display: flex; align-items: center; gap: var(--s-2); }
+.dc-link-t {
+  display: -webkit-box;
+  overflow: hidden;
+  font-weight: var(--fw-medium);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+.dc-note { margin: 0 0 var(--s-2); font-size: var(--fs-xs); line-height: var(--lh-row); color: var(--c-ink-2); }
+.dt-aside .dc-link { max-width: none; }

@@ -62,6 +62,11 @@ describe('design kit', () => {
     expect(html).toContain('수행, 막힘');
   });
 
+  it('shows the four decision marks, each with its name', () => {
+    for (const st of ['proposed', 'accepted', 'rejected', 'superseded']) expect(html).toContain(`data-status="${st}"`);
+    for (const label of ['제안', '채택', '기각', '대체됨']) expect(html).toContain(`<span>${label}</span>`);
+  });
+
   it('shows group heads for one person and for a team, three empty states and keys', () => {
     expect(html).toContain('1인 조직');
     expect(html).toContain('팀 조직');

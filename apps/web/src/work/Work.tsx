@@ -1,9 +1,13 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { screenFromHash } from '../shell/screens';
+import { useRef, useState, type KeyboardEvent } from 'react';
 import { Sheet } from '../shell/Sheet';
 import { useNarrow } from '../shell/useNarrow';
 import { EmptyState } from '../ui/EmptyState';
 import { RowSkeleton } from '../ui/Group';
+import { focusRow } from '../ui/rowKeys';
+import { useAddress } from '../ui/useAddress';
+import { useSettled } from '../ui/useSettled';
+import { useSheet } from '../ui/useSheet';
+import { useShownRow } from '../ui/useShownRow';
 import { usePoll } from '../usePoll';
 import { ApiError, workApi, type NewWorkItem, type Project, type Stage, type WorkItem, type WorkItemDetail } from '../workApi';
 import { NewWork } from './NewWork';
@@ -21,7 +25,6 @@ import {
   stageOptions,
   writeView,
   type WorkFilters,
-  type WorkView,
 } from './workView';
 
 type Props = {
@@ -35,18 +38,7 @@ type Props = {
   onClearQuery: () => void;
 };
 
-const currentHash = () => (typeof window === 'undefined' ? '' : window.location.hash);
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-/** The value after it has stopped changing for [ms], so typing sends one request, not one per letter. */
-function useSettled<T>(value: T, ms: number): T {
-  const [settled, setSettled] = useState(value);
-  useEffect(() => {
-    const id = setTimeout(() => setSettled(value), ms);
-    return () => clearTimeout(id);
-  }, [value, ms]);
-  return settled;
-}
 
 /**
  * Work items (FN-0201): the list and the detail side by side (DESIGN.md 「화면 배치」 3), the list
@@ -56,7 +48,7 @@ function useSettled<T>(value: T, ms: number): T {
  */
 export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) {
   const narrow = useNarrow();
-  const [view, setView] = useState<WorkView>(() => readView(currentHash()));
+  const [view, setView] = useAddress('work', readView, writeView);
   /** The last list the server returned, with the server-side filters it answered. */
   const [loaded, setLoaded] = useState<{ key: string; list: WorkItem[] } | null>(null);
   const [closedExist, setClosedExist] = useState<boolean | null>(null);
@@ -67,29 +59,13 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
   const [detail, setDetail] = useState<WorkItemDetail | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pane, setPane] = useState<'detail' | 'new'>('detail');
-  const [sheetOpen, setSheetOpen] = useState(false);
+  const sheet = useSheet();
   const [refresh, setRefresh] = useState(0);
   const q = useSettled(query.trim(), 200);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const root = useRef<HTMLElement>(null);
-  /** What had the focus before a sheet opened, to give it back when the sheet closes. */
-  const opener = useRef<HTMLElement | null>(null);
   const { selected } = view;
   const serverKey = `${view.projectId}|${view.showClosed}|${q}`;
-
-  useEffect(() => {
-    const next = writeView(view);
-    if (window.location.hash !== next) window.history.replaceState(window.history.state, '', next);
-  }, [view]);
-
-  // The address changed from outside (the sidebar's 작업, back and forward, a pasted link): follow it.
-  useEffect(() => {
-    const onHash = () => {
-      if (screenFromHash(window.location.hash) === 'work') setView(readView(window.location.hash));
-    };
-    window.addEventListener('hashchange', onHash);
-    return () => window.removeEventListener('hashchange', onHash);
-  }, []);
 
   usePoll(
     async (alive, signal) => {
@@ -117,7 +93,7 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
     },
   );
 
-  const showDetail = pane === 'detail' && (!narrow || sheetOpen);
+  const showDetail = pane === 'detail' && (!narrow || sheet.open);
   usePoll(
     async (alive, signal) => {
       if (selected === null || !showDetail) return;
@@ -141,23 +117,16 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
   const narrowed = hasChosenFilters(view) || q !== '';
   const current = selected === null ? null : (items?.find((i) => i.id === selected) ?? (detail?.item.id === selected ? detail.item : null));
 
-  // Wide, the detail is always beside the list: show the first row rather than an empty half.
-  const first = order[0] ?? null;
-  useEffect(() => {
-    if (!narrow && pane === 'detail' && selected === null && first !== null) setView((v) => ({ ...v, selected: first }));
-  }, [narrow, pane, selected, first]);
-
-  // A filter or search the person changed hides the shown item: show the first row that is left. Once the
-  // list for the new filter has arrived, and only then; an item that leaves the list after a move stays shown.
-  const filterKey = `${serverKey}|${view.stage}|${view.blocked}`;
-  const settled = loaded?.key === serverKey;
-  const lastFilter = useRef(filterKey);
-  const shown = order.join(' ');
-  useEffect(() => {
-    if (!settled || lastFilter.current === filterKey) return;
-    lastFilter.current = filterKey;
-    if (!narrow && selected !== null && !shown.split(' ').includes(selected)) setView((v) => ({ ...v, selected: first }));
-  }, [settled, filterKey, narrow, selected, shown, first]);
+  // Wide, the detail is always beside the list: the first row, or the first one a filter change leaves.
+  useShownRow({
+    fill: !narrow && pane === 'detail',
+    follow: !narrow,
+    selected,
+    order,
+    filterKey: `${serverKey}|${view.stage}|${view.blocked}`,
+    settled: loaded?.key === serverKey,
+    choose: (id) => setView((v) => ({ ...v, selected: id })),
+  });
 
   /** Runs one action on the shown item with the version shown; a refusal is shown with its reason. */
   const act = (run: (d: WorkItemDetail) => Promise<WorkItemDetail>) => async () => {
@@ -186,28 +155,21 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
     setPane('detail');
   }
 
-  function openSheet() {
-    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setSheetOpen(true);
-  }
-
   function closeSheet() {
-    setSheetOpen(false);
+    sheet.hide();
     setPane('detail');
-    const back = opener.current;
-    requestAnimationFrame(() => back?.focus());
   }
 
   /** Enter on a row, or a tap on a narrow screen: the detail takes the focus, or opens as a sheet. */
   function open(id: string) {
     select(id);
-    if (narrow) openSheet();
+    if (narrow) sheet.show();
     else requestAnimationFrame(() => titleRef.current?.focus());
   }
 
   function startNew() {
     setPane('new');
-    if (narrow) openSheet();
+    if (narrow) sheet.show();
   }
 
   function cancelNew() {
@@ -242,8 +204,7 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
     if (e.key !== 'Escape' || e.defaultPrevented || (e.target as HTMLElement).closest('input, textarea, select')) return;
     e.preventDefault();
     if (pane === 'new') setPane('detail');
-    const row = selected ? root.current?.querySelector<HTMLElement>(`[data-row="${CSS.escape(selected)}"]`) : null;
-    row?.focus();
+    focusRow(root.current, selected);
   }
 
   const stageFiltered = items ? filterItems(items, { stage: view.stage, blocked: false }) : [];
@@ -270,7 +231,7 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
     ) : null; // an empty list already says why in its own pane
 
   return (
-    <main className="wk" ref={root}>
+    <main className="panes wk" ref={root}>
       <h1 className="sr">작업</h1>
       <WorkChips
         host={chipHost}
@@ -303,11 +264,11 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
         onReload={() => setRefresh((r) => r + 1)}
       />
       {!narrow && (
-        <section className="wk-detail" aria-label={pane === 'new' ? '새 작업' : '작업 상세'} onKeyDown={onDetailKey}>
+        <section className="pane-detail" aria-label={pane === 'new' ? '새 작업' : '작업 상세'} onKeyDown={onDetailKey}>
           {detailPane}
         </section>
       )}
-      {narrow && sheetOpen && (
+      {narrow && sheet.open && (
         <Sheet title={pane === 'new' ? '새 작업' : (current?.external_ref ?? '작업 상세')} onClose={closeSheet}>
           {detailPane}
         </Sheet>

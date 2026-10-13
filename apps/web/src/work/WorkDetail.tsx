@@ -2,6 +2,7 @@ import { useId, useState, type Ref } from 'react';
 import { Icon } from '../icons/Icon';
 import { StageGlyph } from '../icons/StageGlyph';
 import { RowSkeleton } from '../ui/Group';
+import { ReadOnly } from '../ui/ReadOnly';
 import type { Move, Project, Stage, WorkItem, WorkItemDetail } from '../workApi';
 import { at, historyLine, moveParts, STAGES, waitLabel } from '../workModel';
 import { isBlocked, isClosed } from './workView';
@@ -40,18 +41,18 @@ export function WorkDetail({ item, detail, projects, skipped, actions, error, ti
   const it = d ? d.item : item;
   const editable = d !== null && d.read_only_reason === null;
   return (
-    <article className="wd" aria-labelledby={titleId}>
+    <article className="dt" aria-labelledby={titleId}>
       {!inSheet && (
-        <nav className="wd-crumb" aria-label="위치">
+        <nav className="dt-crumb" aria-label="위치">
           <span>작업</span>
           <span aria-hidden="true">/</span>
           {it.external_ref ? <code>{it.external_ref}</code> : <span>여기서 만든 작업</span>}
         </nav>
       )}
-      <h2 id={titleId} ref={titleRef} className="wd-title" tabIndex={-1}>
+      <h2 id={titleId} ref={titleRef} className="dt-title" tabIndex={-1}>
         {it.title}
       </h2>
-      <dl className="wd-facts">
+      <dl className="dt-facts">
         <div>
           <dt>프로젝트</dt>
           <dd>
@@ -80,13 +81,13 @@ export function WorkDetail({ item, detail, projects, skipped, actions, error, ti
           </div>
         )}
       </dl>
-      {d?.read_only_reason && <ReadOnly detail={d} />}
+      {d?.read_only_reason && <ReadOnly gitRef={d.git_ref} reason={d.read_only_reason} />}
       <StagePath stage={it.stage} blocked={isBlocked(it)} skipped={skipped} />
       {d === null ? (
         <RowSkeleton rows={3} />
       ) : (
-        <div className="wd-grid">
-          <div className="wd-main">
+        <div className="dt-grid">
+          <div className="dt-main">
             {error && (
               <p role="alert" className="wd-refused">
                 <Icon name="alert" />
@@ -98,10 +99,10 @@ export function WorkDetail({ item, detail, projects, skipped, actions, error, ti
             {editable && !isClosed(it) && <WaitControls reasons={it.wait_reasons} onAdd={actions.addWait} />}
             {editable && <EditFields key={`${it.id}:${it.version}`} detail={d} projects={projects} onSave={actions.update} />}
           </div>
-          <aside className="wd-aside" aria-labelledby={`${titleId}-h`}>
+          <aside className="dt-aside" aria-labelledby={`${titleId}-h`}>
             <h3 id={`${titleId}-h`}>이력</h3>
             {d.history.length === 0 ? (
-              <p className="wd-none">아직 남은 이력이 없다.</p>
+              <p className="dt-none">아직 남은 이력이 없다.</p>
             ) : (
               <ol className="wd-hist">
                 {d.history.map((h, i) => (
@@ -118,31 +119,6 @@ export function WorkDetail({ item, detail, projects, skipped, actions, error, ti
         </div>
       )}
     </article>
-  );
-}
-
-/** 「읽기만 한다」 with where the source of truth is: the Git file and the commit it was read at. */
-function ReadOnly({ detail }: { detail: WorkItemDetail }) {
-  const path = detail.git_ref?.path;
-  const commit = detail.git_ref?.commit;
-  return (
-    <p className="wd-ro">
-      <Icon name="lock" />
-      <strong>읽기만 한다</strong>
-      {path ? (
-        <span>
-          정본은 Git 파일 <code>{path}</code>
-          {commit && (
-            <>
-              {' '}
-              읽은 커밋 <code>{commit.slice(0, 10)}</code>
-            </>
-          )}
-        </span>
-      ) : (
-        <span>{detail.read_only_reason}</span>
-      )}
-    </p>
   );
 }
 
@@ -183,18 +159,18 @@ function Fields({ detail, editable, onRemoveWait }: { detail: WorkItemDetail; ed
   const { item } = detail;
   return (
     <>
-      <section className="wd-sec">
+      <section className="dt-sec">
         <h3>다음 행동</h3>
-        {item.next_action ? <p className="wd-text">{item.next_action}</p> : <p className="wd-none">적혀 있지 않다.</p>}
+        {item.next_action ? <p className="dt-text">{item.next_action}</p> : <p className="dt-none">적혀 있지 않다.</p>}
       </section>
-      <section className="wd-sec">
+      <section className="dt-sec">
         <h3>수락 조건</h3>
-        {detail.acceptance ? <p className="wd-text">{detail.acceptance}</p> : <p className="wd-none">적혀 있지 않다.</p>}
+        {detail.acceptance ? <p className="dt-text">{detail.acceptance}</p> : <p className="dt-none">적혀 있지 않다.</p>}
       </section>
-      <section className="wd-sec">
+      <section className="dt-sec">
         <h3>대기 사유</h3>
         {item.wait_reasons.length === 0 ? (
-          <p className="wd-none">없다.</p>
+          <p className="dt-none">없다.</p>
         ) : (
           <ul className="wd-waits">
             {item.wait_reasons.map((r) => (
@@ -208,20 +184,20 @@ function Fields({ detail, editable, onRemoveWait }: { detail: WorkItemDetail; ed
                     </button>
                   )}
                 </p>
-                {r === 'waiting_other' && item.wait_note && <p className="wd-text">{item.wait_note}</p>}
+                {r === 'waiting_other' && item.wait_note && <p className="dt-text">{item.wait_note}</p>}
               </li>
             ))}
           </ul>
         )}
       </section>
-      <section className="wd-sec">
+      <section className="dt-sec">
         <h3>참조 문서</h3>
         {detail.source_ref ? (
-          <p className="wd-text">
+          <p className="dt-text">
             <code>{detail.source_ref}</code>
           </p>
         ) : (
-          <p className="wd-none">없다.</p>
+          <p className="dt-none">없다.</p>
         )}
       </section>
     </>
@@ -240,7 +216,7 @@ function Moves({ moves, from, onMove }: { moves: Move[]; from: Stage; onMove: (t
   const main = moves.find((m) => m.target !== 'cancelled' && order(m.target) > order(from));
   const reasons = [...new Set(moves.filter((m) => !m.allowed).map((m) => m.reason ?? '이유를 받지 못했다'))];
   return (
-    <section className="wd-sec">
+    <section className="dt-sec">
       <h3>다음 단계</h3>
       <div className="wd-moves">
         {moves.map((m) => {
@@ -306,7 +282,7 @@ function Moves({ moves, from, onMove }: { moves: Move[]; from: Stage; onMove: (t
 function WaitControls({ reasons, onAdd }: { reasons: string[]; onAdd: (reason: string, note?: string) => Promise<void> }) {
   const [note, setNote] = useState('');
   return (
-    <section className="wd-sec">
+    <section className="dt-sec">
       <h3>막힘 표시</h3>
       <form
         className="wd-form"
@@ -354,7 +330,7 @@ function EditFields({
   const [open, setOpen] = useState(false);
   if (!open) {
     return (
-      <div className="wd-sec">
+      <div className="dt-sec">
         <button type="button" className="btn" onClick={() => setOpen(true)}>
           내용 고치기
         </button>
@@ -368,7 +344,7 @@ function EditFields({
   );
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
   return (
-    <section className="wd-sec">
+    <section className="dt-sec">
       <h3>내용 고치기</h3>
       <form
         className="wd-edit"

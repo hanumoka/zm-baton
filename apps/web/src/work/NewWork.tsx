@@ -35,7 +35,7 @@ export function NewWork({ projects, defaultProject, onCreate, onCancel, inSheet 
         });
       }}
     >
-      <h2 id={titleId} className={inSheet ? 'sr' : 'wd-title'}>
+      <h2 id={titleId} className={inSheet ? 'sr' : 'dt-title'}>
         새 작업
       </h2>
       <p className="wn-lead">여기서 만든 작업은 정본이 zm-baton이라 여기서 고치고 단계를 넘긴다.</p>

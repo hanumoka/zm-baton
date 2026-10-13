@@ -1,0 +1,30 @@
+/* Markdown from zm-docs records (src/ui/Prose.tsx): body text in the detail's reading width */
+.prose { line-height: var(--lh-body); overflow-wrap: anywhere; }
+.prose > :first-child { margin-top: 0; }
+.prose > :last-child { margin-bottom: 0; }
+.prose p,
+.prose ul,
+.prose ol,
+.prose table,
+.prose blockquote,
+.prose pre { margin: 0 0 var(--s-3); }
+.prose ul,
+.prose ol { padding-left: var(--s-6); }
+.prose li + li { margin-top: var(--s-1); }
+.prose li > ul,
+.prose li > ol { margin: var(--s-1) 0 0; }
+.prose li > p { margin: 0; }
+.prose strong { font-weight: var(--fw-semi); }
+.prose h4 { margin: var(--s-4) 0 var(--s-2); font-size: var(--fs-md); font-weight: var(--fw-semi); line-height: var(--lh-row); }
+.prose code { padding: 0 var(--s-1); font-family: var(--font-mono); font-size: var(--fs-sm); background: var(--c-canvas); border-radius: var(--r-xs); }
+.prose pre { padding: var(--s-3); overflow-x: auto; background: var(--c-canvas); border-radius: var(--r-sm); }
+.prose pre code { padding: 0; background: none; }
+.prose blockquote { padding-left: var(--s-3); color: var(--c-ink-2); border-left: var(--rule) solid var(--c-rule-strong); }
+.prose hr { margin: var(--s-4) 0; border: 0; border-top: var(--rule) solid var(--c-rule); }
+.prose table { display: block; max-width: 100%; overflow-x: auto; font-size: var(--fs-sm); border-collapse: collapse; }
+.prose th,
+.prose td { padding: var(--s-1) var(--s-2); text-align: left; vertical-align: top; border: var(--rule) solid var(--c-rule); }
+.prose th { font-weight: var(--fw-semi); background: var(--c-canvas); }
+.prose a { color: var(--c-accent); text-underline-offset: var(--underline-gap); }
+.prose a:hover { color: var(--c-accent-hover); }
+.prose-alt { color: var(--c-ink-2); }
