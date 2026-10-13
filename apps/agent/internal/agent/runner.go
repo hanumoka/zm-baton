@@ -1,5 +1,7 @@
 // Package agent is the stage-1 local connector: it polls for requested runs,
 // claims one, runs Claude Code without a shell and reports its output as events.
+// Runner is the compat-test loop (a fixed folder and prompt); Handoff runs delegated work
+// items, each in its own Git worktree. Both execute a claimed run through ExecuteJob.
 package agent
 
 import (
@@ -10,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -29,12 +33,20 @@ const (
 	EndLost      = "lost"
 )
 
+// KindGitChanges is the report kind of a run's Git change list (contract v1 "보고 한 건의 모양",
+// protocol_version 2). The connector makes it, not the executor, so it is not an activity kind.
+const KindGitChanges = "git_changes"
+
 // pipeGrace is how long stdout may stay open after the executor exits
 // (for example held by a grandchild) before it is closed.
 const pipeGrace = 5 * time.Second
 
 // defaultCloseTimeout bounds how long the last events may take to reach the server.
 const defaultCloseTimeout = 30 * time.Second
+
+// defaultChangesInterval is how often a running job's Git change list is sent (contract v1
+// "보고 한 건의 모양": every 60 seconds while running, and at the end).
+const defaultChangesInterval = 60 * time.Second
 
 // Result is how one run ended on this device, and whether the server got its events.
 type Result struct {
@@ -56,8 +68,36 @@ type Config struct {
 	RunTimeout    time.Duration // 0 means no limit
 	FlushInterval time.Duration // 0 means report.DefaultInterval
 	CloseTimeout  time.Duration // 0 means defaultCloseTimeout
-	Log           *slog.Logger
+	// ChangesInterval is how often a job with a Git change list sends it; 0 means 60 seconds.
+	ChangesInterval time.Duration
+	Log             *slog.Logger
 }
+
+// Job is what one claimed run executes. The compat-test loop builds it from its flags; the
+// handoff loop builds it from the delegation and the run's own worktree.
+type Job struct {
+	Workdir      string
+	Prompt       string
+	AllowedTools string // comma-separated, for --allowedTools
+	// Workspace, when set, goes into the lifecycle events: the run record keeps it (contract
+	// "실행마다 별도 작업 트리" 8). It must hold no path on this device.
+	Workspace map[string]any
+	// Changes, when set, returns the git_changes payload; final is true once the executor ended.
+	Changes func(ctx context.Context, final bool) (map[string]any, error)
+	// Env is added to the executor's environment.
+	Env []string
+	// Restricted runs Claude Code with --restricted, so the person's own settings cannot widen
+	// AllowedTools (claude.Options.Restricted).
+	Restricted bool
+	// HideDir, when set, is a folder on this device whose path is cut out of the executor's
+	// activity before it is sent: tools report absolute paths, and the run's worktree is one.
+	HideDir string
+}
+
+// Prepare makes the job after the claim, for example the run's worktree. An error ends the run
+// failed before any executor started; the error text stays in the local log. The Job it returns
+// with an error still counts: its Workspace is reported if one was made.
+type Prepare func(ctx context.Context, log *slog.Logger) (Job, error)
 
 // Runner executes claimed runs one at a time.
 type Runner struct {
@@ -65,19 +105,26 @@ type Runner struct {
 	log *slog.Logger
 }
 
-// New checks the settings that every run needs.
+// New checks the settings that every compat-test run needs: the fixed folder and prompt.
 func New(cfg Config) (*Runner, error) {
 	switch {
-	case cfg.Client == nil:
-		return nil, errors.New("client is required")
-	case strings.TrimSpace(cfg.DeviceID) == "":
-		return nil, errors.New("device id is required")
 	case strings.TrimSpace(cfg.Workdir) == "":
 		return nil, errors.New("workdir is required")
 	case strings.TrimSpace(cfg.Prompt) == "":
 		return nil, errors.New("prompt is required")
 	case strings.TrimSpace(cfg.AllowedTools) == "":
 		return nil, errors.New("allowed tools must not be empty")
+	}
+	return newRunner(cfg)
+}
+
+// newRunner checks what executing any job needs. The handoff loop has no fixed folder or prompt.
+func newRunner(cfg Config) (*Runner, error) {
+	switch {
+	case cfg.Client == nil:
+		return nil, errors.New("client is required")
+	case strings.TrimSpace(cfg.DeviceID) == "":
+		return nil, errors.New("device id is required")
 	case cfg.ClaudePath == "":
 		return nil, errors.New("executor path is required")
 	}
@@ -86,6 +133,9 @@ func New(cfg Config) (*Runner, error) {
 	}
 	if cfg.CloseTimeout <= 0 {
 		cfg.CloseTimeout = defaultCloseTimeout
+	}
+	if cfg.ChangesInterval <= 0 {
+		cfg.ChangesInterval = defaultChangesInterval
 	}
 	log := cfg.Log
 	if log == nil {
@@ -131,14 +181,15 @@ func (r *Runner) Run(ctx context.Context, once bool) (Result, error) {
 	}
 }
 
-// claimNext claims the first requested Claude Code run. Losing a race is normal.
+// claimNext claims the first requested Claude Code compat-test run. Losing a race is normal.
+// A delegated run is never taken here: it needs its own worktree and instruction (Handoff).
 func (r *Runner) claimNext(ctx context.Context) (*api.Claim, error) {
 	runs, err := r.cfg.Client.PendingRuns(ctx)
 	if err != nil {
 		return nil, err
 	}
 	for _, run := range runs {
-		if run.Executor != claude.Executor {
+		if run.Executor != claude.Executor || run.DelegationID != "" {
 			continue
 		}
 		c, err := r.cfg.Client.Claim(ctx, run.ID, r.cfg.DeviceID)
@@ -155,14 +206,26 @@ func (r *Runner) claimNext(ctx context.Context) (*api.Claim, error) {
 	return nil, nil
 }
 
-// Execute runs Claude Code for one claimed run and reports everything, ending with
-// a lifecycle "ended" event. Delivery failures are returned, never folded into success.
+// Execute runs Claude Code for one claimed compat-test run in the fixed folder with the fixed prompt.
 func (r *Runner) Execute(ctx context.Context, c api.Claim) Result {
+	return r.ExecuteJob(ctx, c, func(context.Context, *slog.Logger) (Job, error) {
+		return Job{Workdir: r.cfg.Workdir, Prompt: r.cfg.Prompt, AllowedTools: r.cfg.AllowedTools}, nil
+	})
+}
+
+// ExecuteJob prepares and runs one claimed run and reports everything, ending with a lifecycle
+// "ended" event. Delivery failures are returned, never folded into success.
+func (r *Runner) ExecuteJob(ctx context.Context, c api.Claim, prepare Prepare) Result {
 	log := r.log.With("run_id", c.RunID, "generation", c.Generation)
 	rep := report.New(r.cfg.Client, c.RunID, c.Generation, r.cfg.FlushInterval, log)
 	rep.Start()
 
-	reason := r.execute(ctx, rep, log)
+	var reason string
+	if job, err := prepare(ctx, log); err != nil {
+		reason = r.failBeforeStart(rep, log, "could not prepare the run", err, job.Workspace)
+	} else {
+		reason = r.execute(ctx, rep, log, job)
+	}
 
 	// Deliver the tail even if ctx was cancelled; give up after a bounded wait.
 	closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), r.cfg.CloseTimeout)
@@ -177,11 +240,16 @@ func (r *Runner) Execute(ctx context.Context, c api.Claim) Result {
 	return Result{EndReason: reason, Delivery: delivery}
 }
 
-func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Logger) string {
+func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Logger, job Job) string {
 	sessionID := NewUUIDv4()
-	args := claude.Args(claude.Options{SessionID: sessionID, AllowedTools: r.cfg.AllowedTools, Prompt: r.cfg.Prompt})
+	args := claude.Args(claude.Options{
+		SessionID: sessionID, AllowedTools: job.AllowedTools, Prompt: job.Prompt, Restricted: job.Restricted,
+	})
 	cmd := exec.Command(r.cfg.ClaudePath, args...) // no shell
-	cmd.Dir = r.cfg.Workdir
+	cmd.Dir = job.Workdir
+	if len(job.Env) > 0 {
+		cmd.Env = append(os.Environ(), job.Env...)
+	}
 	cmd.SysProcAttr = proc.SysProcAttr() // Windows: start suspended until Track pins it
 	stderr := &tailBuffer{max: 4096}
 	cmd.Stderr = stderr
@@ -190,7 +258,7 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 	// Our own pipe, so Wait never closes the read end before the last line is read.
 	pr, pw, err := os.Pipe()
 	if err != nil {
-		return r.failBeforeStart(rep, log, "cannot create the output pipe", err)
+		return r.failBeforeStart(rep, log, "cannot create the output pipe", err, job.Workspace)
 	}
 	defer pr.Close()
 	cmd.Stdout = pw
@@ -200,7 +268,7 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 		if errors.Is(err, exec.ErrNotFound) {
 			msg = "executor not found"
 		}
-		return r.failBeforeStart(rep, log, msg, err)
+		return r.failBeforeStart(rep, log, msg, err, job.Workspace)
 	}
 	pw.Close()
 	pid := cmd.Process.Pid // recorded right after Start (contract v1 "프로세스 관리" 1)
@@ -214,23 +282,30 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 		} else {
 			_ = cmd.Wait()
 		}
-		return r.failBeforeStart(rep, log, "cannot pin the executor process", err)
+		return r.failBeforeStart(rep, log, "cannot pin the executor process", err, job.Workspace)
 	}
 	// Released only after the stop decision below is final.
 	defer pinned.Close()
 	log = log.With("pid", pid, "session_id", sessionID)
-	log.Info("executor started", "prompt_chars", len([]rune(r.cfg.Prompt)))
-	rep.Add(claude.KindLifecycle, map[string]any{
+	log.Info("executor started", "prompt_chars", len([]rune(job.Prompt)), "allowed_tools", job.AllowedTools)
+	startedPayload := map[string]any{
 		"phase": "started", "session_id": sessionID, "executor": claude.Executor, "pid": pid,
-	})
+		"allowed_tools": strings.Split(job.AllowedTools, ","),
+	}
+	if job.Workspace != nil {
+		startedPayload["workspace"] = job.Workspace
+	}
+	rep.Add(claude.KindLifecycle, startedPayload)
+	stopChanges := r.watchChanges(ctx, rep, log, job)
 
 	mapper := claude.NewMapper()
+	hide := pathHider(job.HideDir)
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
 		oversized, err := claude.ReadLines(pr, claude.MaxLine, func(line []byte) {
 			for _, a := range mapper.Map(line) {
-				rep.Add(a.Kind, a.Payload)
+				rep.Add(a.Kind, hide(a.Payload))
 			}
 		})
 		if oversized > 0 {
@@ -252,6 +327,7 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 		pr.Close()
 		<-readDone
 	}
+	stopChanges()
 
 	exitCode := -1
 	if cmd.ProcessState != nil {
@@ -272,9 +348,24 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 		reason = EndLost
 		rep.Add(claude.KindError, map[string]any{"source": "agent", "text": "executor exited without a result event"})
 	}
-	rep.Add(claude.KindLifecycle, map[string]any{
-		"phase": "ended", "end_reason": reason, "exit_code": exitCode, "result_seen": mapper.ResultSeen(),
-	})
+	if job.Changes != nil {
+		// The last change list, with the base branch comparison, even after Ctrl+C (contract 4).
+		changesCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		if p, err := job.Changes(changesCtx, true); err != nil {
+			log.Warn("could not list the run's Git changes", "err", err)
+		} else {
+			rep.Add(KindGitChanges, p)
+		}
+		cancel()
+	}
+	endedPayload := map[string]any{
+		"phase": "ended", "end_reason": reason, "exit_code": exitCode,
+		"executor_started": true, "result_seen": mapper.ResultSeen(),
+	}
+	if job.Workspace != nil {
+		endedPayload["workspace"] = job.Workspace
+	}
+	rep.Add(claude.KindLifecycle, endedPayload)
 
 	if got := mapper.SessionID(); got != "" && got != sessionID {
 		log.Warn("executor reported a different session id", "reported", got)
@@ -329,10 +420,49 @@ func (r *Runner) watchStop(ctx context.Context, pinned *proc.Run, marker string,
 	}
 }
 
-func (r *Runner) failBeforeStart(rep *report.Reporter, log *slog.Logger, msg string, err error) string {
+// watchChanges sends the job's Git change list every ChangesInterval while the executor runs.
+// The returned function stops it and waits for a send in progress.
+func (r *Runner) watchChanges(ctx context.Context, rep *report.Reporter, log *slog.Logger, job Job) func() {
+	if job.Changes == nil {
+		return func() {}
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		t := time.NewTicker(r.cfg.ChangesInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if p, err := job.Changes(ctx, false); err != nil {
+					log.Warn("could not list the run's Git changes", "err", err)
+				} else {
+					rep.Add(KindGitChanges, p)
+				}
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+	}
+}
+
+// failBeforeStart ends a run whose executor never started (contract "상태": nothing changed, so
+// no outcome_unknown). The error text stays in the local log; the server gets a short message.
+func (r *Runner) failBeforeStart(rep *report.Reporter, log *slog.Logger, msg string, err error, workspace map[string]any) string {
 	log.Error(msg, "err", err)
 	rep.Add(claude.KindError, map[string]any{"source": "agent", "text": msg})
-	rep.Add(claude.KindLifecycle, map[string]any{"phase": "ended", "end_reason": EndFailed, "result_seen": false})
+	ended := map[string]any{"phase": "ended", "end_reason": EndFailed, "executor_started": false, "result_seen": false}
+	if workspace != nil {
+		ended["workspace"] = workspace
+	}
+	rep.Add(claude.KindLifecycle, ended)
 	return EndFailed
 }
 
@@ -348,6 +478,66 @@ func formatCounts(m map[string]int) string {
 	}
 	return strings.Join(parts, " ")
 }
+
+// pathHider returns a function that replaces dir, as Windows, slash or Git Bash spells it, in
+// every string of a payload: dir followed by a separator becomes nothing (a path from the folder),
+// dir alone becomes ".". A longer name that only starts like dir (run_1-old for run_1) is left.
+// With dir empty the payload is returned as it is.
+func pathHider(dir string) func(map[string]any) map[string]any {
+	if dir == "" {
+		return func(p map[string]any) map[string]any { return p }
+	}
+	clean := filepath.Clean(dir)
+	forms := []string{clean, filepath.ToSlash(clean)}
+	if vol := filepath.VolumeName(clean); len(vol) == 2 && vol[1] == ':' {
+		// Git Bash: C:\a\b is /c/a/b.
+		forms = append(forms, "/"+strings.ToLower(vol[:1])+filepath.ToSlash(clean[2:]))
+	}
+	var parts []string
+	for _, f := range forms {
+		parts = append(parts, regexp.QuoteMeta(f))
+	}
+	// Windows paths compare without case; elsewhere case matters.
+	flags := ""
+	if runtime.GOOS == "windows" {
+		flags = "(?i)"
+	}
+	re := regexp.MustCompile(flags + "(?:" + strings.Join(parts, "|") + `)(?:[\\/]|[^\w.\-]|$)`)
+	var walk func(v any) any
+	walk = func(v any) any {
+		switch x := v.(type) {
+		case string:
+			return re.ReplaceAllStringFunc(x, func(m string) string {
+				switch last := m[len(m)-1]; {
+				case last == '/' || last == '\\':
+					return ""
+				case strings.IndexByte(nameChars, last) >= 0:
+					return "." // dir ended the string
+				default:
+					return "." + string(last) // dir, then a quote, a space or the like
+				}
+			})
+		case map[string]any:
+			out := make(map[string]any, len(x))
+			for k, val := range x {
+				out[k] = walk(val)
+			}
+			return out
+		case []any:
+			out := make([]any, len(x))
+			for i, val := range x {
+				out[i] = walk(val)
+			}
+			return out
+		}
+		return v
+	}
+	return func(p map[string]any) map[string]any { return walk(p).(map[string]any) }
+}
+
+// nameChars are the bytes a name may go on with after dir; a match never ends on one of them
+// unless dir ended the string.
+const nameChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
 
 // tailBuffer keeps the last max bytes written to it.
 type tailBuffer struct {

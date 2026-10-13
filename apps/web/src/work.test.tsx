@@ -60,7 +60,7 @@ const detail = (over: Partial<WorkItemDetail> = {}, itemOver: Partial<WorkItem> 
 const project = (over: Partial<Project> = {}): Project => ({ id: 'prj_a', external_ref: 'PRJ-007', name: 'hanumoka-site', open_work_items: 2, ...over });
 
 const noop = async () => {};
-const actions = { move: noop, update: noop, addWait: noop, removeWait: noop };
+const actions = { move: noop, update: noop, addWait: noop, removeWait: noop, delegate: noop, withdraw: noop };
 const head: ListHead = { base: '열린 작업', count: 2, narrowed: false };
 
 function list(state: ListState, items: WorkItem[] = [], selected: string | null = null, showClosed = false) {

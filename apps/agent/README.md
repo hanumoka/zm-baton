@@ -4,7 +4,7 @@
 
 ## 하는 일
 
-1. 서버(`apps/server`)에 할 일(`GET /api/runs?state=requested`)을 주기적으로 묻는다. 실행기가 `claude_code`인 실행 시도만 청구한다. 다른 연결 프로그램이 먼저 가져가 409를 받으면 다음 것으로 넘어간다.
+1. 서버(`apps/server`)에 할 일(`GET /api/runs?state=requested`)을 주기적으로 묻는다. 실행기가 `claude_code`인 실행 시도만 청구한다. 위임으로 만든 실행 시도(`delegation_id`가 있는 것)는 가져가지 않는다. 그것은 아래 `zm-baton agent`의 몫이다. 다른 연결 프로그램이 먼저 가져가 409를 받으면 다음 것으로 넘어간다.
 2. 청구에 성공하면 실행 시도마다 새 UUIDv4 세션 번호를 만든다. 그 번호로 Claude Code를 셸 없이 직접 띄운다.
 
    ```text
@@ -19,7 +19,7 @@
    - `rate_limit_event`와 `result`의 사용량은 `usage`가 된다. 실패한 `result`는 `error`가 된다.
    - 그 밖의 줄(`system` 등)은 보내지 않고 종류별 개수만 로컬 로그에 남긴다.
 4. 사건마다 `seq`(1부터)와 `event_id`(`evt_`와 UUIDv7)를 붙인다. 0.5초마다, 그리고 끝날 때 묶어 보낸다. 다시 보낼 때는 같은 `event_id`를 쓴다.
-   - 시작할 때 `lifecycle` `started`(세션 번호 포함)를 보낸다. 끝날 때 `lifecycle` `ended`를 보낸다.
+   - 시작할 때 `lifecycle` `started`(세션 번호 포함)를 보낸다. 끝날 때 `lifecycle` `ended`를 보낸다. 보고는 `protocol_version` 2이고, `ended`에는 실행기를 띄웠는지(`executor_started`)와 결과를 받았는지(`result_seen`)가 실린다. 서버는 띄운 뒤 결과 없이 끝난 실행의 작업에 「결과 확인 필요」를 단다.
    - 성공한 `result`가 오면 종료 이유는 `submitted`이고, 오류 `result`가 오면 `failed`다.
    - `result` 없이 출력이 끝나면 `lost`다. 무엇을 했는지 알 수 없으므로 서버가 작업에 「결과 확인 필요」를 단다.
    - 실행 시간 제한에 걸려 멈추면 `failed`다.
@@ -66,6 +66,19 @@ go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 ## 이 시험에서 하지 않는 것
 
 다음은 이 시험이 끝난 뒤 1단계 본작업에서 한다: 임대 갱신, WebSocket 깨우기, 보내지 못한 사건의 디스크 보관, `request_id`, 끊긴 실행의 재개, 질문 경로, 실행기 설정 격리(`CLAUDE_CONFIG_DIR`). 도구 결과 본문은 4,000자로 자르기만 하고 비밀값을 가리지 않는다.
+
+## `zm-baton repo`·`zm-baton agent` — 맡긴 작업을 실행한다
+
+같은 모듈의 `zm-baton` 명령에 있다(`cmd/zm-baton/handoff.go`, `internal/agent/handoff.go`, `internal/workspace`). 협업 계약 v1 「위임」·「실행마다 별도 작업 트리」를 따른다. 쓰는 순서는 [docs/stage1/handoff.md](../../docs/stage1/handoff.md)에 있다.
+
+1. `zm-baton repo add [폴더] [--worktrees 폴더]`가 이 기기에서 맡긴 일을 실행할 저장소를 등록한다. 서버에는 저장소 키(`git:<첫 커밋>`)·폴더 이름·자격 증명을 뺀 원격 주소만 보내고, 절대 경로는 설정 폴더의 `repos.json`에만 둔다. 저장소와 작업 트리 폴더가 임시 폴더 안이면 거부한다. `repo list`·`repo remove`가 있다.
+2. `zm-baton agent`가 이 기기 몫의 위임(`GET /api/runs?state=requested&device_id=…`) 가운데 `repos.json`에 있는 저장소의 것만 청구한다.
+3. 청구한 실행마다 그 저장소에 새 작업 트리(`<작업 트리 폴더>/<실행 시도 번호>`)와 전용 브랜치(`zm-baton/<실행 시도 번호>`)를 만든다. 기준 커밋은 위임의 기준 브랜치 끝, 없으면 저장소의 지금 커밋이다.
+4. 그 작업 트리에서 서버가 만든 지시로 Claude Code를 띄운다. 도구는 위임이 정한 것(알려진 다섯 가지 `Read`·`Glob`·`Grep`·`Edit`·`Write` 안)만 `--allowedTools`로 넘기고, `--restricted`를 더해 사용자 설정의 권한 모드·허용 규칙이 넓히지 못하게 한다. 실행기 환경에 `ZM_BATON_OFF=1`을 넣어 소유자의 zm-baton 훅이 이 실행을 직접 연 세션으로 등록하지 않게 한다.
+5. 시작 보고와 끝 보고에 작업 트리(저장소 키·기준 커밋·브랜치·기준 브랜치)를 싣는다. 실행 중 60초마다와 끝날 때 `git_changes`(바뀐 파일, 원래 체크아웃에도 커밋하지 않은 변경이 있는 파일, 끝날 때 기준 브랜치에서도 바뀐 파일)를 보낸다. 도구가 보고하는 절대 경로에서 작업 트리 경로를 지워 보낸다.
+6. 실행이 끝나도 커밋하거나 작업 트리를 지우지 않는다. 띄우기 전에 실패하면(기준 브랜치 없음, 알 수 없는 도구, 임시 폴더 등) 실행기를 띄우지 않고 `executor_started: false`로 끝을 보고한다.
+
+종료 코드는 실행 시험과 같다: 0 정상(`--once`이면 `submitted`이고 서버가 사건을 다 받음), 1 실패, 2 플래그·설정 오류, 130 Ctrl+C. `--run-timeout` 기본값은 30분이다.
 
 ## `zm-baton` 명령 — 사람이 직접 연 AI 세션을 서버에 잇는다
 

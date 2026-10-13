@@ -202,6 +202,55 @@ class WorkItemApiTests @Autowired constructor(
 		assertEquals(403, call("PUT", "/api/settings/workflow", """{"skipped_stages":[]}""", token).first)
 		assertEquals(403, call("GET", "/api/decisions", token = token).first)
 		assertEquals(403, call("POST", "/api/imports/zm-docs", """{"repo_key":"git:abc1234","files":[]}""", token).first)
+		assertEquals(403, call("GET", "/api/repositories", token = token).first)
+		assertEquals(403, call("POST", "/api/work-items/wrk_x/delegations", """{"executor":"claude_code","device_id":"d","repo_key":"git:abc1234","version":0}""", token).first)
+		assertEquals(403, call("POST", "/api/runs/run_x/withdraw", """{"version":0}""", token).first)
+		assertEquals(403, call("POST", "/api/devices/dev_x/repositories", """{"repo_key":"git:abc1234","name":"x"}""", token).first)
+	}
+
+	@Test
+	fun `a person hands a work item to a device's repository over http and takes it back`() = withSkipped(listOf("plan_review", "result_review")) {
+		val (devStatus, devBody) = call("POST", "/api/devices", """{"name":"http-pc","os":"windows"}""")
+		assertEquals(201, devStatus, devBody)
+		val device = obj(devBody)["device_id"] as String
+		val key = "git:" + UUID.randomUUID().toString().replace("-", "")
+		val (addStatus, addBody) = call("POST", "/api/devices/$device/repositories", """{"repo_key":"$key","name":"demo","remote":"git@github.com:me/demo.git"}""")
+		assertEquals(200, addStatus, addBody)
+		assertEquals("github.com:me/demo.git", obj(addBody)["remote"])
+		val (listStatus, listBody) = call("GET", "/api/repositories")
+		assertEquals(200, listStatus)
+		assertContains(listBody, key)
+		assertEquals(404, call("POST", "/api/devices/dev_nobody/repositories", """{"repo_key":"$key","name":"demo"}""").first)
+		assertEquals(400, call("POST", "/api/devices/$device/repositories", """{"repo_key":"C:/work/demo","name":"demo"}""").first)
+
+		val id = create("맡길 작업")
+		assertEquals(200, move(id, "plan_review").first) // a one-person organisation passes through to ready
+		val ready = detail(id)
+		assertEquals(true, (ready["delegation"] as Map<*, *>)["allowed"])
+		val (status, body) = call("POST", "/api/work-items/$id/delegations",
+			"""{"executor":"claude_code","device_id":"$device","repo_key":"$key","allowed_tools":["Read","Edit","Write"],"version":${version(id)}}""")
+		assertEquals(201, status, body)
+		val delegated = obj(body)
+		assertEquals("manager", item(delegated)["executor_kind"])
+		assertEquals(false, (delegated["delegation"] as Map<*, *>)["allowed"])
+
+		val (runsStatus, runsBody) = call("GET", "/api/work-items/$id/runs")
+		assertEquals(200, runsStatus)
+		val run = json.readValue(runsBody, List::class.java).single() as Map<*, *>
+		assertEquals("requested", run["state"])
+		assertEquals(key, (run["delegation"] as Map<*, *>)["repo_key"])
+		val poll = call("GET", "/api/runs?state=requested&device_id=$device")
+		assertContains(poll.second, run["id"] as String)
+
+		val (refused, why) = call("POST", "/api/work-items/$id/delegations",
+			"""{"executor":"claude_code","device_id":"$device","repo_key":"$key","version":${version(id)}}""")
+		assertEquals(409, refused)
+		assertContains(obj(why)["message"] as String, "살아 있는 실행 시도")
+
+		val (backStatus, backBody) = call("POST", "/api/runs/${run["id"]}/withdraw", """{"version":${version(id)}}""")
+		assertEquals(200, backStatus, backBody)
+		assertNull(item(obj(backBody))["executor_kind"])
+		assertEquals(200, call("DELETE", "/api/devices/$device/repositories?repo_key=$key").first)
 	}
 
 	@Test
