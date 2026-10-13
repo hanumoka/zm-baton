@@ -14,10 +14,7 @@ export function Sessions({ sessions, includeEnded, onIncludeEnded, now }: Props)
     <main>
       <header>
         <h1>세션 현황</h1>
-        <p>
-          등록된 AI 세션과 각자 올린 「지금 하는 일」이다. 등록하지 않았거나 등록을 끈 세션은 여기 없고 충돌 판정에서도 빠진다. 셸 명령으로 바꾼 파일은
-          보고되지 않는다.
-        </p>
+        <p>등록된 AI 세션과 각자 올린 「지금 하는 일」이다.</p>
         <label className="inline">
           <input type="checkbox" checked={includeEnded} onChange={(e) => onIncludeEnded(e.target.checked)} /> 끝난 세션도 보기
         </label>
@@ -85,6 +82,7 @@ export function Sessions({ sessions, includeEnded, onIncludeEnded, now }: Props)
           </table>
         </div>
       )}
+      <p className="note">등록하지 않았거나 등록을 끈 세션은 여기 없고 충돌 판정에서도 빠진다. 셸 명령으로 바꾼 파일은 보고되지 않는다.</p>
     </main>
   );
 }

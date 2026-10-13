@@ -92,8 +92,8 @@ export function App() {
   return (
     <main>
       <header>
-        <h1>zm-baton</h1>
-        <p>1단계 설치·호환 시험 화면. 실행 시도의 상태와 종료 이유는 서버가 정한 값이고, 보고 상태는 그 값과 사건에서 계산한다.</p>
+        <h1>실행 시험</h1>
+        <p>1단계 설치·호환 시험 화면이다. 상태와 종료 이유는 서버가 정한다.</p>
       </header>
       {error && (
         <p role="alert" className="error" onClick={() => setError(undefined)}>

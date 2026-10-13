@@ -3,45 +3,49 @@ import { App as RunTest } from './App';
 import { Decisions } from './Decisions';
 import { BUCKETS, newImmediate } from './inboxModel';
 import { Inbox } from './Inbox';
+import { Kit } from './kit/Kit';
 import { clear, fail, lines, type Problems, type Source } from './problems';
 import { Sessions } from './Sessions';
 import { sessionsApi, type InboxItem, type SessionView } from './sessionsApi';
+import { CommandBar } from './shell/CommandBar';
+import { screenFromHash, type ScreenId } from './shell/screens';
+import { readSideOpen, writeSideOpen } from './shell/sidePref';
+import { Sidebar, type Permission } from './shell/Sidebar';
+import { TabBar } from './shell/TabBar';
 import { usePoll } from './usePoll';
 import { Work } from './Work';
 
-type Tab = 'inbox' | 'sessions' | 'work' | 'decisions' | 'runs';
-const TABS: { id: Tab; label: string }[] = [
-  { id: 'inbox', label: '나를 기다리는 것' },
-  { id: 'sessions', label: '세션 현황' },
-  { id: 'work', label: '작업' },
-  { id: 'decisions', label: '결정' },
-  { id: 'runs', label: '실행 시험' },
-];
-
-function tabFromHash(): Tab {
-  const h = window.location.hash.replace('#', '');
-  return (TABS.find((t) => t.id === h)?.id ?? 'inbox') as Tab;
-}
+const currentHash = () => (typeof window === 'undefined' ? '' : window.location.hash);
 
 /**
- * The Web screen. The first screen polls even while another tab is open, because browser
- * notifications come from it (contract "알림과 집중 모드" 3: notifications need the page open).
+ * The Web screen: a sidebar on the left (a bottom tab bar on narrow screens), the command line
+ * on top of the content, and the screen under it. The first screen polls even while another
+ * screen is open, because browser notifications come from it (contract "알림과 집중 모드" 3:
+ * notifications need the page open). Sessions are read everywhere too, for the sidebar count.
  */
 export function Shell() {
-  const [tab, setTab] = useState<Tab>(tabFromHash);
+  const [screen, setScreen] = useState<ScreenId>(() => screenFromHash(currentHash()));
+  const [sideOpen, setSideOpen] = useState(() => readSideOpen());
   const [items, setItems] = useState<InboxItem[]>([]);
   const [sessions, setSessions] = useState<SessionView[]>([]);
   const [includeEnded, setIncludeEnded] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [problems, setProblems] = useState<Problems>({});
-  const [permission, setPermission] = useState(() => (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission));
+  const [permission, setPermission] = useState<Permission>(() => (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission));
   const seen = useRef<Set<string> | null>(null);
+  const content = useRef<HTMLDivElement>(null);
   const [refresh, setRefresh] = useState(0);
   const failed = (source: Source) => (e: unknown) => setProblems((p) => fail(p, source, e));
   const cleared = (source: Source) => setProblems((p) => clear(p, source));
 
   useEffect(() => {
-    const onHash = () => setTab(tabFromHash());
+    const onHash = () => {
+      const next = screenFromHash(window.location.hash);
+      setScreen(next);
+      // A screen that is not shown is not read: its old failure says nothing now.
+      if (next !== 'work') cleared('work');
+      if (next !== 'decisions') cleared('decisions');
+    };
     window.addEventListener('hashchange', onHash);
     const clock = setInterval(() => setNow(Date.now()), 15_000);
     return () => {
@@ -64,28 +68,28 @@ export function Shell() {
     failed('inbox'),
   );
 
+  const onSessions = screen === 'sessions';
   usePoll(
     async (alive, signal) => {
-      if (tab !== 'sessions') {
-        cleared('sessions'); // not shown, not read: an old failure says nothing now
-        return;
-      }
       const list = await sessionsApi.sessions(includeEnded, signal);
       if (!alive()) return;
       setSessions(list);
       cleared('sessions');
     },
-    3000,
-    [tab, includeEnded, refresh],
+    onSessions ? 3000 : 10_000,
+    [onSessions, includeEnded, refresh],
     failed('sessions'),
   );
 
-  function go(t: Tab) {
-    window.location.hash = t;
-    setTab(t);
-    // A screen that is not shown is not read: its old failure says nothing now.
-    if (t !== 'work') cleared('work');
-    if (t !== 'decisions') cleared('decisions');
+  function go(id: ScreenId) {
+    window.location.hash = id;
+    content.current?.focus();
+  }
+
+  function toggleSide() {
+    const next = !sideOpen;
+    setSideOpen(next);
+    writeSideOpen(next);
   }
 
   async function askPermission() {
@@ -93,37 +97,41 @@ export function Shell() {
     setPermission(await Notification.requestPermission());
   }
 
+  const counts = { inbox: items.length, sessions: sessions.filter((s) => s.state === 'live').length };
+
   return (
-    <div className="shell">
-      <nav className="tabs" aria-label="화면">
-        <strong>zm-baton</strong>
-        {TABS.map((t) => (
-          <button key={t.id} className={t.id === tab ? 'selected' : undefined} aria-current={t.id === tab ? 'page' : undefined} onClick={() => go(t.id)}>
-            {t.label}
-            {t.id === 'inbox' && items.length > 0 && <span className="count">{items.length}</span>}
-          </button>
-        ))}
-        <span className="spacer" />
-        {permission === 'default' && <button onClick={askPermission}>브라우저 알림 켜기</button>}
-        {permission === 'denied' && <small>브라우저 알림이 막혀 있다</small>}
-        {permission === 'granted' && <small>브라우저 알림 켜짐</small>}
-      </nav>
-      <ProblemList problems={problems} onDismiss={() => setProblems({})} />
-      {tab === 'inbox' && (
-        <Inbox
-          items={items}
-          now={now}
-          onChanged={() => {
-            cleared('judge');
-            setRefresh((r) => r + 1);
-          }}
-          onError={failed('judge')}
-        />
-      )}
-      {tab === 'sessions' && <Sessions sessions={sessions} includeEnded={includeEnded} onIncludeEnded={setIncludeEnded} now={now} />}
-      {tab === 'work' && <Work onError={failed('work')} onRead={() => cleared('work')} />}
-      {tab === 'decisions' && <Decisions onError={failed('decisions')} onRead={() => cleared('decisions')} />}
-      {tab === 'runs' && <RunTest />}
+    <div className="app" data-side={sideOpen ? 'open' : 'rail'}>
+      {/* The column carries the sidebar's colour to the bottom of a long page; the sidebar itself stays in view. */}
+      <div className="side-col">
+        <Sidebar current={screen} counts={counts} open={sideOpen} onToggle={toggleSide} permission={permission} onAskPermission={askPermission} />
+      </div>
+      <div className="main">
+        <header className="tool">
+          <CommandBar onGo={go} />
+          {/* The screen's filter chips go here (DESIGN.md 「화면 배치」 2); empty until a screen fills it. */}
+          <div className="chips" id="screen-chips" />
+        </header>
+        <ProblemList problems={problems} onDismiss={() => setProblems({})} />
+        <div className="content" ref={content} tabIndex={-1}>
+          {screen === 'inbox' && (
+            <Inbox
+              items={items}
+              now={now}
+              onChanged={() => {
+                cleared('judge');
+                setRefresh((r) => r + 1);
+              }}
+              onError={failed('judge')}
+            />
+          )}
+          {screen === 'sessions' && <Sessions sessions={sessions} includeEnded={includeEnded} onIncludeEnded={setIncludeEnded} now={now} />}
+          {screen === 'work' && <Work onError={failed('work')} onRead={() => cleared('work')} />}
+          {screen === 'decisions' && <Decisions onError={failed('decisions')} onRead={() => cleared('decisions')} />}
+          {screen === 'runs' && <RunTest />}
+          {screen === 'kit' && <Kit />}
+        </div>
+      </div>
+      <TabBar current={screen} counts={counts} permission={permission} onAskPermission={askPermission} />
     </div>
   );
 }
