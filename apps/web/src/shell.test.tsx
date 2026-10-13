@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { CommandBar, isCommandShortcut } from './shell/CommandBar';
-import { matchScreen, NAV_GROUPS, screenFromHash, SCREENS, TAB_ITEMS } from './shell/screens';
+import { commandTarget, exactScreen, matchScreen, NAV_GROUPS, screenFromHash, SCREENS, TAB_ITEMS } from './shell/screens';
 import { readSideOpen, SIDE_KEY, writeSideOpen } from './shell/sidePref';
 import { NotifyItem, Sidebar } from './shell/Sidebar';
 import { TabBar } from './shell/TabBar';
@@ -16,6 +16,9 @@ describe('screens', () => {
     expect(screenFromHash('#kit')).toBe('kit');
     expect(screenFromHash('')).toBe('inbox');
     expect(screenFromHash('#nothing')).toBe('inbox');
+    // What follows ? belongs to the screen: its filters and selection.
+    expect(screenFromHash('#work?stage=ready&item=wrk_a')).toBe('work');
+    expect(screenFromHash('#/work?item=wrk_a')).toBe('work');
   });
 
   it('matches a screen by its name, a short name or the start of one, and never offers the kit', () => {
@@ -127,6 +130,36 @@ describe('command line', () => {
     expect(html).toContain('aria-label="화면 이름으로 이동"');
     expect(html).toContain('<kbd>K</kbd>');
     expect(html).toContain('aria-live="polite"');
+  });
+});
+
+describe('command line that also finds', () => {
+  it('opens a screen on Enter only for an exact name or a > command while the screen finds', () => {
+    // Plain words find on the work screen: 「세」 is not a jump to 「세션 현황」.
+    expect(commandTarget('세', true)).toBeNull();
+    expect(commandTarget('세', false)?.id).toBe('sessions');
+    expect(commandTarget('결정', true)?.id).toBe('decisions');
+    expect(commandTarget(' 세션 현황 ', true)?.id).toBe('sessions');
+    expect(commandTarget('>세', true)?.id).toBe('sessions');
+    expect(commandTarget('>없는 화면', true)).toBeNull();
+    expect(exactScreen('키트')).toBeNull();
+  });
+
+  it('labels the line as finding work while the work screen is open', () => {
+    const html = renderToStaticMarkup(
+      <CommandBar onGo={() => {}} find={{ value: '', onChange: () => {}, placeholder: '작업 찾기, 화면 이동은 > 로 시작', label: '작업 찾기 또는 화면 이동', onSubmit: () => {} }} />,
+    );
+    expect(html).toContain('placeholder="작업 찾기, 화면 이동은 &gt; 로 시작"');
+    expect(html).toContain('aria-label="작업 찾기 또는 화면 이동"');
+    expect(html).toContain('role="search"');
+  });
+
+  it('shows what Enter does for typed words', () => {
+    const find = (value: string) =>
+      renderToStaticMarkup(<CommandBar onGo={() => {}} find={{ value, onChange: () => {}, placeholder: '', label: '', onSubmit: () => {} }} />);
+    expect(find('도커')).toContain('찾은 목록으로');
+    expect(find('결정')).toContain('「결정」 열기');
+    expect(find('>없는')).toContain('맞는 화면 없음');
   });
 });
 

@@ -7,13 +7,13 @@ import { Kit } from './kit/Kit';
 import { clear, fail, lines, type Problems, type Source } from './problems';
 import { Sessions } from './Sessions';
 import { sessionsApi, type InboxItem, type SessionView } from './sessionsApi';
-import { CommandBar } from './shell/CommandBar';
-import { screenFromHash, type ScreenId } from './shell/screens';
+import { CommandBar, type Find } from './shell/CommandBar';
+import { isCommand, screenFromHash, type ScreenId } from './shell/screens';
 import { readSideOpen, writeSideOpen } from './shell/sidePref';
 import { Sidebar, type Permission } from './shell/Sidebar';
 import { TabBar } from './shell/TabBar';
 import { usePoll } from './usePoll';
-import { Work } from './Work';
+import { Work } from './work/Work';
 
 const currentHash = () => (typeof window === 'undefined' ? '' : window.location.hash);
 
@@ -22,6 +22,8 @@ const currentHash = () => (typeof window === 'undefined' ? '' : window.location.
  * on top of the content, and the screen under it. The first screen polls even while another
  * screen is open, because browser notifications come from it (contract "알림과 집중 모드" 3:
  * notifications need the page open). Sessions are read everywhere too, for the sidebar count.
+ * The header's height is measured into `--h-tool`, so a screen can keep a pane in view under it
+ * and the folded sidebar can start its items below it (their tooltips then never cover the chips).
  */
 export function Shell() {
   const [screen, setScreen] = useState<ScreenId>(() => screenFromHash(currentHash()));
@@ -34,6 +36,10 @@ export function Shell() {
   const [permission, setPermission] = useState<Permission>(() => (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission));
   const seen = useRef<Set<string> | null>(null);
   const content = useRef<HTMLDivElement>(null);
+  const app = useRef<HTMLDivElement>(null);
+  const tool = useRef<HTMLElement>(null);
+  const [chipHost, setChipHost] = useState<HTMLDivElement | null>(null);
+  const [findQ, setFindQ] = useState('');
   const [refresh, setRefresh] = useState(0);
   const failed = (source: Source) => (e: unknown) => setProblems((p) => fail(p, source, e));
   const cleared = (source: Source) => setProblems((p) => clear(p, source));
@@ -52,6 +58,20 @@ export function Shell() {
       window.removeEventListener('hashchange', onHash);
       clearInterval(clock);
     };
+  }, []);
+
+  // Words typed to find on one screen mean nothing on the next.
+  useEffect(() => setFindQ(''), [screen]);
+
+  useEffect(() => {
+    const header = tool.current;
+    const root = app.current;
+    if (!header || !root || typeof ResizeObserver === 'undefined') return;
+    const measure = () => root.style.setProperty('--h-tool', `${header.offsetHeight}px`);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    return () => observer.disconnect();
   }, []);
 
   usePoll(
@@ -98,18 +118,29 @@ export function Shell() {
   }
 
   const counts = { inbox: items.length, sessions: sessions.filter((s) => s.state === 'live').length };
+  // The work screen finds through the command line; a leading > still opens a screen.
+  const find: Find | undefined =
+    screen === 'work'
+      ? {
+          value: findQ,
+          onChange: setFindQ,
+          placeholder: '작업 찾기, 화면 이동은 > 로 시작',
+          label: '작업 찾기(제목·번호·다음 행동) 또는 화면 이동',
+          onSubmit: () => content.current?.querySelector<HTMLElement>('[data-row][tabindex="0"]')?.focus(),
+        }
+      : undefined;
 
   return (
-    <div className="app" data-side={sideOpen ? 'open' : 'rail'}>
+    <div className="app" ref={app} data-side={sideOpen ? 'open' : 'rail'}>
       {/* The column carries the sidebar's colour to the bottom of a long page; the sidebar itself stays in view. */}
       <div className="side-col">
         <Sidebar current={screen} counts={counts} open={sideOpen} onToggle={toggleSide} permission={permission} onAskPermission={askPermission} />
       </div>
       <div className="main">
-        <header className="tool">
-          <CommandBar onGo={go} />
+        <header className="tool" ref={tool}>
+          <CommandBar onGo={go} find={find} />
           {/* The screen's filter chips go here (DESIGN.md 「화면 배치」 2); empty until a screen fills it. */}
-          <div className="chips" id="screen-chips" />
+          <div className="chips" id="screen-chips" ref={setChipHost} />
         </header>
         <ProblemList problems={problems} onDismiss={() => setProblems({})} />
         <div className="content" ref={content} tabIndex={-1}>
@@ -125,7 +156,15 @@ export function Shell() {
             />
           )}
           {screen === 'sessions' && <Sessions sessions={sessions} includeEnded={includeEnded} onIncludeEnded={setIncludeEnded} now={now} />}
-          {screen === 'work' && <Work onError={failed('work')} onRead={() => cleared('work')} />}
+          {screen === 'work' && (
+            <Work
+              onError={failed('work')}
+              onRead={() => cleared('work')}
+              chipHost={chipHost}
+              query={isCommand(findQ) ? '' : findQ}
+              onClearQuery={() => setFindQ('')}
+            />
+          )}
           {screen === 'decisions' && <Decisions onError={failed('decisions')} onRead={() => cleared('decisions')} />}
           {screen === 'runs' && <RunTest />}
           {screen === 'kit' && <Kit />}

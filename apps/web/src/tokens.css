@@ -89,6 +89,12 @@
   --w-rail: 56px;
   --w-side: 232px;
   --w-list: 380px;
+  --w-list-mid: 340px;
+  --w-text: 80ch;
+  --w-aside: 260px;
+  --w-ref: 7ch;
+  --w-off: 72px;
+  --w-pop: 280px;
   --w-cmd: 720px;
   --w-tip: 240px;
   --w-cell: 200px;

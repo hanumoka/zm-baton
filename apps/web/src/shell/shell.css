@@ -74,6 +74,11 @@ button.it:hover:not([aria-disabled="true"]) .ico { color: var(--c-ink); }
 /* Folded sidebar: icons only; names stay for screen readers and show as tooltips */
 .side[data-mode="rail"] { align-items: center; padding: var(--s-3) var(--s-1) var(--s-2); }
 .side[data-mode="rail"] .brand { justify-content: center; padding: 0; }
+/*
+ * Folded, the items start where the header ends (--h-tool, measured by the shell), so a name
+ * tooltip opens beside the screen's content and never over its filter chips.
+ */
+.side[data-mode="rail"] .brand { align-items: flex-start; min-height: calc(var(--h-tool, var(--h-nav)) - var(--s-3) - var(--s-1) - var(--s-2)); }
 .side[data-mode="rail"] .tile { width: var(--tile-rail); height: var(--tile-rail); font-size: var(--fs-lg); }
 .side[data-mode="rail"] :is(.brand-nm, .it .nm, .it .lock) {
   position: absolute;
@@ -197,6 +202,15 @@ button.it:hover:not([aria-disabled="true"]) .ico { color: var(--c-ink); }
   .side-col { display: none; }
   .tool { padding: var(--s-2) var(--s-4); }
   .cmd { max-width: none; }
+  /* Chips stay on one line and slide sideways inside it; the page itself never scrolls sideways. */
+  .tool .chips {
+    flex-wrap: nowrap;
+    margin: 0 calc(var(--s-4) * -1);
+    padding: var(--s-0) var(--s-4);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tool .chips::-webkit-scrollbar { display: none; }
   .cmd .keys { display: none; }
   .content { padding-bottom: var(--h-tab); }
 

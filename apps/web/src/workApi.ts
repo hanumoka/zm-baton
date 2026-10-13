@@ -121,8 +121,13 @@ function query(params: Record<string, string | number | boolean | undefined>): s
 }
 
 export const workApi = {
-  workItems: (f: { projectId?: string; open: boolean; q?: string }, signal?: AbortSignal) =>
-    call<WorkItem[]>('GET', `/api/work-items?${query({ limit: 500, project_id: f.projectId, open: f.open, q: f.q })}`, undefined, signal),
+  workItems: (f: { projectId?: string; open: boolean; q?: string; limit?: number }, signal?: AbortSignal) =>
+    call<WorkItem[]>(
+      'GET',
+      `/api/work-items?${query({ limit: f.limit ?? 500, project_id: f.projectId, open: f.open, q: f.q })}`,
+      undefined,
+      signal,
+    ),
   detail: (id: string, signal?: AbortSignal) => call<WorkItemDetail>('GET', `/api/work-items/${enc(id)}`, undefined, signal),
   create: (body: NewWorkItem) =>
     call<{ id: string; stage: Stage }>('POST', '/api/work-items', {
