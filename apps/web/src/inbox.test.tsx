@@ -322,6 +322,8 @@ describe('first screen', () => {
     expect(html).toContain('<section class="pane-detail" aria-label="기다리는 것 상세">');
     expect(html).not.toContain('<header>');
     expect(html).not.toContain('급한 순서로 모은다');
+    // Before the first row is picked (or when the address drops it), the detail says what to do.
+    expect(html).toContain('고른 항목이 없다');
   });
 
   it('shows the loading rows before the first read and the failure when that read fails', () => {
