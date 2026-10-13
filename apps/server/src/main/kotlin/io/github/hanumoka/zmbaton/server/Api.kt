@@ -14,13 +14,6 @@ import java.time.OffsetDateTime
 
 // Wire format follows contract v1 ("보고 한 건의 모양"): snake_case field names.
 
-data class CreateWorkItem(
-	val title: String,
-	@JsonProperty("responsible_user_id") val responsibleUserId: String,
-)
-
-data class WorkItemCreated(val id: String, val stage: String)
-
 data class CreateRun(val executor: String)
 
 data class RunCreated(
@@ -72,11 +65,6 @@ class BadRequestException(message: String) : RuntimeException(message)
 @RestController
 @RequestMapping("/api")
 class ApiController(private val service: RunService) {
-
-	@PostMapping("/work-items")
-	@ResponseStatus(HttpStatus.CREATED)
-	fun createWorkItem(@RequestBody body: CreateWorkItem): WorkItemCreated =
-		service.createWorkItem(body.title, body.responsibleUserId)
 
 	@PostMapping("/work-items/{id}/runs")
 	@ResponseStatus(HttpStatus.CREATED)

@@ -23,6 +23,10 @@ object Ids {
 
 	fun event(): String = "evt_" + uuidV7()
 
+	fun project(): String = "prj_" + uuidV7()
+
+	fun decision(): String = "dcs_" + uuidV7()
+
 	/** Audit rows have no contract prefix; `aud_` keeps them readable next to the others. */
 	fun audit(): String = "aud_" + uuidV7()
 

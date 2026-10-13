@@ -10,22 +10,13 @@ import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 import tools.jackson.core.type.TypeReference
 import tools.jackson.databind.ObjectMapper
-import java.sql.ResultSet
 import java.time.OffsetDateTime
 
-// Read side for the Web and desktop compat test (docs/stage1/compat-test-ui.md).
+// Read side for the Web and desktop compat test (docs/stage1/compat-test-ui.md). The work item
+// list moved to WorkItemController with the second stage-1 slice.
 // A run's lifecycle state and end reason are stored (data model "runs") and decided by the
 // server, so the screen reads them here and never re-derives them from events. The report
 // status on screen (contract v1 "보고 상태") is computed from that state and the events.
-
-data class WorkItemView(
-	val id: String,
-	val title: String,
-	val stage: String,
-	@JsonProperty("wait_reasons") val waitReasons: List<String>,
-	val generation: Long,
-	@JsonProperty("created_at") val createdAt: OffsetDateTime,
-)
 
 data class RunView(
 	val id: String,
@@ -54,11 +45,6 @@ data class EventView(
 class ReadService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
 
 	private val payloadType = object : TypeReference<Map<String, Any?>>() {}
-
-	fun workItems(limit: Int): List<WorkItemView> =
-		jdbc.sql(
-			"select id, title, stage, wait_reasons, generation, created_at from work_items order by created_at desc limit :limit",
-		).param("limit", limit).query { rs, _ -> workItem(rs) }.list()
 
 	/** The newest [limit] runs of a work item, oldest first. */
 	fun runs(workItemId: String, limit: Int): List<RunView> {
@@ -99,15 +85,6 @@ class ReadService(private val jdbc: JdbcClient, private val json: ObjectMapper) 
 		}.list()
 	}
 
-	private fun workItem(rs: ResultSet): WorkItemView {
-		@Suppress("UNCHECKED_CAST")
-		val reasons = (rs.getArray("wait_reasons").array as Array<String>).toList()
-		return WorkItemView(
-			rs.getString("id"), rs.getString("title"), rs.getString("stage"), reasons, rs.getLong("generation"),
-			rs.getObject("created_at", OffsetDateTime::class.java),
-		)
-	}
-
 	// The table name is one of two constants above, never input.
 	private fun exists(table: String, id: String) {
 		val found = jdbc.sql("select count(*) from $table where id = :id").param("id", id)
@@ -119,10 +96,6 @@ class ReadService(private val jdbc: JdbcClient, private val json: ObjectMapper) 
 @RestController
 @RequestMapping("/api")
 class ReadController(private val reads: ReadService) {
-
-	@GetMapping("/work-items")
-	fun workItems(@RequestParam(defaultValue = "20") limit: Int): List<WorkItemView> =
-		reads.workItems(limit.coerceIn(1, 100))
 
 	@GetMapping("/work-items/{id}/runs")
 	fun runs(@PathVariable id: String, @RequestParam(defaultValue = "50") limit: Int): List<RunView> =

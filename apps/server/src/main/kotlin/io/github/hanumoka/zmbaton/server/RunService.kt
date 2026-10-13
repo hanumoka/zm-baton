@@ -11,7 +11,11 @@ import tools.jackson.databind.ObjectMapper
  * "보고 전달"). Lease renewal, device liveness and request_id dedup are out of the compat test.
  */
 @Service
-class RunService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
+class RunService(
+	private val jdbc: JdbcClient,
+	private val json: ObjectMapper,
+	private val workItems: WorkItemService,
+) {
 
 	companion object {
 		const val LEASE_SECONDS = 45
@@ -19,16 +23,9 @@ class RunService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
 		val END_REASONS = setOf("submitted", "failed", "cancelled", "replaced", "lost")
 	}
 
-	@Transactional
-	fun createWorkItem(title: String, responsibleUserId: String): WorkItemCreated {
-		if (responsibleUserId.isBlank()) throw BadRequestException("responsible_user_id is required")
-		val id = Ids.workItem()
-		// The compat test starts work in `ready`; stage transitions are a later stage-1 task.
-		jdbc.sql(
-			"insert into work_items (id, title, stage, responsible_user_id) values (:id, :title, 'ready', :owner)",
-		).param("id", id).param("title", title).param("owner", responsibleUserId).update()
-		return WorkItemCreated(id, "ready")
-	}
+	/** The compat test's work item: `ready`, no executor. Moving it on by an accepted run comes later. */
+	fun createWorkItem(title: String, responsibleUserId: String): WorkItemCreated =
+		workItems.create(CreateWorkItem(title, responsibleUserId))
 
 	@Transactional
 	fun createRun(workItemId: String, executor: String): RunCreated {
