@@ -1,0 +1,53 @@
+/* The design kit page (#kit). Sections are split by one line, not boxed. */
+
+.kit h1 { margin: 0 0 var(--s-1); font-size: var(--fs-2xl); letter-spacing: var(--tracking-tight); }
+.kit-lead { margin: 0 0 var(--s-4); color: var(--c-ink-2); }
+.kit > section { padding: var(--s-6) 0; border-top: var(--rule) solid var(--c-rule); }
+.kit h2 { margin: 0 0 var(--s-3); font-size: var(--fs-lg); }
+.kit h3 { margin: var(--s-4) 0 var(--s-2); font-size: var(--fs-sm); font-weight: var(--fw-semi); color: var(--c-ink-2); }
+.kit-note { margin: 0 0 var(--s-3); font-size: var(--fs-sm); color: var(--c-ink-2); }
+.kit ul { margin: 0; padding: 0; list-style: none; }
+.kit-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--w-list)), 1fr)); gap: var(--s-6); align-items: start; }
+
+.tok { display: flex; flex-direction: column; min-width: 0; line-height: var(--lh-row); }
+.tok-name { font-size: var(--fs-xs); color: var(--c-ink); }
+.tok-val { font-size: var(--fs-xs); color: var(--c-ink-2); overflow-wrap: anywhere; }
+
+.swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--w-cell)), 1fr)); gap: var(--s-2) var(--s-4); }
+.swatches li { display: flex; align-items: center; gap: var(--s-2); }
+.swatch { flex: none; width: var(--s-8); height: var(--s-8); border: var(--rule) solid var(--c-rule); border-radius: var(--r-sm); }
+
+.type-steps li { display: grid; grid-template-columns: var(--w-state) minmax(0, 1fr); gap: var(--s-4); align-items: baseline; padding: var(--s-1) 0; }
+.space-steps li,
+.radius-steps li { display: grid; grid-template-columns: var(--s-10) minmax(0, 1fr); align-items: center; gap: var(--s-3); padding: var(--s-1) 0; }
+.space-bar { height: var(--s-3); background: var(--c-ink-2); border-radius: var(--r-xs); }
+.radius-box { width: var(--s-10); height: var(--s-8); background: var(--c-paper); border: var(--rule) solid var(--c-rule-strong); border-radius: var(--r-xs); }
+.tok-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--w-cell)), 1fr)); gap: var(--s-2) var(--s-4); }
+
+.icon-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--w-cell)), 1fr)); gap: var(--s-1) var(--s-4); }
+.icon-list li { display: grid; grid-template-columns: var(--icon) minmax(0, 1fr); column-gap: var(--s-2); align-items: center; padding: var(--s-1) 0; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.icon-list code { grid-column: 2; font-size: var(--fs-xs); color: var(--c-ink-2); }
+
+.states { display: flex; flex-direction: column; gap: var(--s-2); }
+.state-part h3 { margin-top: var(--s-2); }
+.state-cells { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--w-state)), 1fr)); gap: var(--s-3) var(--s-4); align-items: start; }
+.state-cell { display: flex; flex-direction: column; align-items: flex-start; gap: var(--s-1); min-width: 0; }
+.state-cell .field { width: 100%; }
+.state-cell .select,
+.state-cell .select select { max-width: 100%; }
+.state-lbl { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--c-ink-2); }
+.tip-demo { margin: 0; padding-bottom: var(--s-2); }
+
+.stage-list { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-5); }
+.stage-list li { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); }
+.stage-list.is-block-row { margin-top: var(--s-3); }
+
+.kit-list { padding-bottom: var(--s-2); background: var(--c-canvas); border: var(--rule) solid var(--c-rule); border-radius: var(--r-md); }
+.kit-list-t { margin: 0; padding: var(--s-2) var(--s-4); font-size: var(--fs-xs); color: var(--c-ink-2); border-bottom: var(--rule) solid var(--c-rule); }
+
+.empty-samples { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--w-cell)), 1fr)); gap: var(--s-4) var(--s-6); }
+.empty-samples h3 { margin-top: 0; }
+.empty-samples .empty-state { padding-left: 0; }
+
+.key-list li { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-1) 0; font-size: var(--fs-sm); }
+.key-list li > span:first-child { display: inline-flex; gap: var(--s-1); min-width: var(--s-10); }

@@ -1,5 +1,6 @@
 /* Screen styles. Values come from tokens.css; base surfaces are in base.css. */
-main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+main { max-width: 1100px; padding: var(--s-4); }
+main > header h1 { margin: 0 0 var(--s-1); font-size: var(--fs-2xl); letter-spacing: var(--tracking-tight); }
 header p { color: var(--c-ink-2); margin-top: 0; }
 .columns { display: grid; grid-template-columns: 320px 1fr; gap: 16px; }
 @media (max-width: 720px) { .columns { grid-template-columns: 1fr; } }
@@ -23,14 +24,9 @@ ol.events code { color: var(--c-ink-3); }
 .undecided { margin: 0 0 8px; padding-left: 18px; font-size: var(--fs-sm); color: var(--c-ink-2); }
 .undecided .relevant { color: var(--c-warn); font-weight: 600; }
 
-/* Shell: tabs for the first screen, the session list and the compat test screen. */
-nav.tabs {
-  position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-  padding: 8px 16px; background: var(--c-paper); border-bottom: 1px solid var(--c-rule);
-}
-nav.tabs button { padding: 6px 12px; border: 1px solid var(--c-rule); background: var(--c-paper); border-radius: var(--r-pill); cursor: pointer; }
-nav.tabs .spacer { flex: 1; }
-nav.tabs .count { margin-left: 6px; padding: 0 7px; border-radius: var(--r-pill); background: var(--c-accent); color: var(--c-on-accent); font-size: var(--fs-xs); }
+/* What failed, above the screen. */
+.problems { margin: var(--s-2) var(--s-4); }
+.problems > button { padding: var(--s-1) var(--s-3); border: var(--rule) solid var(--c-rule-strong); background: var(--c-paper); border-radius: var(--r-sm); }
 
 /* First screen ("나를 기다리는 것"). */
 section.bucket { margin: 12px 0; border: 1px solid var(--c-rule); border-radius: var(--r-md); background: var(--c-paper); }
@@ -61,6 +57,7 @@ ul.files { margin: 0; padding: 0; list-style: none; }
 ul.files li.conflict code { background: var(--c-block-tint); }
 ul.files li.conflict b { color: var(--c-block); font-size: var(--fs-xs); }
 .empty { color: var(--c-ink-2); }
+.note { margin: var(--s-3) 0 0; font-size: var(--fs-sm); color: var(--c-ink-2); }
 
 /* Work items and decision records. */
 .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }

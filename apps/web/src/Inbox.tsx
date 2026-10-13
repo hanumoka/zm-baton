@@ -17,7 +17,7 @@ export function Inbox({ items, now, onChanged, onError }: Props) {
     <main>
       <header>
         <h1>나를 기다리는 것</h1>
-        <p>내가 풀어 줘야 일이 다시 도는 것만 급한 순서로 모은다. 지금은 직접 연 AI 세션의 기다림과 같은 파일 충돌이 올라온다.</p>
+        <p>내가 풀어 줘야 일이 다시 도는 것만 급한 순서로 모은다.</p>
       </header>
       {BUCKETS.map(({ bucket, label, empty }) => {
         const list = groups.get(bucket) ?? [];

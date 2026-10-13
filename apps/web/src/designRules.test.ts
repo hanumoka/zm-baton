@@ -10,10 +10,12 @@ import { describe, expect, it } from 'vitest';
 
 const SRC = fileURLToPath(new URL('.', import.meta.url));
 
+/** Every screen file under src, subfolders included (icons/, shell/, ui/, kit/), as `dir/file`. */
 function sources(): { name: string; text: string }[] {
-  return readdirSync(SRC)
-    .filter((f: string) => /\.(css|tsx?)$/.test(f) && !/\.test\.tsx?$/.test(f))
-    .map((name: string) => ({ name, text: readFileSync(join(SRC, name), 'utf8') }));
+  return (readdirSync(SRC, { recursive: true }) as string[])
+    .map((f) => f.replace(/\\/g, '/'))
+    .filter((f) => /\.(css|tsx?)$/.test(f) && !/\.test\.tsx?$/.test(f))
+    .map((name) => ({ name, text: readFileSync(join(SRC, name), 'utf8') }));
 }
 
 /** "file:line  text" for every line that matches. */
@@ -33,6 +35,8 @@ const outsideTokens = files.filter((f) => f.name !== 'tokens.css');
 describe('design rules', () => {
   it('reads real text from the token file and the screens it checks', () => {
     expect(files.map((f) => f.name)).toContain('tokens.css');
+    // Parts in subfolders are checked too, not only the files at the top of src.
+    expect(files.map((f) => f.name)).toEqual(expect.arrayContaining(['icons/Icon.tsx', 'shell/shell.css', 'ui/ui.css', 'kit/Kit.tsx']));
     expect(outsideTokens.length).toBeGreaterThan(5);
     // A rule that sees empty files passes for nothing; make that a failure.
     for (const f of files) expect(f.text.length, f.name).toBeGreaterThan(0);

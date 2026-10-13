@@ -1,0 +1,81 @@
+import type { IconName } from '../icons/Icon';
+
+/*
+ * The screens and where they show. The sidebar, the bottom tab bar and the command line all
+ * read this list, so a new screen is one entry here, not three edits. Screens keep their hash
+ * address (#inbox, #work, ...) so a reload stays on the same screen.
+ */
+
+export type ScreenId = 'inbox' | 'sessions' | 'work' | 'decisions' | 'runs' | 'kit';
+
+export type Screen = {
+  id: ScreenId;
+  label: string;
+  /** The name in the bottom tab bar, where there is room for about four Korean letters. */
+  short: string;
+  icon: IconName;
+  /** Other names the command line accepts. */
+  aliases: string[];
+  /** False for screens opened only by address, like the design kit. */
+  inNav: boolean;
+  /** What a count next to the name means, for the tooltip and screen readers. */
+  countLabel?: (n: number) => string;
+};
+
+export const SCREENS: Screen[] = [
+  { id: 'inbox', label: '나를 기다리는 것', short: '기다림', icon: 'inbox', aliases: ['기다림', 'inbox'], inNav: true, countLabel: (n) => `${n}건` },
+  {
+    id: 'sessions',
+    label: '세션 현황',
+    short: '세션',
+    icon: 'session',
+    aliases: ['세션', 'sessions'],
+    inNav: true,
+    countLabel: (n) => `살아 있는 세션 ${n}개`,
+  },
+  { id: 'work', label: '작업', short: '작업', icon: 'work', aliases: ['work'], inNav: true },
+  { id: 'decisions', label: '결정', short: '결정', icon: 'decision', aliases: ['결정 기록', 'decisions'], inNav: true },
+  { id: 'runs', label: '실행 시험', short: '실행', icon: 'run', aliases: ['실행', 'runs'], inNav: true },
+  { id: 'kit', label: '디자인 키트', short: '키트', icon: 'doc', aliases: [], inNav: false },
+];
+
+/**
+ * Sidebar groups. A one-person organisation has one group; a team adds 「나 / 팀 / AI / 저장한 보기」
+ * here (DESIGN.md 「화면 배치」 1) and the sidebar draws group names once there is more than one.
+ */
+export const NAV_GROUPS: { id: string; label: string; items: ScreenId[] }[] = [
+  { id: 'screens', label: '화면', items: ['inbox', 'sessions', 'work', 'decisions', 'runs'] },
+];
+
+/** The four screens in the bottom tab bar; the rest go under 「더 보기」. */
+export const TAB_ITEMS: ScreenId[] = ['inbox', 'sessions', 'work', 'decisions'];
+
+export function screenById(id: ScreenId): Screen {
+  return SCREENS.find((s) => s.id === id)!;
+}
+
+/** `#work` and `#/work` both open the work screen; anything else opens the first screen. */
+export function screenFromHash(hash: string): ScreenId {
+  const id = hash.replace(/^#\/?/, '');
+  return SCREENS.find((s) => s.id === id)?.id ?? 'inbox';
+}
+
+const norm = (s: string) => s.replace(/\s+/g, '').toLowerCase();
+
+/**
+ * The screen a command-line query names: an exact name first, then a name that starts with the
+ * query, then one that contains it. A leading `>` (the command mark) is ignored. Screens opened
+ * only by address are not offered.
+ */
+export function matchScreen(query: string): Screen | null {
+  const q = norm(query.replace(/^\s*>/, ''));
+  if (q === '') return null;
+  const names = (s: Screen) => [s.label, s.short, ...s.aliases].map(norm);
+  const offered = SCREENS.filter((s) => s.inNav);
+  return (
+    offered.find((s) => names(s).includes(q)) ??
+    offered.find((s) => names(s).some((n) => n.startsWith(q))) ??
+    offered.find((s) => names(s).some((n) => n.includes(q))) ??
+    null
+  );
+}

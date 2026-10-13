@@ -56,10 +56,8 @@ export function Decisions({ onError, onRead }: Props) {
   return (
     <main className="decisions">
       <header>
-        <h1>결정 기록</h1>
-        <p>
-          zm-docs의 결정 기록을 가져온 것이다. 정본은 Git 파일이라 여기서는 고치지 않는다. 고치려면 zm-docs에서 새 결정 문서를 쓰고 다시 가져온다.
-        </p>
+        <h1>결정</h1>
+        <p>정본은 zm-docs의 Git 파일이라 여기서는 읽기만 한다.</p>
         <div className="filters">
           <select value={projectId} onChange={(e) => setProjectId(e.target.value)} aria-label="프로젝트">
             <option value="">모든 프로젝트</option>

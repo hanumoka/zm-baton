@@ -1,0 +1,291 @@
+/*
+ * Shared parts: icons, stage glyphs, tooltips, buttons, fields, checkboxes, selects, chips,
+ * group heads, empty states and loading rows. Each part has seven states (DESIGN.md 「상태와 문구」);
+ * `is-hover`, `is-focus` and `is-active` hold a state on for the design kit.
+ */
+
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Icons and stage glyphs: shapes from src/icons, colour from the text, width from --stroke. */
+.ico {
+  width: var(--icon);
+  height: var(--icon);
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: var(--stroke);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ico .dot { fill: currentColor; stroke: none; }
+kbd .ico { width: var(--fs-xs); height: var(--fs-xs); vertical-align: -1px; }
+
+.glyph { width: var(--icon); height: var(--icon); flex: none; color: var(--c-ink); }
+.glyph .ring { fill: none; stroke: currentColor; stroke-width: var(--stroke); stroke-linecap: round; }
+.glyph .fill { fill: currentColor; stroke: none; }
+.glyph.is-block { color: var(--c-block); }
+
+/* Tooltip: on hover and on keyboard focus, to the right of the element. */
+.tipped { position: relative; }
+.tipped::after {
+  content: attr(data-tip);
+  position: absolute;
+  z-index: var(--z-tip);
+  left: calc(100% + var(--s-2));
+  top: 50%;
+  transform: translateY(-50%);
+  width: max-content;
+  max-width: var(--w-tip);
+  padding: var(--s-1) var(--s-2);
+  border-radius: var(--r-xs);
+  background: var(--c-tip);
+  color: var(--c-on-tip);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  line-height: var(--lh-row);
+  text-align: left;
+  white-space: normal;
+  box-shadow: var(--sh-tip);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.tipped:hover::after,
+.tipped:focus-visible::after,
+.tipped.is-tip::after { opacity: 1; visibility: visible; }
+
+.is-focus { outline: var(--ring) solid var(--c-accent); outline-offset: var(--ring); }
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  min-height: var(--h-ctl);
+  padding: 0 var(--s-3);
+  background: var(--c-paper);
+  border: var(--rule) solid var(--c-rule-strong);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-semi);
+  line-height: var(--lh-tight);
+  color: var(--c-ink);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.btn:hover:not(:disabled, [aria-disabled="true"]),
+.btn.is-hover { background: var(--c-canvas-2); border-color: var(--c-ink-2); }
+.btn:active:not(:disabled, [aria-disabled="true"]),
+.btn.is-active { background: var(--c-side-hover); border-color: var(--c-ink); transform: translateY(var(--rule)); }
+.btn:disabled,
+.btn[aria-disabled="true"] { background: var(--c-canvas); border-color: var(--c-rule); color: var(--c-ink-3); cursor: not-allowed; }
+.btn[aria-busy="true"] { background: var(--c-canvas-2); border-color: var(--c-rule-strong); color: var(--c-ink-2); cursor: progress; }
+.btn.is-error { border-color: var(--c-block); color: var(--c-block); }
+
+.btn-primary { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+.btn-primary:hover:not(:disabled, [aria-disabled="true"]),
+.btn-primary.is-hover { background: var(--c-accent-hover); border-color: var(--c-accent-hover); }
+/* Pressed: the darker accent with a thin light line inside, so it reads apart from hover. */
+.btn-primary:active:not(:disabled, [aria-disabled="true"]),
+.btn-primary.is-active { background: var(--c-accent-hover); border-color: var(--c-accent-hover); box-shadow: inset 0 0 0 var(--rule) var(--c-on-accent-line); }
+.btn-primary:disabled { background: var(--c-canvas); border-color: var(--c-rule); color: var(--c-ink-3); }
+.btn-primary[aria-busy="true"] { background: var(--c-accent-hover); border-color: var(--c-accent-hover); color: var(--c-on-accent); }
+.btn-primary.is-error { background: var(--c-paper); border-color: var(--c-block); color: var(--c-block); }
+
+.btn-quiet { background: transparent; border-color: transparent; }
+
+/* A reason under a part that cannot be used, and what to do after an error. */
+.ctl-why,
+.ctl-err { display: block; margin-top: var(--s-1); font-size: var(--fs-xs); line-height: var(--lh-row); color: var(--c-ink-2); }
+.ctl-err { color: var(--c-block); }
+
+/* Text fields */
+.field {
+  flex: none;
+  height: var(--h-ctl);
+  min-width: 0;
+  padding: 0 var(--s-2);
+  background: var(--c-paper);
+  border: var(--rule) solid var(--c-rule-strong);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-md);
+  color: var(--c-ink);
+}
+.field::placeholder { color: var(--c-ink-2); }
+.field:hover,
+.field.is-hover { border-color: var(--c-ink-2); }
+.field.is-active { border-color: var(--c-ink); }
+.field:disabled { background: var(--c-canvas); border-color: var(--c-rule); color: var(--c-ink-2); cursor: not-allowed; }
+.field[aria-busy="true"] { background: var(--c-canvas-2); border-color: var(--c-rule); cursor: progress; }
+.field[aria-invalid="true"] { border-color: var(--c-block); }
+
+/* Checkbox with its label */
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: var(--h-ctl);
+  padding: 0 var(--s-2);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  color: var(--c-ink);
+  cursor: pointer;
+}
+.check input { margin: 0; }
+.check:hover,
+.check.is-hover { background: var(--c-canvas-2); }
+.check:has(input:focus-visible) { outline: var(--ring) solid var(--c-accent); outline-offset: var(--s-0); }
+.check:active,
+.check.is-active { background: var(--c-side-hover); }
+.check.is-disabled { color: var(--c-ink-3); cursor: not-allowed; }
+.check.is-disabled:hover { background: transparent; }
+.check.is-loading { color: var(--c-ink-2); cursor: progress; }
+.check.is-error { color: var(--c-block); }
+
+/* Select box: the browser's list, our frame and arrow */
+.select { position: relative; display: inline-flex; align-items: center; min-width: 0; }
+.select select {
+  height: var(--h-ctl);
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 var(--s-6) 0 var(--s-2);
+  background: var(--c-paper);
+  border: var(--rule) solid var(--c-rule-strong);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  color: var(--c-ink);
+  appearance: none;
+  cursor: pointer;
+}
+.select .chev { position: absolute; right: var(--s-2); pointer-events: none; color: var(--c-ink-2); }
+.select:hover select,
+.select.is-hover select { border-color: var(--c-ink-2); }
+.select.is-focus { outline: none; }
+.select.is-focus select { outline: var(--ring) solid var(--c-accent); outline-offset: var(--ring); }
+.select.is-active select { background: var(--c-canvas-2); border-color: var(--c-ink); }
+.select select:disabled { background: var(--c-canvas); border-color: var(--c-rule); color: var(--c-ink-2); cursor: not-allowed; }
+.select select[aria-busy="true"] { background: var(--c-canvas-2); cursor: progress; }
+.select.is-error select { border-color: var(--c-block); }
+
+/* Filter chip: a name and its value, under the command line */
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }
+.chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  height: var(--h-chip);
+  padding: 0 var(--s-2) 0 var(--s-3);
+  background: var(--c-paper);
+  border: var(--rule) solid var(--c-rule-strong);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  color: var(--c-ink-2);
+  white-space: nowrap;
+  cursor: pointer;
+  flex: none;
+}
+.chip select {
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+  margin: 0;
+  padding: 0 var(--s-5) 0 0;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font-weight: var(--fw-semi);
+  color: var(--c-ink);
+  appearance: none;
+  cursor: pointer;
+}
+.chip .chev { position: absolute; right: var(--s-2); pointer-events: none; color: var(--c-ink-2); }
+.chip input[type="checkbox"] { margin: 0 var(--s-1) 0 0; }
+.chip .n { font-weight: var(--fw-semi); color: var(--c-ink); }
+.chip:hover,
+.chip.is-hover { border-color: var(--c-ink-2); }
+.chip:has(:focus-visible),
+.chip.is-focus { outline: var(--ring) solid var(--c-accent); outline-offset: var(--s-0); }
+.chip:active,
+.chip.is-active { background: var(--c-canvas-2); border-color: var(--c-ink); }
+.chip.is-disabled { background: var(--c-canvas); border-color: var(--c-rule); color: var(--c-ink-3); cursor: not-allowed; }
+.chip.is-disabled select { color: var(--c-ink-3); cursor: not-allowed; }
+.chip.is-loading { background: var(--c-canvas-2); border-color: var(--c-rule); cursor: progress; }
+.chip.is-loading select { color: var(--c-ink-2); }
+.chip.is-error { border-color: var(--c-block); }
+
+/* Group heads: who holds the work now */
+.grp {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin: 0;
+  padding: var(--s-3) var(--s-4) var(--s-1);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  line-height: var(--lh-row);
+  color: var(--c-ink-2);
+  border-top: var(--rule) solid var(--c-rule);
+}
+.grp:first-of-type { border-top: 0; }
+.grp .n { color: var(--c-ink); }
+.grp .ico,
+.grp .glyph { color: var(--c-ink-2); }
+.grp .glyph.is-block { color: var(--c-block); }
+.grp .grp-r { margin-left: auto; font-weight: var(--fw-regular); }
+.sub {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin: 0;
+  padding: var(--s-2) var(--s-4) 0 calc(var(--s-4) + var(--icon) + var(--s-2));
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  line-height: var(--lh-row);
+  color: var(--c-ink);
+}
+.sub .n { color: var(--c-ink-2); font-weight: var(--fw-regular); }
+
+/* Empty states, indented under the group name they belong to */
+.empty-state {
+  display: grid;
+  grid-template-columns: var(--icon) minmax(0, 1fr);
+  column-gap: var(--s-2);
+  padding: var(--s-1) var(--s-4) var(--s-3);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-row);
+  color: var(--c-ink-2);
+}
+.empty-state > * { grid-column: 2; }
+.empty-state .es-mark { grid-column: 1; grid-row: 1; align-self: center; color: var(--c-block); }
+.empty-state p { margin: 0; max-width: 40em; }
+.empty-state .es-t { margin-bottom: var(--s-0); font-size: var(--fs-sm); font-weight: var(--fw-semi); color: var(--c-ink); }
+.empty-state.is-error .es-t { color: var(--c-block); }
+.empty-state .es-act { margin-top: var(--s-2); }
+
+/* Loading rows: the shape of a list row, no spinner */
+.skel-row {
+  display: grid;
+  grid-template-columns: var(--icon) minmax(0, 1fr);
+  grid-template-areas: "mark title" ". meta";
+  column-gap: var(--s-2);
+  row-gap: var(--s-1);
+  align-items: center;
+  padding: var(--s-2) var(--s-4);
+}
+.skel { display: block; height: var(--s-3); border-radius: var(--r-xs); background: var(--c-canvas-2); }
+.skel-mark { grid-area: mark; width: var(--icon); height: var(--icon); border-radius: var(--r-pill); }
+.skel-title { grid-area: title; }
+.skel-meta { grid-area: meta; width: 40%; height: var(--s-2); }

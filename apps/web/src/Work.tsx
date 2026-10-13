@@ -88,8 +88,7 @@ export function Work({ onError, onRead }: Props) {
       <header>
         <h1>작업</h1>
         <p>
-          zm-docs에서 가져온 작업(<code>TSK-</code> 번호)은 정본이 Git 파일이라 여기서는 읽기만 한다. 원본을 고친 뒤 <code>zm-baton import zm-docs</code>로
-          다시 가져온다. 여기서 만든 작업은 여기서 고친다.
+          <code>TSK-</code> 번호 작업은 정본이 zm-docs의 Git 파일이라 여기서는 읽기만 한다.
         </p>
         <div className="filters">
           <select value={projectId} onChange={(e) => setProjectId(e.target.value)} aria-label="프로젝트">
