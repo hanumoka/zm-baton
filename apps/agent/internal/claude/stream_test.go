@@ -43,6 +43,21 @@ func TestArgsKeepMarkerOutOfPromptAndEndOptions(t *testing.T) {
 	}
 }
 
+func TestRestrictedArgsComeBeforeThePrompt(t *testing.T) {
+	got := Args(Options{SessionID: sid, AllowedTools: "Read,Edit", Prompt: "do it", Restricted: true})
+	want := []string{
+		"-p", "--output-format", "stream-json", "--verbose",
+		"--session-id", sid,
+		"--permission-prompts", "none",
+		"--allowedTools", "Read,Edit",
+		"--restricted",
+		"--", "do it",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("args\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestMapSuccessfulRun(t *testing.T) {
 	m := NewMapper()
 	acts := mapAll(t, m,
