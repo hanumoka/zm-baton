@@ -56,7 +56,7 @@ export function Decisions({ onError, onRead }: Props) {
   return (
     <main className="decisions">
       <header>
-        <h1>결정 기록</h1>
+        <h1>결정</h1>
         <p>정본은 zm-docs의 Git 파일이라 여기서는 읽기만 한다.</p>
         <div className="filters">
           <select value={projectId} onChange={(e) => setProjectId(e.target.value)} aria-label="프로젝트">
