@@ -28,36 +28,10 @@ ol.events code { color: var(--c-ink-3); }
 .problems { margin: var(--s-2) var(--s-4); }
 .problems > button { padding: var(--s-1) var(--s-3); border: var(--rule) solid var(--c-rule-strong); background: var(--c-paper); border-radius: var(--r-sm); }
 
-/* First screen ("나를 기다리는 것"). */
-section.bucket { margin: 12px 0; border: 1px solid var(--c-rule); border-radius: var(--r-md); background: var(--c-paper); }
-section.bucket h2 {
-  display: flex; justify-content: space-between; gap: 8px; margin: 0; padding: 8px 12px;
-  font-size: var(--fs-md); background: var(--c-canvas-2); border-bottom: 1px solid var(--c-rule); border-radius: var(--r-md) var(--r-md) 0 0;
-}
-article.item { padding: 10px 12px; border-bottom: 1px dashed var(--c-rule); }
-article.item:last-child { border-bottom: none; }
-article.item .row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
-article.item .what { min-width: 0; overflow-wrap: anywhere; }
-article.item .acts { display: flex; gap: 6px; }
-article.item .acts button, .reason button { padding: 4px 10px; border: 1px solid var(--c-rule); background: var(--c-paper); border-radius: var(--r-sm); cursor: pointer; }
-ul.evidence { margin: 6px 0 0; padding-left: 18px; font-size: var(--fs-sm); color: var(--c-ink-2); }
-.hint { margin: 6px 0 0; font-size: var(--fs-sm); color: var(--c-ink-2); }
-.reason { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-top: 8px; }
-.reason label { display: flex; flex-direction: column; flex: 1; font-size: var(--fs-sm); color: var(--c-ink-2); }
-
-/* Session list. */
-label.inline { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-md); }
-label.inline input { flex: none; }
-.tablewrap { overflow-x: auto; border: 1px solid var(--c-rule); border-radius: var(--r-md); background: var(--c-paper); }
+/* Tables: Markdown tables in the decisions screen take these; ui/prose.css adds to them. */
 table { border-collapse: collapse; width: 100%; font-size: var(--fs-md); }
 th, td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--c-rule-soft); }
 th { background: var(--c-canvas-2); white-space: nowrap; }
-tr.gone td { color: var(--c-ink-3); }
-ul.files { margin: 0; padding: 0; list-style: none; }
-ul.files li.conflict code { background: var(--c-block-tint); }
-ul.files li.conflict b { color: var(--c-block); font-size: var(--fs-xs); }
-.empty { color: var(--c-ink-2); }
-.note { margin: var(--s-3) 0 0; font-size: var(--fs-sm); color: var(--c-ink-2); }
 
 /* The run test screen's list rows (App.tsx). */
 ul.list button span { min-width: 0; overflow-wrap: anywhere; }

@@ -1,9 +1,11 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { groupByBucket, newImmediate, repoName, shortId, since } from './inboxModel';
-import { Inbox } from './Inbox';
+import { Inbox } from './inbox/Inbox';
 import { clear, fail, lines, type Problems } from './problems';
-import { Sessions } from './Sessions';
+import { SessionDetail } from './sessions/SessionDetail';
+import { SessionList } from './sessions/SessionList';
+import { groupSessions, type ListState } from './sessions/sessionView';
 import type { InboxItem, SessionView } from './sessionsApi';
 import { ProblemList } from './Shell';
 
@@ -83,22 +85,26 @@ describe('labels', () => {
 });
 
 describe('Inbox', () => {
-  it('shows all five buckets, conflict actions and the waiting hint', () => {
+  it('shows all five buckets, the conflict file and the waiting session, and how long each has waited', () => {
     const html = renderToStaticMarkup(
       <Inbox
         items={[item(), item({ id: 'inb_w', bucket: 2, kind: 'session_waiting', source_kind: 'ses', notify: 'digest', detail: { branch: 'work/x' } })]}
+        error={null}
+        sessions={[]}
         now={T0 + 120_000}
         onChanged={() => {}}
         onError={() => {}}
+        onReload={() => {}}
       />,
     );
     for (const label of ['권한 요청', '멈춘 AI의 질문', '내 작업과 겹친 충돌', '위험 목록 검토', '표본 검토']) {
       expect(html).toContain(label);
     }
-    expect(html).toContain('충돌 아님');
     expect(html).toContain('docs/a.md');
-    expect(html).toContain('터미널에서 이어서 입력하면');
-    expect(html).toContain('2분 전');
+    expect(html).toContain('work/x');
+    expect(html).toContain('2분째');
+    expect(html).toContain('바로 알림');
+    expect(html).toContain('묶어 알림');
   });
 });
 
@@ -121,23 +127,35 @@ describe('Sessions', () => {
     ...over,
   });
 
-  it('marks conflicted files and hides unshared work', () => {
-    const html = renderToStaticMarkup(
-      <Sessions
-        sessions={[session(), session({ id: 'ses_ffffffffffffffff', shared: false, current_work: null, touched_files: [], conflicted_files: [] })]}
-        includeEnded={false}
-        onIncludeEnded={() => {}}
+  const sessionList = (state: ListState, sessions: SessionView[] = []) =>
+    renderToStaticMarkup(
+      <SessionList
+        state={state}
+        groups={groupSessions(sessions, false)}
+        head={{ base: '살아 있는 세션', count: sessions.length, narrowed: false }}
+        selected={null}
         now={T0}
+        onSelect={() => {}}
+        onPick={() => {}}
+        onOpen={() => {}}
+        onShowEnded={() => {}}
+        onClearFilters={() => {}}
+        onReload={() => {}}
       />,
     );
+
+  it('marks conflicted files and hides unshared work', () => {
+    const html = sessionList({ kind: 'rows' }, [session(), session({ id: 'ses_ffffffffffffffff', shared: false, current_work: null, touched_files: [], conflicted_files: [] })]);
     expect(html).toContain('결정 문서 셋 쓰는 중');
-    expect(html).toContain('공유 안 함');
+    expect(html).toContain('하는 일을 공유하지 않는다');
     expect(html).toContain('겹침');
     expect(html).toContain('hanumoka/zm-docs');
+    const detail = renderToStaticMarkup(<SessionDetail session={session()} inbox={[]} now={T0} />);
+    expect(detail).toContain('<code>docs/<wbr/>a.md</code>');
+    expect(detail).toContain('겹침');
   });
 
   it('says so when nothing is registered', () => {
-    const html = renderToStaticMarkup(<Sessions sessions={[]} includeEnded={false} onIncludeEnded={() => {}} now={T0} />);
-    expect(html).toContain('등록된 세션이 없다');
+    expect(sessionList({ kind: 'unused' })).toContain('등록된 세션이 없다');
   });
 });

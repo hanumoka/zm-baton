@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { App as RunTest } from './App';
 import { Decisions } from './decisions/Decisions';
 import { BUCKETS, newImmediate } from './inboxModel';
-import { Inbox } from './Inbox';
+import { Inbox } from './inbox/Inbox';
 import { Kit } from './kit/Kit';
 import { clear, fail, lines, type Problems, type Source } from './problems';
-import { Sessions } from './Sessions';
+import { Sessions } from './sessions/Sessions';
 import { sessionsApi, type InboxItem, type SessionView } from './sessionsApi';
 import { CommandBar, type Find } from './shell/CommandBar';
 import { isCommand, screenFromHash, type ScreenId } from './shell/screens';
@@ -21,22 +21,26 @@ const currentHash = () => (typeof window === 'undefined' ? '' : window.location.
 export const FINDS: Partial<Record<ScreenId, Pick<Find, 'placeholder' | 'label'>>> = {
   work: { placeholder: '작업 찾기, 화면 이동은 > 로 시작', label: '작업 찾기(제목·번호·다음 행동) 또는 화면 이동' },
   decisions: { placeholder: '결정 찾기, 화면 이동은 > 로 시작', label: '결정 찾기(번호·질문·결정) 또는 화면 이동' },
+  sessions: { placeholder: '세션 찾기, 화면 이동은 > 로 시작', label: '세션 찾기(세션 번호·하는 일·브랜치) 또는 화면 이동' },
 };
 
 /**
  * The Web screen: a sidebar on the left (a bottom tab bar on narrow screens), the command line
  * on top of the content, and the screen under it. The first screen polls even while another
  * screen is open, because browser notifications come from it (contract "알림과 집중 모드" 3:
- * notifications need the page open). Sessions are read everywhere too, for the sidebar count.
+ * notifications need the page open). Live sessions are read everywhere too, for the sidebar count
+ * and for the first screen to say what a related session works on; the session screen reads its own list.
  * The header's height is measured into `--h-tool`, so a screen can keep a pane in view under it
  * and the folded sidebar can start its items below it (their tooltips then never cover the chips).
  */
 export function Shell() {
   const [screen, setScreen] = useState<ScreenId>(() => screenFromHash(currentHash()));
   const [sideOpen, setSideOpen] = useState(() => readSideOpen());
-  const [items, setItems] = useState<InboxItem[]>([]);
-  const [sessions, setSessions] = useState<SessionView[]>([]);
-  const [includeEnded, setIncludeEnded] = useState(false);
+  /** What waits for me; null before the first read. */
+  const [items, setItems] = useState<InboxItem[] | null>(null);
+  const [inboxError, setInboxError] = useState<string | null>(null);
+  /** Live sessions; null before the first read. */
+  const [sessions, setSessions] = useState<SessionView[] | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [problems, setProblems] = useState<Problems>({});
   const [permission, setPermission] = useState<Permission>(() => (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission));
@@ -87,23 +91,26 @@ export function Shell() {
       for (const item of newImmediate(seen.current, list)) notify(item);
       seen.current = new Set(list.map((i) => i.id));
       setItems(list);
+      setInboxError(null);
       cleared('inbox');
     },
     3000,
     [refresh],
-    failed('inbox'),
+    (e) => {
+      setInboxError(e instanceof Error ? e.message : String(e));
+      failed('inbox')(e);
+    },
   );
 
-  const onSessions = screen === 'sessions';
   usePoll(
     async (alive, signal) => {
-      const list = await sessionsApi.sessions(includeEnded, signal);
+      const list = await sessionsApi.sessions(false, signal);
       if (!alive()) return;
       setSessions(list);
       cleared('sessions');
     },
-    onSessions ? 3000 : 10_000,
-    [onSessions, includeEnded, refresh],
+    screen === 'inbox' ? 5000 : 10_000,
+    [screen === 'inbox', refresh],
     failed('sessions'),
   );
 
@@ -123,8 +130,8 @@ export function Shell() {
     setPermission(await Notification.requestPermission());
   }
 
-  const counts = { inbox: items.length, sessions: sessions.filter((s) => s.state === 'live').length };
-  // The work and decisions screens find through the command line; a leading > still opens a screen.
+  const counts = { inbox: items?.length ?? 0, sessions: (sessions ?? []).filter((s) => s.state === 'live').length };
+  // The work, decisions and session screens find through the command line; a leading > still opens a screen.
   const finds = FINDS[screen];
   const find: Find | undefined = finds && {
     value: findQ,
@@ -150,15 +157,28 @@ export function Shell() {
           {screen === 'inbox' && (
             <Inbox
               items={items}
+              error={inboxError}
+              sessions={sessions}
               now={now}
               onChanged={() => {
                 cleared('judge');
                 setRefresh((r) => r + 1);
               }}
               onError={failed('judge')}
+              onReload={() => setRefresh((r) => r + 1)}
             />
           )}
-          {screen === 'sessions' && <Sessions sessions={sessions} includeEnded={includeEnded} onIncludeEnded={setIncludeEnded} now={now} />}
+          {screen === 'sessions' && (
+            <Sessions
+              onError={failed('sessions')}
+              onRead={() => cleared('sessions')}
+              chipHost={chipHost}
+              query={isCommand(findQ) ? '' : findQ}
+              onClearQuery={() => setFindQ('')}
+              inbox={items}
+              now={now}
+            />
+          )}
           {screen === 'work' && (
             <Work
               onError={failed('work')}

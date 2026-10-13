@@ -1,0 +1,38 @@
+/*
+ * The session screen's own parts. The list-and-detail layout, the row, the group heads and the
+ * detail head are shared with the other list screens (ui/panes.css, ui/ui.css); here are the row's
+ * conflict mark and second line, the session's properties and its files. Every value is a token.
+ */
+
+/* Row: a session that does not share its work says so in a quieter colour; a conflict is a shape and a word */
+.ss-none { font-weight: var(--fw-regular); color: var(--c-ink-2); }
+.ss-ovl { display: inline-flex; flex: none; align-items: center; gap: var(--s-1); font-size: var(--fs-xs); font-weight: var(--fw-semi); color: var(--c-block); }
+.ss .lrow-sub > * { margin-right: var(--s-3); }
+.ss .lrow-sub > :last-child { margin-right: 0; }
+.ss-state { font-weight: var(--fw-semi); color: var(--c-ink); }
+.ss-branch { font-family: var(--font-mono); }
+
+/* Detail: the facts line, then the session's properties as label and value */
+.ss-quiet { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.ss-st { font-weight: var(--fw-semi); }
+.ss-props { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s-1) var(--s-4); margin: 0; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.ss-props div { display: contents; }
+.ss-props dt { color: var(--c-ink-2); }
+.ss-props dd { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-1) var(--s-2); margin: 0; min-width: 0; }
+.ss-props code { font-size: var(--fs-xs); }
+.ss-id { overflow-wrap: anywhere; color: var(--c-ink); }
+
+/* Files: the overlapping ones with the way to their item, and the ones touched last */
+.ss-files { display: flex; flex-direction: column; gap: var(--s-3); margin: 0; padding: 0; list-style: none; }
+.ss-ovl-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2) var(--s-4); }
+.ss-ovl-path { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin: 0; min-width: 0; }
+.ss-ovl-path code { font-size: var(--fs-sm); color: var(--c-ink); }
+.ss-sub { margin: var(--s-1) 0 0; font-size: var(--fs-xs); line-height: var(--lh-row); color: var(--c-ink-2); }
+.ss-ovl-row .ss-sub { flex-basis: 100%; margin: 0; }
+.ss-judge { display: flex; flex-wrap: wrap; gap: var(--s-2); margin: 0; padding: 0; list-style: none; }
+.ss-judge code { font-size: var(--fs-xs); }
+.ss-touched { display: flex; flex-direction: column; gap: var(--s-1); margin: 0; padding: 0; list-style: none; font-size: var(--fs-xs); line-height: var(--lh-row); }
+.ss-touched li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); }
+.ss-touched code { color: var(--c-ink); }
+.ss-note { display: flex; align-items: flex-start; gap: var(--s-2); max-width: var(--w-text); margin: 0; padding: var(--s-4) 0; border-top: var(--rule) solid var(--c-rule-soft); font-size: var(--fs-xs); line-height: var(--lh-row); color: var(--c-ink-2); }
+.ss-note .ico { margin-top: var(--s-0); }

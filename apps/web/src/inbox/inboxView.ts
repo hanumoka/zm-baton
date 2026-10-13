@@ -1,0 +1,184 @@
+import type { IconName } from '../icons/Icon';
+import { BUCKETS, groupByBucket, inboxHref } from '../inboxModel';
+import { sessionsApi, type InboxItem, type NoticeStatus, type SessionView } from '../sessionsApi';
+
+/*
+ * What the first screen shows, as plain functions: the five buckets, what kind each item is and
+ * what it says, the sessions it names, the judgement a conflict takes, the address that keeps the
+ * selected item and which empty state applies. The server decides what waits for me and in which
+ * order; this only arranges what it returned.
+ */
+
+export type Bucket = InboxItem['bucket'];
+
+const MARKS: Record<Bucket, IconName> = { 1: 'lock', 2: 'wait', 3: 'conflict', 4: 'alert', 5: 'bell' };
+
+export type InboxGroup = {
+  bucket: Bucket;
+  label: string;
+  mark: IconName;
+  /** False while the server has no path that raises items here (inboxModel BUCKETS). */
+  raised: boolean;
+  items: InboxItem[];
+};
+
+/** The five groups in the contract's order, each with the longest wait first. Every group shows, even empty. */
+export function inboxGroups(items: InboxItem[]): InboxGroup[] {
+  const by = groupByBucket(items);
+  return BUCKETS.map(({ bucket, label, raised }) => ({ bucket, label, mark: MARKS[bucket], raised, items: by.get(bucket) ?? [] }));
+}
+
+/** The rows in the order they are drawn, for the arrow keys. */
+export const rowOrder = (groups: InboxGroup[]) => groups.flatMap((g) => g.items.map((i) => i.id));
+
+/** What an empty group says: a group the server fills says it is clear; one it does not fill yet says so. */
+export function groupNote(g: Pick<InboxGroup, 'bucket' | 'raised'>): string {
+  if (!g.raised) return g.bucket === 1 ? '아직 중계하지 않는다' : '서버가 아직 만들지 않는다';
+  return g.bucket === 2 ? '기다리는 세션이 없다' : '겹친 파일이 없다';
+}
+
+export type KindView = { mark: IconName; label: string };
+
+/** Short names of a waiting session's kinds (contract 「세션이 보내는 사건」 waiting). */
+const WAIT_LABELS: Record<string, { short: string; long: string }> = {
+  permission_prompt: { short: '권한 확인', long: 'AI 세션이 터미널에서 권한 확인을 기다린다' },
+  idle_prompt: { short: '다음 지시', long: 'AI 세션이 할 일을 마치고 다음 지시를 기다린다' },
+  elicitation_dialog: { short: '선택 질문', long: 'AI 세션이 터미널에서 선택형 질문의 답을 기다린다' },
+  elicitation_url_dialog: { short: '선택 질문', long: 'AI 세션이 터미널에서 선택형 질문의 답을 기다린다' },
+  agent_needs_input: { short: '입력 필요', long: 'AI 세션이 터미널에서 입력을 기다린다' },
+};
+const WAIT_OTHER = { short: '입력 기다림', long: 'AI 세션이 터미널에서 입력을 기다린다' };
+
+/** Kinds in the server's schema that it does not raise yet, named as the contract does. */
+const OTHER_KINDS: Record<string, KindView> = {
+  permission_request: { mark: 'lock', label: '권한 요청' },
+  run_question: { mark: 'ai', label: '실행의 질문' },
+  session_question: { mark: 'ai', label: '선택 질문' },
+  risk_review: { mark: 'alert', label: '위험 검토' },
+  sample_review: { mark: 'done', label: '표본 검토' },
+};
+
+const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null);
+
+/** The wait kind of a waiting session: the item's own field, else its detail. */
+const waitKind = (item: InboxItem) => item.wait_kind ?? text(item.detail?.wait_kind) ?? '';
+
+/** The kind on a row: a shape and a word, never colour alone (DESIGN.md 「색」). */
+export function kindOf(item: InboxItem): KindView {
+  if (item.kind === 'notice') return { mark: 'conflict', label: '충돌' };
+  if (item.kind === 'session_waiting') return { mark: 'wait', label: (WAIT_LABELS[waitKind(item)] ?? WAIT_OTHER).short };
+  return OTHER_KINDS[item.kind] ?? { mark: MARKS[item.bucket] ?? 'inbox', label: '알림' };
+}
+
+/** The conflicting file of a notice, as the server's evidence names it. */
+export const filePath = (item: InboxItem): string | null => (item.kind === 'notice' ? text(item.detail?.path) : null);
+
+/** The words a waiting session's executor sent (only 「Claude needs your permission to use <도구>」 is ever sent). */
+export const waitMessage = (item: InboxItem): string | null => (item.kind === 'session_waiting' ? text(item.detail?.message) : null);
+
+/** A session the item names: who touched the file, or the session that waits. */
+export type ItemSession = { id: string; executor: string | null; branch: string | null; touchedAt: string | null };
+
+export function itemSessions(item: InboxItem): ItemSession[] {
+  if (item.kind === 'session_waiting' || item.source_kind === 'ses') {
+    return [{ id: item.source_id, executor: null, branch: text(item.detail?.branch), touchedAt: null }];
+  }
+  const raw = item.detail?.sessions;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((s): ItemSession[] => {
+    if (typeof s !== 'object' || s === null) return [];
+    const r = s as Record<string, unknown>;
+    const id = text(r.session_id);
+    return id ? [{ id, executor: text(r.executor), branch: text(r.branch), touchedAt: text(r.touched_at) }] : [];
+  });
+}
+
+/** The live session with this id, or null when it is not live (or the list has not arrived). */
+export const liveSession = (sessions: SessionView[] | null, id: string) => sessions?.find((s) => s.id === id && s.state === 'live') ?? null;
+
+/** What the session works on, when it shares it. */
+export const sharedWork = (s: SessionView | null) => (s && s.shared ? text(s.current_work) : null);
+
+/**
+ * A row's title, cut to one line: the file two sessions touched; for a waiting session the words
+ * its executor sent, else what the session works on, else what it waits for.
+ */
+export function rowTitle(item: InboxItem, sessions: SessionView[] | null): string {
+  if (item.kind === 'notice') return filePath(item) ?? item.summary;
+  if (item.kind === 'session_waiting') {
+    return waitMessage(item) ?? sharedWork(liveSession(sessions, item.source_id)) ?? (WAIT_LABELS[waitKind(item)] ?? WAIT_OTHER).long;
+  }
+  return item.summary;
+}
+
+/** The detail's title: what waits for me, in one sentence. */
+export function detailTitle(item: InboxItem): string {
+  if (item.kind === 'notice') return '두 세션이 같은 파일을 고쳤다';
+  if (item.kind === 'session_waiting') return (WAIT_LABELS[waitKind(item)] ?? WAIT_OTHER).long;
+  return item.summary;
+}
+
+/** Why it waits for me: what happened and what my part is. */
+export function whyMe(item: InboxItem): string {
+  if (item.kind === 'notice') {
+    return '내가 등록한 세션 둘이 같은 저장소의 같은 파일을 고쳤다. 이 알림은 일을 막지 않는다. 겹친 것이 문제인지 보고 판정하면 이 목록에서 빠진다.';
+  }
+  if (item.kind === 'session_waiting') {
+    const k = waitKind(item);
+    if (k === 'permission_prompt') return '세션이 도구를 쓰기 전에 터미널에서 허락을 묻고 있다. 답할 때까지 그 세션은 멈춰 있다.';
+    if (k === 'idle_prompt') return '세션이 턴을 끝내고 다음 지시를 기다린다. 일을 마친 것일 수도, 글로 질문을 남긴 것일 수도 있다.';
+    return '세션이 터미널에서 사람의 입력을 기다린다. 입력할 때까지 그 세션은 멈춰 있다.';
+  }
+  return '이 종류는 서버가 아직 만들지 않는다. 계약에는 있어서 화면이 이름만 보인다.';
+}
+
+/** Whether the server alerts at once or in the twice-daily digest (contract 「알림과 집중 모드」). */
+export const notifyLabel = (item: Pick<InboxItem, 'notify'>) => (item.notify === 'immediate' ? '바로 알림' : '묶어 알림');
+
+/** The three judgements of a conflict (contract 「알림 처리」), with what each leaves behind. */
+export const JUDGEMENTS: { status: NoticeStatus; label: string; result: string }[] = [
+  { status: 'acknowledged', label: '확인', result: '읽었다. 「확인함」으로 남는다' },
+  { status: 'not_a_conflict', label: '충돌 아님', result: '이유를 적어 남긴다' },
+  { status: 'resolved', label: '해결', result: '고쳐서 겹침이 사라졌다' },
+];
+
+/** What a judgement sends; null for 「충돌 아님」 without a reason, which the server refuses, so nothing is sent. */
+export function judgement(status: NoticeStatus, reason: string): { status: NoticeStatus; note?: string } | null {
+  if (status !== 'not_a_conflict') return { status };
+  const note = reason.trim();
+  return note === '' ? null : { status, note };
+}
+
+export type Send = (noticeId: string, status: NoticeStatus, note?: string) => Promise<unknown>;
+
+/**
+ * Judges the conflict notice behind an inbox item (POST /api/notices/{id}/status). 「충돌 아님」
+ * without a reason is not sent: the reason field opens instead.
+ */
+export async function sendJudgement(item: Pick<InboxItem, 'source_id'>, status: NoticeStatus, reason: string, send: Send = sessionsApi.judgeNotice): Promise<'sent' | 'needs-reason'> {
+  const body = judgement(status, reason);
+  if (body === null) return 'needs-reason';
+  await send(item.source_id, body.status, body.note);
+  return 'sent';
+}
+
+/** The state of the whole list: loading, a failed read, nothing waiting, or rows. */
+export type ListState = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'empty' } | { kind: 'rows' };
+
+export function listState(items: InboxItem[] | null, error: string | null): ListState {
+  if (items === null) return error === null ? { kind: 'loading' } : { kind: 'error', message: error };
+  return items.length === 0 ? { kind: 'empty' } : { kind: 'rows' };
+}
+
+/** The selected item, kept in the address (`#inbox?item=inb_…`) so a reload or a link opens it. */
+export type InboxView = { selected: string | null };
+
+export function readView(hash: string): InboxView {
+  const at = hash.indexOf('?');
+  const p = new URLSearchParams(at < 0 ? '' : hash.slice(at + 1));
+  return { selected: p.get('item') || null };
+}
+
+export function writeView(v: InboxView): string {
+  return v.selected ? inboxHref(v.selected) : '#inbox';
+}

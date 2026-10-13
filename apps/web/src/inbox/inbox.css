@@ -1,0 +1,84 @@
+/*
+ * The first screen's own parts. The list-and-detail layout, the row, the group heads and the detail
+ * head are shared with the work and decisions screens (ui/panes.css, ui/ui.css); here are the row's
+ * second line, the conflicting file, the related sessions, the judgement buttons and the reason form.
+ * Every value is a token.
+ */
+
+/* Row: a conflict's title is its file, in monospace; the second line spaces its parts, no dots between */
+.ib-file { font-family: var(--font-mono); font-size: var(--fs-sm); font-weight: var(--fw-medium); }
+.ib .lrow-sub > * { margin-right: var(--s-3); }
+.ib .lrow-sub > :last-child { margin-right: 0; }
+.ib-age { color: var(--c-ink); }
+.ib-ntf.is-now { font-weight: var(--fw-semi); color: var(--c-ink); }
+.ib-ses-ref { display: inline-flex; align-items: baseline; gap: var(--s-1); }
+.ib-ses-ref code { font-size: var(--fs-xs); }
+
+/* Detail: facts line and the file */
+.ib-kind { font-weight: var(--fw-semi); }
+.ib-when { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.ib-path { margin: 0; }
+.ib-path code { font-size: var(--fs-md); color: var(--c-ink); }
+.ib-sub,
+.ib-note { margin: var(--s-1) 0 0; font-size: var(--fs-xs); line-height: var(--lh-row); color: var(--c-ink-2); }
+.ib-note { margin: 0 0 var(--s-2); }
+.ib-sub code { font-size: var(--fs-xs); }
+
+/* Related sessions in the aside: executor, number and branch, then what it works on */
+.ib-sessions { display: flex; flex-direction: column; gap: var(--s-2); margin: 0; padding: 0; list-style: none; }
+.ib-ses {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-0);
+  margin: 0 0 0 calc(var(--s-2) * -1);
+  padding: var(--s-1) var(--s-2);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-row);
+  color: var(--c-ink);
+  text-decoration: none;
+}
+.ib-ses:hover { background: var(--c-canvas-2); }
+.ib-ses:hover .ib-ses-t { text-decoration: underline; text-underline-offset: var(--underline-gap); }
+.ib-ses:active { background: var(--c-side-hover); }
+.ib-ses-l1 { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); }
+.ib-ses-l1 .ico { color: var(--c-ink-2); }
+.ib-ses-l1 code { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.ib-branch { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.ib-ses-t { font-weight: var(--fw-medium); }
+.ib-ses .ib-sub { margin: 0; }
+
+/* What I can do: the three judgements with what each leaves, or where a waiting session is answered */
+.ib-acts { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.ib-acts .btn { flex-direction: column; align-items: flex-start; gap: 0; min-height: var(--h-btn); padding: var(--s-1) var(--s-3); }
+.ib-acts .btn small { font-size: var(--fs-xs); font-weight: var(--fw-regular); color: var(--c-ink-2); }
+.ib-acts .btn-primary small { color: var(--c-on-accent); }
+.ib-acts .btn:disabled small { color: var(--c-ink-3); }
+.ib-acts-row { margin: var(--s-3) 0 0; }
+.ib-term { display: flex; align-items: flex-start; gap: var(--s-2); max-width: var(--w-text); margin: 0; line-height: var(--lh-row); }
+.ib-term .ico { margin-top: var(--s-0); color: var(--c-ink-2); }
+.ib-dt .dt-sec > .ib-sub:last-child { margin-top: var(--s-3); }
+
+.ib-reason { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s-2); max-width: var(--w-text); margin: var(--s-3) 0 0; }
+.ib-reason label { display: flex; flex: 1 1 var(--w-cell); flex-direction: column; gap: var(--s-1); font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.ib-reason .field { width: 100%; color: var(--c-ink); }
+.ib-reason .ctl-why { flex-basis: 100%; margin-top: 0; }
+
+.ib-refused {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  max-width: var(--w-text);
+  margin: var(--s-3) 0 0;
+  padding: var(--s-2) var(--s-3);
+  background: var(--c-block-tint);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-row);
+}
+.ib-refused .ico { margin-top: var(--s-0); color: var(--c-block); }
+
+/* Narrow: the buttons share the width, so each is a wide target */
+@media (max-width: 760px) {
+  .ib-acts .btn { flex: 1 1 auto; }
+}
