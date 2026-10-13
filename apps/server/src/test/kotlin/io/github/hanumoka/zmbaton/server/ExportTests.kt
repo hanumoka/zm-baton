@@ -152,6 +152,34 @@ class ExportTests @Autowired constructor(
 	}
 
 	@Test
+	fun `device repositories and delegations are exported, remotes without credentials`() {
+		val device = obj(call("POST", "/api/devices", """{"name":"export-pc"}""").body())["device_id"] as String
+		val repo = "git:" + UUID.randomUUID().toString().replace("-", "")
+		val added = call(
+			"POST", "/api/devices/$device/repositories",
+			"""{"repo_key":"$repo","name":"demo","remote":"https://me:s3cret-value@github.com/me/demo.git?token=abc#x"}""",
+		)
+		assertEquals(200, added.statusCode(), added.body())
+		val work = obj(call("POST", "/api/work-items", """{"title":"to export","responsible_user_id":"usr_owner"}""").body())["id"] as String
+		val version = ((obj(call("GET", "/api/work-items/$work").body())["item"] as Map<*, *>)["version"] as Number).toLong()
+		val delegated = call(
+			"POST", "/api/work-items/$work/delegations",
+			"""{"executor":"claude_code","device_id":"$device","repo_key":"$repo","version":$version}""",
+		)
+		assertEquals(201, delegated.statusCode(), delegated.body())
+
+		val (response, bundle) = export()
+		assertFalse(response.body().contains("s3cret-value"), "the remote's password")
+		assertFalse(response.body().contains("token=abc"), "the remote's query")
+		val repository = records(bundle, "device_repositories").single { it["device_id"] == device }
+		assertEquals("https://github.com/me/demo.git", repository["remote"])
+		val delegation = records(bundle, "delegations").single { it["work_item_id"] == work }
+		assertEquals(repo, (delegation["scope"] as Map<*, *>)["repo_key"])
+		val run = records(bundle, "runs").single { it["delegation_id"] == delegation["id"] }
+		assertTrue((run["instruction"] as String).contains("to export"))
+	}
+
+	@Test
 	fun `the export is a person action`() {
 		val f = fixture()
 		assertEquals(403, call("GET", "/api/export", token = f.token).statusCode())

@@ -60,10 +60,15 @@ class ExportService(
 			Triple("decisions", "decisions", "decided_on nulls last, external_ref nulls last, id"),
 			Triple("decision_projects", "decision_projects", "decision_id, project_id"),
 			Triple("devices", "devices", "created_at, id"),
+			// Remotes are stored cleaned (DelegationService.addRepository: SessionService.cleanRemote
+			// drops user info, query and fragment, and local paths), so no credential is exported.
+			Triple("device_repositories", "device_repositories", "device_id, repo_key"),
 			Triple("sessions", "agent_sessions", "created_at, id"),
 			Triple("session_events", "session_events", "received_at, event_id"),
 			Triple("inbox_items", "inbox_items", "created_at, id"),
 			Triple("notices", "notices", "created_at, id"),
+			// Delegation scopes and run workspaces hold repository keys, branches and tool names, never a path.
+			Triple("delegations", "delegations", "created_at, id"),
 			Triple("runs", "runs", "created_at, id"),
 			Triple("run_events", "run_events", "received_at, event_id"),
 			Triple("audit_log", "audit_log", "at, id"),
