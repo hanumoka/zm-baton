@@ -11,6 +11,7 @@ import './ui/prose.css';
 import './work/work.css';
 import './decisions/decisions.css';
 import './inbox/inbox.css';
+import './sessions/sessions.css';
 import './kit/kit.css';
 
 createRoot(document.getElementById('root')!).render(
