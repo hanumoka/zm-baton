@@ -186,6 +186,44 @@ class AuditApiTests @Autowired constructor(
 	}
 
 	@Test
+	fun `runs requested, claimed and ended, delegations and device repositories are audited`() {
+		// The compat-test path: a person makes a run, a connector claims it, its report ends it.
+		val work = obj(call("POST", "/api/work-items", """{"title":"run audit","responsible_user_id":"usr_owner"}""").second)["id"] as String
+		val (made, madeBody) = call("POST", "/api/work-items/$work/runs", """{"executor":"claude_code"}""")
+		assertEquals(201, made, madeBody)
+		val run = obj(madeBody)["id"] as String
+		val dev = device()
+		val claimed = obj(call("POST", "/api/runs/$run/claim", """{"device_id":"$dev"}""").second)
+		val gen = (claimed["generation"] as Number).toLong()
+		val (ended, endedBody) = call(
+			"POST", "/api/runs/$run/events",
+			"""{"protocol_version":1,"events":[{"event_id":"evt_${UUID.randomUUID()}","generation":$gen,"seq":1,
+			    "kind":"lifecycle","payload":{"phase":"ended","end_reason":"failed"}}]}""",
+		)
+		assertEquals(200, ended, endedBody)
+		val rows = auditOf("run", run)
+		assertEquals(listOf("run.ended", "run.claimed", "run.requested"), actions(rows))
+		assertEquals(listOf("system" to run, "system" to dev, "person" to "usr_owner"), rows.map { it["actor_kind"] to it["actor_id"] })
+		assertEquals("failed", (rows.first()["details"] as Map<*, *>)["end_reason"])
+
+		// Handing work to an AI: the repository, the delegation, taking it back, removing the repository.
+		val repo = repoKey()
+		assertEquals(200, call("POST", "/api/devices/$dev/repositories", """{"repo_key":"$repo","name":"demo"}""").first)
+		val ready = obj(call("POST", "/api/work-items", """{"title":"delegated","responsible_user_id":"usr_owner"}""").second)["id"] as String
+		fun version() = ((obj(call("GET", "/api/work-items/$ready").second)["item"] as Map<*, *>)["version"] as Number).toLong()
+		val (delegated, delegatedBody) = call(
+			"POST", "/api/work-items/$ready/delegations",
+			"""{"executor":"claude_code","device_id":"$dev","repo_key":"$repo","version":${version()}}""",
+		)
+		assertEquals(201, delegated, delegatedBody)
+		val delegatedRun = list(call("GET", "/api/work-items/$ready/runs").second).single()["id"] as String
+		assertEquals(200, call("POST", "/api/runs/$delegatedRun/withdraw", """{"version":${version()}}""").first)
+		assertEquals(200, call("DELETE", "/api/devices/$dev/repositories?repo_key=${q(repo)}").first)
+		assertEquals(listOf("work_item.delegation_withdrawn", "work_item.delegated", "work_item.created"), actions(auditOf("wrk", ready)))
+		assertEquals(listOf("device.repository_removed", "device.repository_added", "device.registered"), actions(auditOf("dev", dev)))
+	}
+
+	@Test
 	fun `the audit API filters, pages and refuses session tokens`() {
 		val (_, createdBody) = call("POST", "/api/work-items", """{"title":"paged","responsible_user_id":"usr_owner","initial_stage":"draft"}""")
 		val id = obj(createdBody)["id"] as String
