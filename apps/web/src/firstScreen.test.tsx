@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { groupByBucket, newImmediate, repoName, shortId, since } from './inboxModel';
-import { Inbox } from './Inbox';
+import { Inbox } from './inbox/Inbox';
 import { clear, fail, lines, type Problems } from './problems';
 import { Sessions } from './Sessions';
 import type { InboxItem, SessionView } from './sessionsApi';
@@ -83,22 +83,26 @@ describe('labels', () => {
 });
 
 describe('Inbox', () => {
-  it('shows all five buckets, conflict actions and the waiting hint', () => {
+  it('shows all five buckets, the conflict file and the waiting session, and how long each has waited', () => {
     const html = renderToStaticMarkup(
       <Inbox
         items={[item(), item({ id: 'inb_w', bucket: 2, kind: 'session_waiting', source_kind: 'ses', notify: 'digest', detail: { branch: 'work/x' } })]}
+        error={null}
+        sessions={[]}
         now={T0 + 120_000}
         onChanged={() => {}}
         onError={() => {}}
+        onReload={() => {}}
       />,
     );
     for (const label of ['권한 요청', '멈춘 AI의 질문', '내 작업과 겹친 충돌', '위험 목록 검토', '표본 검토']) {
       expect(html).toContain(label);
     }
-    expect(html).toContain('충돌 아님');
     expect(html).toContain('docs/a.md');
-    expect(html).toContain('터미널에서 이어서 입력하면');
-    expect(html).toContain('2분 전');
+    expect(html).toContain('work/x');
+    expect(html).toContain('2분째');
+    expect(html).toContain('바로 알림');
+    expect(html).toContain('묶어 알림');
   });
 });
 

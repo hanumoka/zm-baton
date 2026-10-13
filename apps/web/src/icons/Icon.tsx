@@ -31,6 +31,7 @@ export type IconName =
   | 'lock'
   | 'bell'
   | 'alert'
+  | 'conflict'
   | 'chevron-down'
   | 'more'
   | 'arrow-up'
@@ -157,6 +158,13 @@ const SHAPES: Record<IconName, ReactNode> = {
       <circle className="dot" cx="8" cy="11" r=".9" />
     </>
   ),
+  // Two pieces of work that overlap: two circles sharing a part, like the file two sessions both touched.
+  conflict: (
+    <>
+      <circle cx="5.75" cy="8" r="4" />
+      <circle cx="10.25" cy="8" r="4" />
+    </>
+  ),
   'chevron-down': <path d="M4.75 6.5 8 9.75 11.25 6.5" />,
   more: (
     <>
@@ -194,6 +202,7 @@ export const ICONS: { name: IconName; label: string }[] = [
   { name: 'lock', label: '잠김' },
   { name: 'bell', label: '브라우저 알림' },
   { name: 'alert', label: '오류' },
+  { name: 'conflict', label: '겹침(충돌)' },
   { name: 'chevron-down', label: '펼쳐 고르기' },
   { name: 'more', label: '더 보기' },
   { name: 'arrow-up', label: '위로' },
