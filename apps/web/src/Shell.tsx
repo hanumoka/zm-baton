@@ -1,16 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { App as RunTest } from './App';
+import { Decisions } from './Decisions';
 import { BUCKETS, newImmediate } from './inboxModel';
 import { Inbox } from './Inbox';
 import { clear, fail, lines, type Problems, type Source } from './problems';
 import { Sessions } from './Sessions';
 import { sessionsApi, type InboxItem, type SessionView } from './sessionsApi';
 import { usePoll } from './usePoll';
+import { Work } from './Work';
 
-type Tab = 'inbox' | 'sessions' | 'runs';
+type Tab = 'inbox' | 'sessions' | 'work' | 'decisions' | 'runs';
 const TABS: { id: Tab; label: string }[] = [
   { id: 'inbox', label: '나를 기다리는 것' },
   { id: 'sessions', label: '세션 현황' },
+  { id: 'work', label: '작업' },
+  { id: 'decisions', label: '결정' },
   { id: 'runs', label: '실행 시험' },
 ];
 
@@ -79,6 +83,9 @@ export function Shell() {
   function go(t: Tab) {
     window.location.hash = t;
     setTab(t);
+    // A screen that is not shown is not read: its old failure says nothing now.
+    if (t !== 'work') cleared('work');
+    if (t !== 'decisions') cleared('decisions');
   }
 
   async function askPermission() {
@@ -114,6 +121,8 @@ export function Shell() {
         />
       )}
       {tab === 'sessions' && <Sessions sessions={sessions} includeEnded={includeEnded} onIncludeEnded={setIncludeEnded} now={now} />}
+      {tab === 'work' && <Work onError={failed('work')} onRead={() => cleared('work')} />}
+      {tab === 'decisions' && <Decisions onError={failed('decisions')} onRead={() => cleared('decisions')} />}
       {tab === 'runs' && <RunTest />}
     </div>
   );

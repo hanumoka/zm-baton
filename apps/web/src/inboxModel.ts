@@ -2,10 +2,10 @@ import type { InboxItem, SessionView } from './sessionsApi';
 
 /** The five buckets of the first screen, in the contract's order (contract v1 "항목과 순서"). */
 export const BUCKETS: { bucket: InboxItem['bucket']; label: string; empty: string }[] = [
-  { bucket: 1, label: '권한 요청', empty: '권한 요청 중계는 다음 묶음에서 만든다' },
+  { bucket: 1, label: '권한 요청', empty: '권한 요청 중계는 아직 없다' },
   { bucket: 2, label: '멈춘 AI의 질문', empty: '없음' },
   { bucket: 3, label: '내 작업과 겹친 충돌', empty: '없음' },
-  { bucket: 4, label: '위험 목록 검토', empty: '위험 경로 검토는 다음 묶음에서 만든다' },
+  { bucket: 4, label: '위험 목록 검토', empty: '위험 경로 검토는 아직 없다' },
   { bucket: 5, label: '표본 검토 · 나머지 알림', empty: '없음' },
 ];
 
