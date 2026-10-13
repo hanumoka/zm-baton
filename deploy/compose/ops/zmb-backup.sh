@@ -98,7 +98,8 @@ loop() {
 		idle
 		;;
 	esac
-	log "daily backup is on: every $every hours, keeping the newest $keep daily backups (0: all) in $DIR"
+	if [ "$keep" -eq 0 ]; then kept="every daily backup (ZM_BATON_BACKUP_KEEP=0)"; else kept="the newest $keep daily backups"; fi
+	log "daily backup is on: every $every hours, keeping $kept in $DIR"
 	# A backup cut short by a stop leaves its hidden partial file; only those of ours are removed.
 	find "$DIR" -maxdepth 1 -type f -name '.zm-baton-*.dump.partial' -mmin +60 -exec rm -f {} + 2>/dev/null
 	while :; do

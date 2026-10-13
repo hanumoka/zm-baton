@@ -69,7 +69,7 @@ Get-ChildItem ../zm-baton-backups   # 저장소 폴더에서. ZM_BATON_BACKUP_DI
 |---|---|---|
 | `ZM_BATON_BACKUP=off` | 매일 백업을 끈다. 컨테이너는 떠 있되 아무것도 하지 않는다 | `on` |
 | `ZM_BATON_BACKUP_DIR=D:/zm-baton-backups` | 백업 폴더. 절대 경로로 쓴다. 다른 디스크를 권한다 | 저장소 옆 `zm-baton-backups` |
-| `ZM_BATON_BACKUP_KEEP=30` | 남길 `daily` 백업 수. `0`이면 하나도 지우지 않는다 | `14` |
+| `ZM_BATON_BACKUP_KEEP=30` | 남길 `daily` 백업 수. `0`이면 하나도 지우지 않는다(백업은 계속 뜬다). 줄이면 다음 매일 백업을 뜬 뒤에 지운다 | `14` |
 | `ZM_BATON_BACKUP_EVERY_HOURS=12` | 백업 간격(시간) | `24` |
 | `ZM_BATON_BACKUP_USER=1000:1000` | Linux에서 백업 파일을 내 사용자로 쓴다 | `0:0`(root) |
 

@@ -24,6 +24,12 @@
 | 작업 만들기·고치기·단계 넘기기·대기 사유 붙이기·떼기 | `work_item.created`, `.updated`, `.stage_changed`, `.wait_added`, `.wait_removed` | `wrk` |
 | 검토 단계 설정 | `workflow.skipped_stages` | `org` |
 | zm-docs 가져오기 | `import.zm_docs.applied`(묶음), 기록마다 `work_item.imported`·`.synced`, `project.imported`·`.synced`, `decision.imported`·`.synced` | `wrk`, `prj`, `dcs` |
+| 기기에 저장소 등록·삭제(`zm-baton repo add`·`remove`) | `device.repository_added`, `device.repository_removed` | `dev` |
+| 작업을 AI에게 맡기기·거두기 | `work_item.delegated`, `work_item.delegation_withdrawn` | `wrk` |
+| 실행 시험으로 실행 시도 만들기 | `run.requested` | `run` |
+| 연결 프로그램이 실행 시도를 가져감(청구) | `run.claimed`(행위자 `system`, 번호는 그 기기) | `run` |
+| 실행 시도가 끝남 | `run.ended`(행위자 `system`, 번호는 그 실행 시도. 끝난 이유와 「결과 확인 필요」를 달았는지) | `run` |
+| 맡긴 실행이 작업 단계를 옮김 | `work_item.stage_changed`(행위자 `system`, 번호는 그 실행 시도) | `wrk` |
 | 사람만 할 수 있는 요청을 세션 토큰으로 시도 | `person_action.refused` | `api` |
 | 보존 규칙으로 지움 | `retention.purged`(행위자 `system`·`retention`) | 없음 |
 | 내보내기 | `export.downloaded` | 없음 |
@@ -36,7 +42,7 @@
 1. **읽기.** 목록·상세·감사 기록을 읽는 요청은 남기지 않는다. 예외는 내보내기다. 모든 기록이 서버 밖으로 나가기 때문이다.
 2. **보고 자체.** 세션의 「지금 하는 일」 요약, 파일 수정 보고, 기다림 보고, 실행 시도의 사건은 각자의 표(`session_events`, `run_events`)에 원문으로 남는다. 감사 기록에는 그 보고가 만든 판단(공유 켜고 끔, 충돌 알림 생김)만 남긴다. 같은 충돌이 반복되면 알림의 반복 수만 오르고 감사 기록은 늘지 않는다.
 3. **비밀값.** 상세에는 번호·개수·짧은 이유만 넣는다. 세션 토큰과 그 해시는 넣지 않는다(시험으로 확인한다).
-4. **실행 시도 만들기·청구·종료.** 아직 감사 기록이 없다. 같은 파일(`RunService.kt`)을 「작업을 AI에게 맡기기」 묶음이 다시 쓰고 있어, 그 묶음에서 남기도록 넘겼다.
+4. **실행 시도가 시작됨.** 상태가 `running`으로 바뀌는 것은 실행 사건(`run_events`)에 남고, 맡긴 실행이면 작업의 단계 이동이 감사 기록에 남는다.
 
 ### 읽기
 
@@ -51,7 +57,7 @@ Invoke-RestMethod "http://127.0.0.1:18081/api/audit?actor_kind=system&limit=50"
 
 | 칸 | 뜻 |
 |---|---|
-| `target_kind`, `target_id` | 대상 종류(`wrk`·`ses`·`ntc`·`dev`·`prj`·`dcs`·`org`·`api`)와 번호 |
+| `target_kind`, `target_id` | 대상 종류(`wrk`·`ses`·`ntc`·`dev`·`run`·`prj`·`dcs`·`org`·`api`)와 번호 |
 | `actor_kind`, `actor_id` | 행위자 종류(`person`·`session`·`system`)와 번호 |
 | `action` | 동작. `.`으로 끝나면 그것으로 시작하는 동작 전부 |
 | `before` | 이 줄보다 오래된 것만. 앞 쪽의 마지막 줄 번호(`aud_…`)를 주면 다음 쪽이 나온다. 시각(`2026-10-14T09:00:00+09:00`)도 된다 |
@@ -129,7 +135,7 @@ JSON 하나다. 형식 이름은 `zm-baton.export`, 판은 `format_version` 1이
 | `provenance.database` | 마이그레이션 판과 적용한 마이그레이션 목록 |
 | `provenance.access` | 권한 정보. 1단계는 사람이 한 명이라 모든 기록을 그 사람이 본다 |
 | `provenance.withheld_fields`, `not_exported` | 일부러 뺀 칸(`agent_sessions.token_hash`)과 뺀 표 |
-| `collections.<이름>` | 표마다 `table`, `count`, `records`. 프로젝트, 작업, 결정, 결정과 프로젝트의 연결, 기기, 세션, 세션 사건, 첫 화면 항목, 충돌 알림, 실행 시도, 실행 사건, 감사 기록, 조직 설정 |
+| `collections.<이름>` | 표마다 `table`, `count`, `records`. 프로젝트, 작업, 결정, 결정과 프로젝트의 연결, 기기, 기기 저장소, 세션, 세션 사건, 첫 화면 항목, 충돌 알림, 위임, 실행 시도(실행 지시와 작업 트리 포함), 실행 사건, 감사 기록, 조직 설정. 기기 저장소의 원격 주소는 서버가 받을 때 이미 사용자 정보·쿼리·조각을 떼고 저장하므로 그대로 내보내도 자격 증명이 없다. 위임 범위와 작업 트리는 저장소 키·브랜치·도구 이름만 담고 경로는 담지 않는다 |
 | 작업·결정의 `source` | 그 기록의 정본 위치. `{"of_truth": "zm-baton"}`이면 이 서버가 정본이다. `{"of_truth": "git", "repo_key", "path", "commit", "external_ref"}`이면 그 저장소·파일·커밋의 Git 파일이 정본이고 이 기록은 가져온 복사본이다 |
 
 모든 표를 한 시점의 같은 상태로 읽는다. 내보낸 사실은 감사 기록 `export.downloaded`에 종류별 개수와 함께 남는다.
