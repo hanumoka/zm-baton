@@ -260,10 +260,10 @@ describe('work list', () => {
 
   it('draws a row as glyph, stage, number and title, then the wait reason or the next action', () => {
     const html = list({ kind: 'rows' }, [blocked, plain], 'wrk_b');
-    expect(html).toContain('<span class="wrow-stage">수행</span><code class="wrow-ref">TSK-021</code><span class="wrow-title">Temporal을 배운다</span>');
+    expect(html).toContain('<span class="lrow-state">수행</span><code class="lrow-ref">TSK-021</code><span class="lrow-title">Temporal을 배운다</span>');
     expect(html).toContain('data-stage="in_progress"');
     expect(html).toContain('glyph is-block');
-    expect(html).toContain('<span class="wrow-proj">hanumoka-site</span><span class="wrow-why">다른 사정으로 막힘</span>');
+    expect(html).toContain('<span class="lrow-proj">hanumoka-site</span><span class="wrow-why">다른 사정으로 막힘</span>');
     expect(html).toContain('<span class="wrow-note">컨테이너가 안 뜬다</span>');
     // A blocked row says why it waits, not what comes next.
     expect(html).not.toContain('재시작 후 확인');
@@ -428,8 +428,8 @@ describe('work detail', () => {
 describe('work screen', () => {
   it('lays out the list and the detail with no description paragraph in its head', () => {
     const html = renderToStaticMarkup(<Work onError={() => {}} onRead={() => {}} chipHost={null} query="" onClearQuery={() => {}} />);
-    expect(html).toMatch(/^<main class="wk"><h1 class="sr">작업<\/h1><section class="wk-list"/);
-    expect(html).toContain('<section class="wk-detail" aria-label="작업 상세">');
+    expect(html).toMatch(/^<main class="panes wk"><h1 class="sr">작업<\/h1><section class="pane-list"/);
+    expect(html).toContain('<section class="pane-detail" aria-label="작업 상세">');
     expect(html).toContain('aria-busy="true"');
     expect(html).not.toContain('<header>');
     // The search box moved to the command line.

@@ -1,6 +1,6 @@
 /*
- * Shared parts: icons, stage glyphs, tooltips, buttons, fields, checkboxes, selects, chips,
- * group heads, empty states and loading rows. Each part has seven states (DESIGN.md 「상태와 문구」);
+ * Shared parts: icons, stage glyphs, decision marks, tooltips, buttons, fields, checkboxes, selects,
+ * chips, group heads, empty states and loading rows. Each part has seven states (DESIGN.md 「상태와 문구」);
  * `is-hover`, `is-focus` and `is-active` hold a state on for the design kit.
  */
 
@@ -225,6 +225,14 @@ kbd .ico { width: var(--fs-xs); height: var(--fs-xs); vertical-align: -1px; }
 .chip.is-loading { background: var(--c-canvas-2); border-color: var(--c-rule); cursor: progress; }
 .chip.is-loading select { color: var(--c-ink-2); }
 .chip.is-error { border-color: var(--c-block); }
+
+/* The row of chips a screen draws under the command line (#screen-chips); one line on narrow screens */
+.chip-row { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; gap: var(--s-2); min-width: 0; }
+.chip-row .chip select { field-sizing: content; }
+.chip-row .chip :is(.glyph, .dmark) { flex: none; }
+@media (max-width: 760px) {
+  .chip-row { flex: none; flex-wrap: nowrap; }
+}
 
 /* Group heads: who holds the work now */
 .grp {

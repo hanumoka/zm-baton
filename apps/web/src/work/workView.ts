@@ -1,9 +1,11 @@
 import type { Project, Stage, WorkItem } from '../workApi';
 import { STAGES, stageLabel } from '../workModel';
 
+export { step } from '../ui/rowKeys';
+
 /*
  * What the work screen shows, as plain functions: who holds each item now, the filters, the
- * address that keeps them, the keyboard steps through the list and which empty state applies.
+ * address that keeps them and which empty state applies. The keyboard steps are shared (ui/rowKeys).
  * The server holds the rules for stages and moves; this only arranges what it returned.
  */
 
@@ -127,24 +129,6 @@ export function listState(a: {
   if (hasChosenFilters(a.filters) || a.query.trim() !== '') return { kind: 'filtered', conditions: conditions(a.filters, a.query, a.projects) };
   if (!a.filters.showClosed && a.closedExist === true) return { kind: 'no-open' };
   return { kind: 'unused' };
-}
-
-/** The next row for an arrow key, Home or End; nothing selected starts at the first row. */
-export function step(ids: string[], current: string | null, key: string): string | null {
-  if (ids.length === 0) return null;
-  const i = current === null ? -1 : ids.indexOf(current);
-  switch (key) {
-    case 'ArrowDown':
-      return i < 0 ? ids[0] : ids[Math.min(i + 1, ids.length - 1)];
-    case 'ArrowUp':
-      return i < 0 ? ids[0] : ids[Math.max(i - 1, 0)];
-    case 'Home':
-      return ids[0];
-    case 'End':
-      return ids[ids.length - 1];
-    default:
-      return current;
-  }
 }
 
 /** Filters and the selected item, kept in the address so a reload shows the same list. */
