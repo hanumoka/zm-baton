@@ -26,6 +26,8 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		const val REFRESH_BELOW_HOURS = 6
 		const val CURRENT_WORK_MAX = 300
 		const val STATUS_CARD_MAX = 2000
+		const val CARD_WORK_ITEMS = 5
+		const val CARD_DECISIONS = 5
 		const val MAX_BATCH = 100
 		/** The first key of an advisory lock; each kind of lock has its own number space. */
 		private const val LOCK_REGISTER = 1
@@ -41,10 +43,12 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		/** `[user@]host:path` without whitespace, query or fragment; the user part is dropped. */
 		private val SCP_REMOTE = Regex("^(?:[^@/\\s]+@)?([A-Za-z0-9._-]+):([^\\s?#]+)$")
 		private val DRIVE = Regex("^[A-Za-z]:")
-		private val STAGE_LABELS = mapOf(
-			"draft" to "초안", "plan_review" to "계획 검토", "ready" to "수행 준비", "in_progress" to "수행",
-			"result_review" to "결과 검토",
-		)
+
+		/** A repository key such as `git:<root commit>`: a token, never a path on this machine. */
+		fun isRepoKey(s: String): Boolean = REPO_KEY.matches(s) && !looksAbsolute(s)
+
+		private fun looksAbsolute(s: String): Boolean =
+			s.startsWith("/") || s.startsWith("\\") || DRIVE.containsMatchIn(s) || s.startsWith("~")
 	}
 
 	private data class SessionRow(
@@ -436,24 +440,42 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 
 	// ---------------------------------------------------------------- status card
 
-	/** What a session loads at start (contract "현재 상태 카드"), at most [STATUS_CARD_MAX] characters. */
+	/**
+	 * What a session loads at start (contract "현재 상태 카드"), at most [STATUS_CARD_MAX] characters:
+	 * first-screen counts, the person's open work items with their next action, the newest
+	 * decisions recorded in this repository and the other live sessions here. When it does not
+	 * fit, the next actions go first, then the card is cut before its last line.
+	 */
 	fun statusCard(sessionId: String): String {
 		val repoKey = jdbc.sql("select repo_key from agent_sessions where id = :id")
 			.param("id", sessionId).query(String::class.java).optional().orElse(null)
 		val counts = jdbc.sql(
 			"select bucket, count(*) from inbox_items where user_id = :user and state = 'open' group by bucket",
 		).param("user", OWNER).query { rs, _ -> rs.getInt(1) to rs.getLong(2) }.list().toMap()
+		val openCount = jdbc.sql(
+			"select count(*) from work_items where responsible_user_id = :user and stage not in ('done', 'cancelled')",
+		).param("user", OWNER).query(Long::class.javaObjectType).single()
+		// Work under way first; among equals the most recently changed.
 		val work = jdbc.sql(
 			"""
-			select title, stage, wait_reasons from work_items
+			select external_ref, title, stage, wait_reasons, next_action from work_items
 			 where responsible_user_id = :user and stage not in ('done', 'cancelled')
-			 order by updated_at desc limit 5
+			 order by (stage = 'in_progress') desc, updated_at desc, opened_on desc nulls last, id desc limit $CARD_WORK_ITEMS
 			""".trimIndent(),
 		).param("user", OWNER).query { rs, _ ->
 			@Suppress("UNCHECKED_CAST")
-			val reasons = (rs.getArray(3).array as Array<String>).toList()
-			"- ${rs.getString(1)} (${STAGE_LABELS[rs.getString(2)] ?: rs.getString(2)}" +
-				(if (reasons.isEmpty()) "" else " · ${reasons.joinToString(", ")}") + ")"
+			val reasons = (rs.getArray(4).array as Array<String>).toList()
+			val head = "- ${rs.getString(1)?.let { "$it " } ?: ""}${clip(rs.getString(2), 60)} (${Workflow.label(rs.getString(3))}" +
+				(if (reasons.isEmpty()) "" else " · ${reasons.joinToString(", ") { Workflow.waitLabel(it) }}") + ")"
+			head to rs.getString(5)?.let { "  다음: ${clip(it, 80)}" }
+		}.list()
+		val decisions = if (repoKey == null) emptyList() else jdbc.sql(
+			"""
+			select external_ref, decided_on, question from decisions where git_ref ->> 'repo_key' = :repo
+			 order by decided_on desc nulls last, external_ref desc limit $CARD_DECISIONS
+			""".trimIndent(),
+		).param("repo", repoKey).query { rs, _ ->
+			"- ${rs.getString(1) ?: ""} (${rs.getString(2) ?: "날짜 없음"}) ${clip(rs.getString(3), 60)}"
 		}.list()
 		val others = if (repoKey == null) emptyList() else jdbc.sql(
 			"""
@@ -466,14 +488,35 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			"- ${short(rs.getString(1))}(${rs.getString(2)}${rs.getString(3)?.let { ", $it" } ?: ""}): $work"
 		}.list()
 
-		val lines = mutableListOf<String>()
-		lines += "[zm-baton] 이 세션을 등록했다: $sessionId (등록을 끄려면 `zm-baton session off`)"
-		lines += "나를 기다리는 것: 권한 요청 ${counts[1] ?: 0} · 멈춘 AI의 질문 ${counts[2] ?: 0} · " +
-			"겹친 충돌 ${counts[3] ?: 0} · 위험 검토 ${counts[4] ?: 0} · 표본·알림 ${counts[5] ?: 0}"
-		lines += if (work.isEmpty()) "열린 작업: 없음" else "열린 작업:\n" + work.joinToString("\n")
-		if (others.isNotEmpty()) lines += "같은 저장소에서 지금 살아 있는 다른 세션:\n" + others.joinToString("\n")
-		lines += "하는 일이 바뀌면 `zm-baton session work \"<무엇을, 어디서>\"`로 한 줄(300자 이하)을 올린다."
-		return lines.joinToString("\n").take(STATUS_CARD_MAX)
+		fun compose(withNext: Boolean): String {
+			val lines = mutableListOf<String>()
+			lines += "[zm-baton] 이 세션을 등록했다: $sessionId (등록을 끄려면 `zm-baton session off`)"
+			lines += "나를 기다리는 것: 권한 요청 ${counts[1] ?: 0} · 멈춘 AI의 질문 ${counts[2] ?: 0} · " +
+				"겹친 충돌 ${counts[3] ?: 0} · 위험 검토 ${counts[4] ?: 0} · 표본·알림 ${counts[5] ?: 0}"
+			lines += if (work.isEmpty()) {
+				"열린 작업: 없음"
+			} else {
+				val more = if (openCount > work.size) " (그 밖에 ${openCount - work.size}건)" else ""
+				"열린 작업 ${openCount}건$more:\n" + work.joinToString("\n") { (head, next) ->
+					if (withNext && next != null) "$head\n$next" else head
+				}
+			}
+			if (decisions.isNotEmpty()) lines += "이 저장소의 최근 결정:\n" + decisions.joinToString("\n")
+			if (others.isNotEmpty()) lines += "같은 저장소에서 지금 살아 있는 다른 세션:\n" + others.joinToString("\n")
+			return lines.joinToString("\n")
+		}
+
+		val last = "하는 일이 바뀌면 `zm-baton session work \"<무엇을, 어디서>\"`로 한 줄(300자 이하)을 올린다."
+		val budget = STATUS_CARD_MAX - last.length - 1
+		val full = compose(withNext = true)
+		val body = if (full.length <= budget) full else compose(withNext = false).take(budget)
+		return "$body\n$last"
+	}
+
+	/** [s] in at most [max] characters, ending in "…" when cut. */
+	private fun clip(s: String, max: Int): String {
+		val flat = s.replace(Regex("\\s+"), " ").trim()
+		return if (flat.length > max) flat.take(max - 1) + "…" else flat
 	}
 
 	// ---------------------------------------------------------------- helpers
@@ -536,7 +579,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			}
 			"file_touch" -> {
 				val repoKey = (p["repo_key"] as? String)?.trim().orEmpty()
-				if (!REPO_KEY.matches(repoKey) || looksAbsolute(repoKey)) throw BadRequestException("repo_key is missing or not a key")
+				if (!isRepoKey(repoKey)) throw BadRequestException("repo_key is missing or not a key")
 				val path = relativePath(p["path"] as? String) ?: throw BadRequestException("path must be relative to the repository root")
 				val tool = (p["tool"] as? String)?.trim()?.take(50)
 				val contentHash = (p["content_hash"] as? String)?.trim()?.lowercase()?.takeIf { HEX.matches(it) }
@@ -552,7 +595,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 	private fun cleanRepository(repo: RepositoryIn?): CleanRepository? {
 		if (repo == null) return null
 		val repoKey = repo.repoKey?.trim()?.ifEmpty { null }
-		if (repoKey != null && (!REPO_KEY.matches(repoKey) || looksAbsolute(repoKey))) throw BadRequestException("repository.repo_key is not a key")
+		if (repoKey != null && !isRepoKey(repoKey)) throw BadRequestException("repository.repo_key is not a key")
 		val prefix = repo.prefix?.trim()?.trimEnd('/')
 		val cleanPrefix = when {
 			prefix.isNullOrEmpty() -> ""
@@ -598,7 +641,6 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		return path
 	}
 
-	private fun looksAbsolute(s: String): Boolean = s.startsWith("/") || s.startsWith("\\") || DRIVE.containsMatchIn(s) || s.startsWith("~")
 
 	private fun requireProtocol(version: Int) {
 		if (version != PROTOCOL_VERSION) throw BadRequestException("unsupported protocol_version $version")
