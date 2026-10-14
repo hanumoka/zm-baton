@@ -2,10 +2,12 @@ import { Icon } from '../icons/Icon';
 import { shortId, waited } from '../inboxModel';
 import type { InboxItem, SessionView } from '../sessionsApi';
 import { EmptyState } from '../ui/EmptyState';
-import { GroupHead, RowSkeleton } from '../ui/Group';
+import { GroupHead, GroupSubHead, RowSkeleton } from '../ui/Group';
 import { ListPane, type ListHead } from '../ui/ListPane';
 import { tabStop } from '../ui/rowKeys';
-import { groupNote, itemSessions, kindOf, notifyLabel, reviewFiles, rowOrder, rowTitle, type InboxGroup, type ListState } from './inboxView';
+import { filePath, groupAside, itemSessions, kindOf, notifyLabel, reviewFiles, rowOrder, rowTitle, type InboxGroup, type ListState } from './inboxView';
+import { RelayState } from './RelayDetail';
+import { isRelay, relayActive } from './relayView';
 
 type Props = {
   state: ListState;
@@ -15,6 +17,10 @@ type Props = {
   /** Live sessions, to show what a waiting session works on. */
   sessions: SessionView[] | null;
   now: number;
+  /** Focus mode is on: the relaying buckets say that new requests go to the terminal. */
+  focusOn?: boolean;
+  /** Whether the server relays at all (ZM_BATON_RELAY); null until it said. Off: bucket 1 says so and why. */
+  relayOn?: boolean | null;
   /** The arrow keys moved the selection. */
   onSelect: (id: string) => void;
   /** A click or tap on a row: select it (wide) or open it as a sheet (narrow). */
@@ -32,7 +38,7 @@ type Props = {
  * yet says so in its head, so an empty box never reads as 「nothing came」. The keys are the work
  * list's: the arrows, Home and End move the selection, Enter opens it.
  */
-export function InboxList({ state, groups, head, selected, sessions, now, onSelect, onPick, onOpen, onReload, done = null }: Props) {
+export function InboxList({ state, groups, head, selected, sessions, now, focusOn = false, relayOn = null, onSelect, onPick, onOpen, onReload, done = null }: Props) {
   const order = rowOrder(groups);
   return (
     <ListPane title="나를 기다리는 것 목록" head={head} by="급한 순서로 묶음" order={order} onSelect={onSelect} onOpen={onOpen}>
@@ -49,7 +55,18 @@ export function InboxList({ state, groups, head, selected, sessions, now, onSele
           </span>
         </p>
       )}
-      <ListBody state={state} groups={groups} selected={selected} tabbable={tabStop(order, selected)} sessions={sessions} now={now} onPick={onPick} onReload={onReload} />
+      <ListBody
+        state={state}
+        groups={groups}
+        selected={selected}
+        tabbable={tabStop(order, selected)}
+        sessions={sessions}
+        now={now}
+        focusOn={focusOn}
+        relayOn={relayOn}
+        onPick={onPick}
+        onReload={onReload}
+      />
     </ListPane>
   );
 }
@@ -61,6 +78,8 @@ function ListBody({
   tabbable,
   sessions,
   now,
+  focusOn = false,
+  relayOn = null,
   onPick,
   onReload,
 }: Omit<Props, 'head' | 'onOpen' | 'onSelect'> & { tabbable: string | null }) {
@@ -92,27 +111,44 @@ function ListBody({
             </a>
           }
         >
-          등록한 AI 세션이 터미널에서 입력을 기다리거나, 두 세션이 같은 파일을 고치거나, 맡긴 AI 실행의 결과가 위험 경로에 걸리거나 표본으로 뽑히면 여기에
-          쌓인다. 권한 요청 중계는 아직 서버가 만들지 않는다.
+          등록한 AI 세션이 권한을 묻거나 선택형 질문을 내거나 터미널에서 입력을 기다리면, 두 세션이 같은 파일을 고치면, 맡긴 AI 실행의 결과가 위험 경로에
+          걸리거나 표본으로 뽑히면 여기에 쌓인다.
         </EmptyState>
       );
     case 'rows':
       return (
         <>
-          {groups.map((g) => (
-            <div key={g.bucket} className="pane-grp" data-bucket={g.bucket}>
-              <GroupHead mark={<Icon name={g.mark} />} label={g.label} count={g.items.length} aside={g.items.length === 0 ? groupNote(g) : undefined} />
-              {g.items.length > 0 && (
-                <ul className="pane-rows">
-                  {g.items.map((i) => (
-                    <li key={i.id}>
-                      <InboxRow item={i} sessions={sessions} now={now} selected={i.id === selected} tabbable={i.id === tabbable} onPick={onPick} />
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          ))}
+          {groups.map((g) => {
+            // A relay that ended stays a while under its own line, so the person sees how it went; it no longer counts.
+            const waiting = g.items.filter(relayActive);
+            const ended = g.items.filter((i) => !relayActive(i));
+            const rows = (list: InboxItem[]) => (
+              <ul className="pane-rows">
+                {list.map((i) => (
+                  <li key={i.id}>
+                    <InboxRow item={i} sessions={sessions} now={now} selected={i.id === selected} tabbable={i.id === tabbable} onPick={onPick} />
+                  </li>
+                ))}
+              </ul>
+            );
+            return (
+              <div key={g.bucket} className="pane-grp" data-bucket={g.bucket}>
+                <GroupHead
+                  mark={<Icon name={g.mark} />}
+                  label={g.label}
+                  count={waiting.length}
+                  aside={groupAside(g, waiting.length, focusOn, relayOn)}
+                />
+                {waiting.length > 0 && rows(waiting)}
+                {ended.length > 0 && (
+                  <>
+                    <GroupSubHead label="방금 끝난 중계" count={ended.length} />
+                    {rows(ended)}
+                  </>
+                )}
+              </div>
+            );
+          })}
         </>
       );
   }
@@ -146,6 +182,7 @@ export function InboxRow({
       className="lrow"
       data-row={item.id}
       data-kind={item.kind}
+      data-state={item.state ?? 'open'}
       aria-current={selected ? 'true' : undefined}
       tabIndex={tabbable ? 0 : -1}
       onClick={() => onPick(item.id)}
@@ -153,11 +190,12 @@ export function InboxRow({
       <span className="lrow-l1">
         <Icon name={kind.mark} />
         <span className="lrow-state">{kind.label}</span>
-        <span className={item.kind === 'notice' ? 'lrow-title ib-file' : 'lrow-title'}>{rowTitle(item, sessions)}</span>
+        <span className={filePath(item) ? 'lrow-title ib-file' : 'lrow-title'}>{rowTitle(item, sessions)}</span>
       </span>
       <span className="lrow-sub">
         <span className="ib-age num">{waited(item.waiting_since, now)}</span>
-        <span className={item.notify === 'immediate' ? 'ib-ntf is-now' : 'ib-ntf'}>{notifyLabel(item)}</span>
+        {isRelay(item) && <RelayState item={item} now={now} />}
+        {relayActive(item) && <span className={item.notify === 'immediate' ? 'ib-ntf is-now' : 'ib-ntf'}>{notifyLabel(item)}</span>}
         {item.repeat_count > 0 && <span className="ib-rep num">반복 {item.repeat_count}회</span>}
         {item.promoted_at && <span className="ib-ntf is-now">오래 기다려 위로 올림</span>}
         {files && (

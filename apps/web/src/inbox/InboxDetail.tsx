@@ -9,9 +9,10 @@ import { at } from '../workModel';
 import {
   detailTitle,
   filePath,
+  isUsageAlert,
   itemSessions,
   judgement,
-  JUDGEMENTS,
+  judgementsFor,
   kindOf,
   liveSession,
   notifyLabel,
@@ -22,6 +23,8 @@ import {
   type ItemSession,
   type Send,
 } from './inboxView';
+import { RelayBody, RelayState, type RelaySend } from './RelayDetail';
+import { isRelay } from './relayView';
 
 type Props = {
   item: InboxItem;
@@ -40,6 +43,10 @@ type Props = {
   send?: Send;
   /** A review verdict (FN-0411) or an answer (FN-0210) went through: what happened; without it, [onJudged] hears it. */
   onDone?: (id: string, text: string, href: string | null) => void;
+  /** A relay's answer went through: read the list again. The item stays and shows how it went. */
+  onAnswered?: () => void;
+  /** For tests: what sends a relay's answer. */
+  relaySend?: RelaySend;
 };
 
 /**
@@ -47,7 +54,7 @@ type Props = {
  * names, and what I can do here. A conflict is judged here (확인, 충돌 아님 with a reason, 해결);
  * a waiting session is answered in its own terminal, which closes the item by itself.
  */
-export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, inSheet = false, send, onDone }: Props) {
+export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, inSheet = false, send, onDone, onAnswered = () => {}, relaySend }: Props) {
   const titleId = useId();
   const done = (text: string, href: string | null) => (onDone ? onDone(item.id, text, href) : onJudged(item.id));
   if (item.kind === 'run_question') {
@@ -71,6 +78,7 @@ export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, 
   const related = itemSessions(item);
   const repoKey = typeof item.detail?.repo_key === 'string' ? item.detail.repo_key : null;
   const bucket = BUCKETS.find((b) => b.bucket === item.bucket)?.label ?? '나를 기다리는 것';
+  const relay = isRelay(item);
   return (
     <article className="dt ib-dt" aria-labelledby={titleId}>
       {!inSheet && (
@@ -88,6 +96,14 @@ export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, 
           <dt>종류</dt>
           <dd className="ib-kind">{kind.label}</dd>
         </div>
+        {relay && (
+          <div>
+            <dt>상태</dt>
+            <dd>
+              <RelayState item={item} now={now} />
+            </dd>
+          </div>
+        )}
         <div>
           <dt>기다린 시간</dt>
           <dd>
@@ -110,7 +126,18 @@ export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, 
       </dl>
       <div className={related.length > 0 ? 'dt-grid' : 'dt-grid is-solo'}>
         <div className="dt-main">
-          {path && (
+          {relay && (
+            <RelayBody
+              key={item.id}
+              item={item}
+              now={now}
+              onAnswered={onAnswered}
+              onError={onError}
+              live={related[0] ? liveSession(sessions, related[0].id) !== null : false}
+              send={relaySend}
+            />
+          )}
+          {!relay && path && (
             <section className="dt-sec">
               <h3>겹친 파일</h3>
               <p className="ib-path">
@@ -123,29 +150,34 @@ export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, 
               )}
             </section>
           )}
-          {message && (
+          {isUsageAlert(item) && <UsageLinks item={item} />}
+          {!relay && message && (
             <section className="dt-sec">
               <h3>실행기가 보낸 문구</h3>
               <p className="dt-text">{message}</p>
             </section>
           )}
-          <section className="dt-sec">
-            <h3>왜 나를 기다리나</h3>
-            <p className="dt-text">{whyMe(item)}</p>
-          </section>
-          <section className="dt-sec">
-            <h3>할 수 있는 일</h3>
-            {item.kind === 'notice' ? (
-              <Judge key={item.id} item={item} onJudged={onJudged} onError={onError} send={send} />
-            ) : item.kind === 'session_waiting' ? (
-              <InTerminal session={related[0] ?? null} live={related[0] ? liveSession(sessions, related[0].id) !== null : false} />
-            ) : (
-              <p className="ib-term">
-                <Icon name="lock" />
-                <span>이 종류에 여기서 답하는 기능은 아직 없다. 그 세션의 터미널에서 답한다.</span>
-              </p>
-            )}
-          </section>
+          {!relay && (
+            <>
+              <section className="dt-sec">
+                <h3>왜 나를 기다리나</h3>
+                <p className="dt-text">{whyMe(item)}</p>
+              </section>
+              <section className="dt-sec">
+                <h3>할 수 있는 일</h3>
+                {item.kind === 'notice' ? (
+                  <Judge key={item.id} item={item} onJudged={onJudged} onError={onError} send={send} />
+                ) : item.kind === 'session_waiting' ? (
+                  <InTerminal session={related[0] ?? null} live={related[0] ? liveSession(sessions, related[0].id) !== null : false} />
+                ) : (
+                  <p className="ib-term">
+                    <Icon name="lock" />
+                    <span>이 종류에 여기서 답하는 기능은 아직 없다. 그 세션의 터미널에서 답한다.</span>
+                  </p>
+                )}
+              </section>
+            </>
+          )}
         </div>
         {related.length > 0 && (
           <aside className="dt-aside" aria-labelledby={`${titleId}-s`}>
@@ -164,6 +196,31 @@ export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, 
         )}
       </div>
     </article>
+  );
+}
+
+/** Where a usage notice points: the work item whose run stopped and the AI account, each opened on its own screen. */
+function UsageLinks({ item }: { item: InboxItem }) {
+  const work = typeof item.detail?.work_item_id === 'string' ? item.detail.work_item_id : null;
+  const account = typeof item.detail?.account_id === 'string' ? item.detail.account_id : null;
+  const name = typeof item.detail?.account_name === 'string' ? item.detail.account_name : account;
+  if (!work && !account) return null;
+  return (
+    <section className="dt-sec">
+      <h3>멈춘 곳</h3>
+      <ul className="ib-sessions">
+        {work && (
+          <li>
+            <a href={`#work?item=${encodeURIComponent(work)}`}>작업과 실행 기록 열기</a>
+          </li>
+        )}
+        {account && (
+          <li>
+            <a href={`#accounts?item=${encodeURIComponent(account)}`}>AI 계정 {name} 열기</a>
+          </li>
+        )}
+      </ul>
+    </section>
   );
 }
 
@@ -236,7 +293,7 @@ function Judge({ item, onJudged, onError, send }: { item: InboxItem; onJudged: (
   return (
     <>
       <div className="ib-acts" role="group" aria-label="충돌 판정">
-        {JUDGEMENTS.map((j) => (
+        {judgementsFor(item).map((j) => (
           <button
             key={j.status}
             type="button"

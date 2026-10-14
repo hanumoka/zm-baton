@@ -117,6 +117,8 @@ data class PreviousRun(
 	/** Read by the server only: the executor session and worktree a resumed run may continue. */
 	@JsonIgnore val sessionId: String? = null,
 	@JsonIgnore val workspace: Map<String, Any?>? = null,
+	/** Added with AI accounts: the account the earlier run went on, so a screen can offer it again. */
+	@JsonProperty("account_id") val accountId: String? = null,
 )
 
 data class TransitionIn(val to: String, val version: Long, val note: String? = null)
@@ -429,7 +431,7 @@ class WorkItemService(
 	fun previousRun(id: String): PreviousRun? =
 		jdbc.sql(
 			"""
-			select r.id, r.end_reason, r.device_id, d.scope::text, r.executor_session_id, r.workspace::text
+			select r.id, r.end_reason, r.device_id, d.scope::text, r.executor_session_id, r.workspace::text, r.account_id
 			  from runs r join delegations d on d.id = r.delegation_id
 			 where r.work_item_id = :id and r.state = 'ended' and r.claimed_at is not null
 			 order by r.created_at desc, r.id desc limit 1
@@ -439,7 +441,7 @@ class WorkItemService(
 			PreviousRun(
 				rs.getString(1), rs.getString(2), rs.getString(3), scope["repo_key"] as String, scope["base_branch"] as String?,
 				(scope["allowed_tools"] as? List<*>).orEmpty().map { it.toString() }, rs.getString(5),
-				rs.getString(6)?.let { json.readValue(it, mapType) },
+				rs.getString(6)?.let { json.readValue(it, mapType) }, rs.getString(7),
 			)
 		}.optional().orElse(null)
 

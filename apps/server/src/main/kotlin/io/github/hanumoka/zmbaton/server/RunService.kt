@@ -17,7 +17,9 @@ import java.time.OffsetDateTime
  * device it names, and its reports move its work item (WorkItemService.followRun). The connector
  * renews the claim's lease while it runs; its renewal also carries a person's stop request and
  * instructions to the connector. A run whose lease lapsed longer than the reconnection grace ends
- * `lost` ([sweepLost]). request_id dedup is not built yet.
+ * `lost` ([sweepLost]). A run on an AI account gets that account's sign-in method and usage limits
+ * with its claim, is not started while the account is stopped, and its usage reports and limit
+ * signals go to UsageService. request_id dedup is not built yet.
  */
 @Service
 class RunService(
@@ -29,6 +31,7 @@ class RunService(
 	private val reviews: ReviewService,
 	/** Settles the questions whose answers a continuing run carried (FN-0210). */
 	private val questions: QuestionService,
+	private val usage: UsageService,
 	transactions: PlatformTransactionManager,
 	/** Contract "실행 권리 청구" 6: how long a lapsed lease may stay silent before the run is lost. */
 	@Value("\${zm-baton.run-lost-grace-seconds:300}") private val lostGraceSeconds: Long,
@@ -114,10 +117,17 @@ class RunService(
 	 * A delegated run goes only to the device its delegation names, while the delegation is neither
 	 * revoked nor expired (contract "위임"). A continuing run also says which run it follows, and on
 	 * the same device which executor session and worktree that run left ("실행이 끊겼을 때" 2).
+	 * A run whose AI account is stopped now (UsageService.block) is ended before any executor starts and
+	 * the claim is refused; that ending stays, so it commits in its own transaction first.
 	 */
-	@Transactional
 	fun claim(runId: String, deviceId: String): Claimed {
 		if (deviceId.isBlank()) throw BadRequestException("device_id is required")
+		val refused = tx.execute { usage.refuseClaim(runId, deviceId.trim()) }
+		if (refused != null) throw ConflictException(refused)
+		return tx.execute { claimNow(runId, deviceId) }!!
+	}
+
+	private fun claimNow(runId: String, deviceId: String): Claimed {
 		val won = jdbc.sql(
 			"""
 			update runs
@@ -128,13 +138,13 @@ class RunService(
 			                and (r.delegation_id is null
 			                     or (d.device_id = :device and d.revoked_at is null and d.expires_at > now()))
 			                for update of r skip locked)
-			returning work_item_id, delegation_id, instruction, resumed_from_run_id, continue_reason
+			returning work_item_id, delegation_id, instruction, resumed_from_run_id, continue_reason, account_id
 			""".trimIndent(),
 		).param("device", deviceId).param("lease", LEASE_SECONDS).param("runId", runId)
-			.query { rs, _ -> Won(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5)) }
+			.query { rs, _ -> Won(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6)) }
 			.optional()
 			.orElseThrow { ConflictException("run $runId is not claimable") }
-		val (workItemId, delegationId, instruction, resumedFrom, continueReason) = won
+		val (workItemId, delegationId, instruction, resumedFrom, continueReason, accountId) = won
 		val generation = jdbc.sql(
 			"update work_items set generation = generation + 1, updated_at = now() where id = :wid returning generation",
 		).param("wid", workItemId).query(Long::class.javaObjectType).single()
@@ -152,9 +162,21 @@ class RunService(
 				(scope["allowed_tools"] as List<*>).map { it as String },
 			)
 		}
-		val resume = resumedFrom?.let { previousForClaim(it, deviceId, continueReason ?: "resume_after_cut") }
-		return Claimed(runId, workItemId, generation, LEASE_SECONDS, delegation, instruction, resume)
+		val resume = resumedFrom?.let { previousForClaim(it, deviceId, accountId, continueReason ?: "resume_after_cut") }
+		// The account's sign-in method and the limits this run gets now (UsageService.limitsForClaim).
+		val acc = accountId?.let { usage.account(it) }
+		val limits = acc?.let { usage.limitsForClaim(it) }
+		if (limits != null) {
+			jdbc.sql("update runs set limits = cast(:l as jsonb) where id = :id").param("l", json.writeValueAsString(limits)).param("id", runId).update()
+		}
+		val account = acc?.let { ClaimedAccount(it.id, it.name, UsageService.authMethod(it.authKind), it.authSource) }
+		return Claimed(runId, workItemId, generation, LEASE_SECONDS, delegation, instruction, resume, account, limits?.let(::claimedLimits))
 	}
+
+	private fun claimedLimits(l: Map<String, Any?>) = ClaimedLimits(
+		(l["max_turns"] as? Number)?.toInt(), l["max_budget_usd"] as? java.math.BigDecimal, (l["max_minutes"] as? Number)?.toInt(),
+		l["budget_from"] as? String,
+	)
 
 	private data class Won(
 		val workItemId: String,
@@ -162,21 +184,26 @@ class RunService(
 		val instruction: String?,
 		val resumedFrom: String?,
 		val continueReason: String?,
+		val accountId: String?,
 	)
 
 	/**
 	 * What a continuing run may reuse (contract "실행마다 별도 작업 트리" 6). Only on the device that
-	 * ran the previous run: there its executor session and branch exist. The connector still reuses
-	 * them only after it confirms that the previous executor and its child processes ended.
+	 * ran the previous run, on the same account: there its executor session and branch exist, signed in
+	 * the same way. The connector still reuses them only after it confirms that the previous executor
+	 * and its child processes ended. Another account gets neither ("실행마다 별도 작업 트리" 6.2).
 	 */
-	private fun previousForClaim(previousId: String, deviceId: String, continueReason: String): ClaimedResume =
-		jdbc.sql("select device_id, executor_session_id, workspace::text from runs where id = :id").param("id", previousId)
+	private fun previousForClaim(previousId: String, deviceId: String, accountId: String?, continueReason: String): ClaimedResume =
+		jdbc.sql("select device_id, executor_session_id, workspace::text, account_id from runs where id = :id").param("id", previousId)
 			.query { rs, _ ->
 				val sameDevice = rs.getString(1) == deviceId
+				val sameAccount = rs.getString(4) == accountId
+				val reusable = sameDevice && sameAccount
 				ClaimedResume(
 					previousId, continueReason, sameDevice,
-					if (sameDevice) rs.getString(2) else null,
-					if (sameDevice) rs.getString(3)?.let { json.readValue(it, mapType) } else null,
+					if (reusable) rs.getString(2) else null,
+					if (reusable) rs.getString(3)?.let { json.readValue(it, mapType) } else null,
+					sameAccount,
 				)
 			}.single()
 
@@ -255,7 +282,7 @@ class RunService(
 		val target = jdbc.sql(
 			"""
 			select r.work_item_id, r.generation as run_generation, w.generation as current_generation,
-			       r.delegation_id, d.scope ->> 'repo_key' as repo_key
+			       r.delegation_id, d.scope ->> 'repo_key' as repo_key, r.account_id
 			  from runs r join work_items w on w.id = r.work_item_id
 			  left join delegations d on d.id = r.delegation_id
 			 where r.id = :runId
@@ -263,7 +290,7 @@ class RunService(
 			""".trimIndent(),
 		).param("runId", runId)
 			.query { rs, _ ->
-				ReportTarget(rs.getString(1), rs.getObject(2) as Long?, rs.getLong(3), rs.getString(4), rs.getString(5))
+				ReportTarget(rs.getString(1), rs.getObject(2) as Long?, rs.getLong(3), rs.getString(4), rs.getString(5), rs.getString(6))
 			}
 			.optional()
 			.orElseThrow { NotFoundException("no run $runId") }
@@ -314,7 +341,12 @@ class RunService(
 				 where id = :runId
 				""".trimIndent(),
 			).param("activity", event.kind in ACTIVITY_KINDS).param("runId", runId).update()
-			if (event.kind == "lifecycle") applyLifecycle(runId, target, event.payload)
+			when (event.kind) {
+				"lifecycle" -> applyLifecycle(runId, target, event.payload)
+				"usage" -> usage.onUsage(runId, target.workItemId, target.accountId, event.payload)
+				// Only an error the executor's result carried, never the model's words (billing-signals).
+				"error" -> if (event.payload["source"] == "result") usage.onResultError(runId, target.workItemId, target.accountId, event.payload)
+			}
 		}
 		return EventResult(stored, duplicates, late, rejected)
 	}
@@ -326,6 +358,8 @@ class RunService(
 		val delegationId: String?,
 		/** The repository the run's delegation names; a reported workspace must be in it. */
 		val repoKey: String?,
+		/** The AI account the run goes on; null for a compat-test run or one handed over before accounts. */
+		val accountId: String?,
 	)
 
 	/**
@@ -429,6 +463,7 @@ class RunService(
 					""".trimIndent(),
 				).param("sessionId", payload["session_id"] as? String).param("workspace", workspace)
 					.param("runId", runId).update()
+				if (started == 1) usage.onStarted(runId, payload)
 				if (started == 1 && target.delegationId != null) {
 					workItems.followRun(target.workItemId, runId, WorkItemService.RunStep.STARTED)
 					questions.markDelivered(runId)
@@ -454,6 +489,7 @@ class RunService(
 				finishInputs(runId)
 				if (outcomeUnknown(reason, payload)) addWait(target.workItemId, "outcome_unknown")
 				if (readinessFailed(payload)) addWait(target.workItemId, "readiness_failed")
+				usage.onEnded(runId, target.workItemId, target.accountId, reason, payload)
 				if (reason == "submitted" && target.delegationId != null) {
 					// Before the work item moves: an open risk request keeps it in result review.
 					reviews.fixResult(runId)

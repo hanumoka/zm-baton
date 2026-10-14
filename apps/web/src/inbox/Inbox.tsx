@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { BUCKETS } from '../inboxModel';
+import { BUCKETS, visibleItems, waitingItems } from '../inboxModel';
 import type { InboxItem, SessionView } from '../sessionsApi';
 import { useNarrow } from '../shell/useNarrow';
 import { DetailPane } from '../ui/DetailPane';
@@ -13,6 +13,7 @@ import { InboxDetail } from './InboxDetail';
 import { InboxList } from './InboxList';
 import { inboxGroups, kindOf, listState, readView, rowOrder, writeView } from './inboxView';
 import type { Send } from './inboxView';
+import type { RelaySend } from './RelayDetail';
 
 type Props = {
   /** What waits for me, polled by the shell (browser notifications come from that poll); null before the first read. */
@@ -29,6 +30,12 @@ type Props = {
   onReload: () => void;
   /** For tests: what sends a judgement. */
   send?: Send;
+  /** Focus mode is on (contract 「알림과 집중 모드」): the relaying buckets say so. */
+  focusOn?: boolean;
+  /** Whether the server relays (ZM_BATON_RELAY); null until it said. */
+  relayOn?: boolean | null;
+  /** For tests: what sends a relay's answer. */
+  relaySend?: RelaySend;
 };
 
 /**
@@ -37,7 +44,7 @@ type Props = {
  * selected item lives in the address. When an item leaves the list, because it was judged here or
  * closed elsewhere, the one that took its place opens.
  */
-export function Inbox({ items, error, sessions, now, onChanged, onError, onReload, send }: Props) {
+export function Inbox({ items, error, sessions, now, onChanged, onError, onReload, send, focusOn = false, relayOn = null, relaySend }: Props) {
   const narrow = useNarrow();
   const [view, setView] = useAddress('inbox', readView, writeView);
   /** Items judged here, hidden until the server's list no longer has them. */
@@ -51,7 +58,7 @@ export function Inbox({ items, error, sessions, now, onChanged, onError, onReloa
   const [done, setDone] = useState<{ text: string; href: string | null } | null>(null);
   const { selected } = view;
 
-  const visible = items === null ? null : items.filter((i) => !judged.has(i.id));
+  const visible = items === null ? null : visibleItems(items).filter((i) => !judged.has(i.id));
   const groups = inboxGroups(visible ?? []);
   const order = rowOrder(groups);
   const state = listState(visible, error);
@@ -111,6 +118,8 @@ export function Inbox({ items, error, sessions, now, onChanged, onError, onReloa
       titleRef={titleRef}
       inSheet={narrow}
       send={send}
+      onAnswered={onChanged}
+      relaySend={relaySend}
     />
   ) : selected !== null && visible !== null ? (
     <EmptyState kind="empty" title="이 항목은 더는 기다리지 않는다">
@@ -130,10 +139,12 @@ export function Inbox({ items, error, sessions, now, onChanged, onError, onReloa
       <InboxList
         state={state}
         groups={groups}
-        head={{ base: '기다리는 것', count: visible === null ? null : visible.length, narrowed: false }}
+        head={{ base: '기다리는 것', count: visible === null ? null : waitingItems(visible).length, narrowed: false }}
         selected={selected}
         sessions={sessions}
         now={now}
+        focusOn={focusOn}
+        relayOn={relayOn}
         onSelect={choose}
         onPick={narrow ? open : choose}
         onOpen={open}

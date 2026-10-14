@@ -24,8 +24,8 @@ import java.time.OffsetDateTime
 // the repositories a device's local connector may run in. A person hands a `ready` work item made
 // here to Claude Code on one device and one repository; the server keeps the delegation, makes one
 // requested run with an instruction built from the work item, and makes the owner's manager the
-// executor. Stage 1 has no AI account registration yet, so the run uses whatever login the
-// executor already has on that device. Handing over an `in_progress` work item again continues it:
+// executor. The run goes on one AI account (Accounts.kt): its sign-in method and usage limits travel
+// with the claim, and an account that is stopped now cannot take work. Handing over an `in_progress` work item again continues it:
 // the new run names the run it follows and why (contract "실행 권리 청구" 1-2), and a result in
 // `result_review` goes back with the person's reason in the same request.
 
@@ -43,6 +43,8 @@ data class DelegateIn(
 	 * `result_review` back needs it: it is the reason the result goes back.
 	 */
 	val note: String? = null,
+	/** Added with AI accounts: the account the run goes on. Absent: the one account that can start a run now. */
+	@JsonProperty("account_id") val accountId: String? = null,
 )
 
 data class WithdrawIn(val version: Long)
@@ -70,6 +72,7 @@ class DelegationService(
 	private val sessions: SessionService,
 	/** Answered questions a continuing run carries (FN-0210). */
 	private val questions: QuestionService,
+	private val accounts: AccountService,
 ) {
 	companion object {
 		/** The owner's manager (contract "담당"): stage 1 has one person and so one manager. */
@@ -81,7 +84,7 @@ class DelegationService(
 		/** Contract "위임": an offline delegation lasts at most 8 hours (G14.2). */
 		const val DELEGATION_HOURS = 8
 		/** The server-set wait reasons a person deals with by handing the work item on again. */
-		val CLEARED_BY_HANDOFF = listOf("outcome_unknown", "readiness_failed")
+		val CLEARED_BY_HANDOFF = listOf("outcome_unknown", "readiness_failed", "waiting_limit_reset", "billing_stopped", "waiting_account")
 		private val BRANCH = Regex("^[A-Za-z0-9._/-]{1,200}$")
 
 		/**
@@ -190,6 +193,9 @@ class DelegationService(
 		if (!registered) {
 			throw BadRequestException("the device $deviceId has no repository $repoKey; add it there with zm-baton repo add")
 		}
+		val responsible = jdbc.sql("select responsible_user_id from work_items where id = :id").param("id", workItemId)
+			.query(String::class.java).single()
+		val account = accounts.forDelegation(body.accountId?.trim()?.ifEmpty { null }, deviceId, responsible)
 		if (mode == Workflow.DelegationMode.REJECT_AND_RESUME) {
 			if (note == null) throw BadRequestException("결과를 돌려보내는 이유를 note에 쓴다")
 			workItems.transition(workItemId, TransitionIn("in_progress", body.version, note))
@@ -219,20 +225,20 @@ class DelegationService(
 		val callPath = listOf(mapOf("kind" to "person", "id" to SessionService.OWNER), mapOf("kind" to "manager", "id" to MANAGER))
 		jdbc.sql(
 			"""
-			insert into delegations (id, work_item_id, granted_by_user_id, grantee_kind, grantee_id, device_id, scope, call_path, expires_at)
-			values (:id, :wid, :owner, 'manager', :manager, :device, cast(:scope as jsonb), cast(:path as jsonb),
+			insert into delegations (id, work_item_id, granted_by_user_id, grantee_kind, grantee_id, device_id, account_id, scope, call_path, expires_at)
+			values (:id, :wid, :owner, 'manager', :manager, :device, :account, cast(:scope as jsonb), cast(:path as jsonb),
 			        now() + make_interval(hours => :hours))
 			""".trimIndent(),
-		).param("id", dlg).param("wid", workItemId).param("owner", SessionService.OWNER).param("manager", MANAGER)
+		).param("id", dlg).param("wid", workItemId).param("owner", SessionService.OWNER).param("manager", MANAGER).param("account", account.id)
 			.param("device", deviceId).param("scope", json.writeValueAsString(scope))
 			.param("path", json.writeValueAsString(callPath)).param("hours", DELEGATION_HOURS).update()
 		try {
 			jdbc.sql(
 				"""
-				insert into runs (id, work_item_id, state, executor, delegation_id, instruction, resumed_from_run_id, continue_reason)
-				values (:id, :wid, 'requested', :executor, :dlg, :instruction, :from, :reason)
+				insert into runs (id, work_item_id, state, executor, delegation_id, instruction, resumed_from_run_id, continue_reason, account_id)
+				values (:id, :wid, 'requested', :executor, :dlg, :instruction, :from, :reason, :account)
 				""".trimIndent(),
-			).param("id", run).param("wid", workItemId).param("executor", executor).param("dlg", dlg)
+			).param("id", run).param("wid", workItemId).param("executor", executor).param("dlg", dlg).param("account", account.id)
 				.param("instruction", instruction(workItemId, continuation, note))
 				.param("from", previous?.runId).param("reason", continueReason).update()
 		} catch (e: DuplicateKeyException) {
@@ -246,7 +252,7 @@ class DelegationService(
 		workItems.record(
 			workItemId, "work_item.delegated",
 			mapOf("delegation_id" to dlg, "run_id" to run, "executor" to executor, "device_id" to deviceId,
-				"repo_key" to repoKey, "base_branch" to baseBranch, "allowed_tools" to tools,
+				"repo_key" to repoKey, "base_branch" to baseBranch, "allowed_tools" to tools, "account_id" to account.id,
 				"continue_reason" to continueReason, "resumed_from_run_id" to previous?.runId, "note" to note,
 				"answers" to answers.map { it.questionId }),
 		)

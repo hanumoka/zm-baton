@@ -1,4 +1,6 @@
 import { useId, useRef, useState } from 'react';
+import { accountsApi, type Account } from '../accountsApi';
+import { bucketOf, causeLabel, firstAccount, KIND_LABELS, runLimitsLine, todayLine } from '../accounts/accountView';
 import { Icon } from '../icons/Icon';
 import type { RunEvent } from '../api';
 import type { AskBody } from '../questionsApi';
@@ -10,8 +12,9 @@ import { endLabel, RunRow } from './RunRow';
  * Handing a work item to an AI (contract v1 "위임") and watching its runs, in the work detail.
  * The server decides whether the item can be handed over, and how: a first run, or a run that
  * continues the last one (contract "실행 권리 청구" 1-2), possibly sending a result back with its
- * reason. This draws that, the form, and the runs (RunRow). Stage 1 never merges: the person
- * merges or drops the branch with Git (DEC-0098).
+ * reason. This draws that, the form, and the runs (RunRow). The form picks the AI account the run
+ * goes on; an account that cannot take work now shows why. Stage 1 never merges: the person merges
+ * or drops the branch with Git (DEC-0098).
  */
 
 /** The tool sets a person picks from; the server knows these tools. No Bash. */
@@ -46,6 +49,8 @@ type Props = {
 export function Handoff({ detail, onDelegate, onWithdraw, onCancel = async () => {}, onAsk }: Props) {
   const id = detail.item.id;
   const [repos, setRepos] = useState<Repository[] | null>(null);
+  /** AI accounts; null while read, or from a server without them (the server then picks the account). */
+  const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [runs, setRuns] = useState<{ id: string; list: ItemRun[] } | null>(null);
   const [held, setHeld] = useState<{ runId: string; events: RunEvent[] } | null>(null);
   // The poll reads what is held through a ref: its closure lives as long as the run does.
@@ -59,9 +64,14 @@ export function Handoff({ detail, onDelegate, onWithdraw, onCancel = async () =>
 
   usePoll(
     async (alive, signal) => {
-      const [repoList, runList] = await Promise.all([workApi.repositories(signal), workApi.runs(id, signal)]);
+      const [repoList, runList, accountList] = await Promise.all([
+        workApi.repositories(signal),
+        workApi.runs(id, signal),
+        accountsApi.list(signal).catch(() => null),
+      ]);
       if (!alive()) return;
       setRepos(repoList);
+      setAccounts(accountList);
       setRuns({ id, list: runList });
       setProblem(null);
     },
@@ -97,7 +107,7 @@ export function Handoff({ detail, onDelegate, onWithdraw, onCancel = async () =>
 
   return (
     <>
-      <HandoffForm detail={detail} repos={repos} onDelegate={onDelegate} />
+      <HandoffForm detail={detail} repos={repos} accounts={accounts} onDelegate={onDelegate} />
       <RunList
         runs={shown}
         events={held && held.runId === newestId ? held.events : []}
@@ -143,11 +153,14 @@ const MODE_TEXT = {
 export function HandoffForm({
   detail,
   repos,
+  accounts = null,
   onDelegate,
   defaultOpen = false,
 }: {
   detail: WorkItemDetail;
   repos: Repository[] | null;
+  /** AI accounts to pick from; null leaves the pick to the server (an older server, or still reading). */
+  accounts?: Account[] | null;
   onDelegate: (choice: HandoffChoice) => Promise<void>;
   /** Starts with the form open (the screen opens it with the button). */
   defaultOpen?: boolean;
@@ -163,6 +176,7 @@ export function HandoffForm({
   const [branch, setBranch] = useState('');
   const [tools, setTools] = useState<ToolSet>(firstTools);
   const [note, setNote] = useState('');
+  const [account, setAccount] = useState('');
   const [busy, setBusy] = useState(false);
   const text = MODE_TEXT[mode];
 
@@ -172,6 +186,7 @@ export function HandoffForm({
     setTools(firstTools);
     setBranch('');
     setNote('');
+    setAccount('');
     setOpen(true);
   };
 
@@ -203,6 +218,10 @@ export function HandoffForm({
   const noRepo = repos !== null && repos.length === 0;
   const set = TOOL_SETS.find((t) => t.key === tools)!;
   const needsNote = availability.needs_note === true;
+  // The person's pick, else the earlier run's account when it can still take work, else the first that can.
+  const accountId = account || firstAccount(accounts, previous?.account_id);
+  const chosenAccount = accounts?.find((a) => a.id === accountId) ?? null;
+  const noAccount = accounts !== null && accountId === '';
   return (
     <section className="dt-sec">
       <h3>AI에게 맡기기</h3>
@@ -210,7 +229,7 @@ export function HandoffForm({
         className="wd-edit hf"
         onSubmit={(e) => {
           e.preventDefault();
-          if (!chosen || (needsNote && !note.trim())) return;
+          if (!chosen || noAccount || (needsNote && !note.trim())) return;
           setBusy(true);
           void onDelegate({
             device_id: chosen.device_id,
@@ -218,6 +237,7 @@ export function HandoffForm({
             base_branch: branch.trim() || undefined,
             allowed_tools: [...set.tools],
             note: note.trim() || undefined,
+            account_id: accountId || undefined,
           })
             .then(() => setOpen(false))
             .finally(() => setBusy(false));
@@ -257,6 +277,32 @@ export function HandoffForm({
             <span className="ctl-why">이전 실행과 다른 PC다. 이전 실행의 작업 트리와 브랜치를 쓸 수 없어 기준에서 새로 시작한다.</span>
           )}
         </label>
+        {accounts !== null && (
+          <label>
+            AI 계정
+            {accounts.length === 0 || noAccount ? (
+              <span className="ctl-why">
+                지금 일을 맡을 수 있는 AI 계정이 없다. <a href="#accounts">AI 계정</a> 화면에서 멈춘 이유를 보거나 계정을 등록한다.
+              </span>
+            ) : (
+              <span className="select">
+                <select value={accountId} onChange={(e) => setAccount(e.target.value)} required>
+                  {accounts.map((a) => (
+                    <option key={a.id} value={a.id} disabled={bucketOf(a) !== 'ready'}>
+                      {`${a.name} (${KIND_LABELS[a.auth_kind]})${a.block ? `, 멈춤: ${causeLabel(a.block.cause)}` : ''}`}
+                    </option>
+                  ))}
+                </select>
+                <Icon name="chevron-down" className="chev" />
+              </span>
+            )}
+            {chosenAccount && (
+              <span className="ctl-why">
+                이 실행의 상한: {runLimitsLine(chosenAccount.limits)}. {todayLine(chosenAccount)}.
+              </span>
+            )}
+          </label>
+        )}
         <label>
           기준 브랜치(선택)
           <input
@@ -283,7 +329,7 @@ export function HandoffForm({
           <textarea className="field" rows={3} value={note} onChange={(e) => setNote(e.target.value)} required={needsNote} maxLength={1000} />
         </label>
         <div className="wd-acts">
-          <button type="submit" className="btn btn-primary" disabled={!chosen || busy || (needsNote && !note.trim())} aria-busy={busy || undefined}>
+          <button type="submit" className="btn btn-primary" disabled={!chosen || noAccount || busy || (needsNote && !note.trim())} aria-busy={busy || undefined}>
             {text.submit}
           </button>
           <button type="button" className="btn" onClick={() => setOpen(false)}>

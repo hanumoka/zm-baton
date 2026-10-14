@@ -57,6 +57,18 @@ data class InboxItemView(
 	@JsonProperty("repeat_count") val repeatCount: Int,
 	@JsonProperty("waiting_since") val waitingSince: OffsetDateTime,
 	val notify: String,
+	// Relays (contract "권한 요청과 선택형 질문을 첫 화면으로 중계한다"); null for the other kinds.
+	/** `open`, or for a relay also `answered`, `delivered`, `moved_to_terminal`, `undelivered` or `closed`. */
+	val state: String = "open",
+	/** Until when an answer can be given here. Null: not relayed, answered in the session's terminal. */
+	@JsonProperty("relay_deadline") val relayDeadline: OffsetDateTime? = null,
+	/** Why it was not relayed or how it ended (RelayService). */
+	@JsonProperty("relay_reason") val relayReason: String? = null,
+	/** What the person pressed: decision and reason, or the chosen answers. */
+	val answer: Map<String, Any?>? = null,
+	@JsonProperty("answered_at") val answeredAt: OffsetDateTime? = null,
+	@JsonProperty("delivered_at") val deliveredAt: OffsetDateTime? = null,
+	@JsonProperty("closed_at") val closedAt: OffsetDateTime? = null,
 	/** Added with human review picking: a review that waited too long and is raised to bucket 1. */
 	@JsonProperty("promoted_at") val promotedAt: OffsetDateTime? = null,
 )
@@ -127,16 +139,27 @@ class PersonService(
 			)
 		}.list()
 
-	/** Open items, in the contract's order: bucket (a raised review counts as 1), then who waited longest. */
+	/**
+	 * Open items, in the contract's order: bucket (a review raised after waiting too long counts as 1),
+	 * then who waited longest. A relay also shows while its answer is on the way and for
+	 * [RelayService.RECENT_MINUTES] after it closed, so the person sees whether the answer reached the
+	 * executor; those come after the open ones of their bucket.
+	 */
 	fun inbox(): List<InboxItemView> =
 		jdbc.sql(
 			"""
 			select id, bucket, kind, source_kind, source_id, summary, detail::text as detail, wait_kind, repeat_count,
-			       waiting_since, notify, promoted_at
-			  from inbox_items where user_id = :user and state = 'open'
-			 order by case when promoted_at is null then bucket else 1 end, waiting_since, id
+			       waiting_since, notify, state, relay_deadline, relay_reason, answer::text as answer, answered_at,
+			       delivered_at, closed_at, promoted_at
+			  from inbox_items
+			 where user_id = :user
+			   and (state = 'open'
+			        or (kind in ('permission_request', 'session_question')
+			            and (state in ('answered', 'delivered')
+			                 or (relay_deadline is not null and closed_at > now() - make_interval(mins => :recent)))))
+			 order by case when promoted_at is null then bucket else 1 end, state not in ('open', 'answered'), waiting_since, id
 			""".trimIndent(),
-		).param("user", SessionService.OWNER).query { rs, _ ->
+		).param("user", SessionService.OWNER).param("recent", RelayService.RECENT_MINUTES).query { rs, _ ->
 			InboxItemView(
 				id = rs.getString("id"),
 				bucket = rs.getInt("bucket"),
@@ -149,6 +172,13 @@ class PersonService(
 				repeatCount = rs.getInt("repeat_count"),
 				waitingSince = rs.getObject("waiting_since", OffsetDateTime::class.java),
 				notify = rs.getString("notify"),
+				state = rs.getString("state"),
+				relayDeadline = rs.getObject("relay_deadline", OffsetDateTime::class.java),
+				relayReason = rs.getString("relay_reason"),
+				answer = rs.getString("answer")?.let { json.readValue(it, mapType) },
+				answeredAt = rs.getObject("answered_at", OffsetDateTime::class.java),
+				deliveredAt = rs.getObject("delivered_at", OffsetDateTime::class.java),
+				closedAt = rs.getObject("closed_at", OffsetDateTime::class.java),
 				promotedAt = rs.getObject("promoted_at", OffsetDateTime::class.java),
 			)
 		}.list()

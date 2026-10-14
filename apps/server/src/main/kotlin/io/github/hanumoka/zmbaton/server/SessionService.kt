@@ -16,7 +16,7 @@ import java.time.OffsetDateTime
  * loopback only (stage-1 exit criterion 4).
  */
 @Service
-class SessionService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
+class SessionService(private val jdbc: JdbcClient, private val json: ObjectMapper, private val relaySwitch: RelaySwitch) {
 
 	companion object {
 		const val OWNER = "usr_owner"
@@ -53,7 +53,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			s.startsWith("/") || s.startsWith("\\") || DRIVE.containsMatchIn(s) || s.startsWith("~")
 	}
 
-	private data class SessionRow(
+	internal data class SessionRow(
 		val id: String,
 		val executor: String,
 		val repoKey: String?,
@@ -154,7 +154,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		)
 		val expiresAt = jdbc.sql("select token_expires_at from agent_sessions where id = :id")
 			.param("id", sessionId).query(OffsetDateTime::class.java).single()
-		return SessionRegistered(sessionId, token, expiresAt, existing.isPresent, statusCard(sessionId))
+		return SessionRegistered(sessionId, token, expiresAt, existing.isPresent, statusCard(sessionId), relaySwitch.enabled)
 	}
 
 	// ---------------------------------------------------------------- events
@@ -285,6 +285,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 					"select distinct wait_kind from inbox_items where source_id = :session and kind = 'session_waiting' and state = 'open'",
 				).param("session", session.id).query(String::class.java).list()
 				for (kind in kinds) refreshWait(session, kind!!)
+				closeRelaysOnResume(session.id, seq)
 			}
 
 			"file_touch" -> checkConflicts(session, payload["repo_key"] as String, payload["path"] as String)
@@ -363,7 +364,11 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			.param("since", span.since).param("notify", if (waitKind in IMMEDIATE_WAITS) "immediate" else "digest").update()
 	}
 
-	/** Closes all open waits of a session that ended, was turned off or expired. */
+	/**
+	 * Closes all open waits of a session that ended, was turned off or expired, and its relays
+	 * (contract relay 6): an unanswered relay closes, an answer the hook has not taken is
+	 * 「전달 안 됨」, and a delivered one leaves the first screen.
+	 */
 	private fun closeWaits(sessionId: String) {
 		jdbc.sql(
 			"""
@@ -371,6 +376,34 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			 where source_id = :session and kind = 'session_waiting' and state = 'open'
 			""".trimIndent(),
 		).param("session", sessionId).update()
+		jdbc.sql(
+			"""
+			update inbox_items
+			   set state = case state when 'answered' then 'undelivered' else 'closed' end,
+			       relay_reason = case state when 'delivered' then relay_reason else 'session_ended' end,
+			       closed_at = now()
+			 where source_id = :session and kind in ('permission_request', 'session_question')
+			   and state in ('open', 'answered', 'delivered')
+			""".trimIndent(),
+		).param("session", sessionId).update()
+	}
+
+	/**
+	 * The session moved on after these relays (contract relay 10): a delivered answer leaves the
+	 * first screen, and so does a request or question that was never relayed and waited in the
+	 * terminal. A relay still waiting for an answer keeps its deadline: a tool that ran in
+	 * parallel says nothing about it. A resume older than the relay changes nothing.
+	 */
+	private fun closeRelaysOnResume(sessionId: String, seq: Long) {
+		jdbc.sql(
+			"""
+			update inbox_items
+			   set state = 'closed', closed_at = now(),
+			       relay_reason = case state when 'delivered' then relay_reason else 'resumed' end
+			 where source_id = :session and kind in ('permission_request', 'session_question') and relay_seq < :seq
+			   and (state = 'delivered' or (state = 'open' and relay_deadline is null))
+			""".trimIndent(),
+		).param("session", sessionId).param("seq", seq).update()
 	}
 
 	// ---------------------------------------------------------------- conflicts ("작업 충돌" 6)
@@ -567,7 +600,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		return if (owner == sessionId) InsertResult.DUPLICATE else InsertResult.FOREIGN
 	}
 
-	private fun authenticate(sessionId: String, token: String, forUpdate: Boolean): SessionRow {
+	internal fun authenticate(sessionId: String, token: String, forUpdate: Boolean): SessionRow {
 		val row = jdbc.sql(
 			"""
 			select id, executor, repo_key, repository ->> 'branch', max_resumed_seq,
@@ -671,7 +704,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 	}
 
 
-	private fun requireProtocol(version: Int) {
+	internal fun requireProtocol(version: Int) {
 		if (version != PROTOCOL_VERSION) throw BadRequestException("unsupported protocol_version $version")
 	}
 
@@ -696,11 +729,11 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		}
 	}
 
-	private fun sessionLabel(session: SessionRow): String =
+	internal fun sessionLabel(session: SessionRow): String =
 		"${short(session.id)}(${session.executor}${session.branch?.let { ", $it" } ?: ""})"
 
 	/** `ses_01J9…7f3c`: enough to tell sessions apart on one screen. */
-	private fun short(id: String): String = if (id.length > 12) id.take(8) + "…" + id.takeLast(4) else id
+	internal fun short(id: String): String = if (id.length > 12) id.take(8) + "…" + id.takeLast(4) else id
 
 	fun audit(actorKind: String, actorId: String, action: String, targetKind: String?, targetId: String?, details: Map<String, Any?>) {
 		jdbc.sql(

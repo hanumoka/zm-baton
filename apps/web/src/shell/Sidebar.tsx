@@ -1,11 +1,9 @@
-import { useId } from 'react';
 import { Icon } from '../icons/Icon';
-import { NAV_GROUPS, screenById, type ScreenId } from './screens';
+import { FOOT_ITEMS, NAV_GROUPS, screenById, type ScreenId } from './screens';
 
 export type Permission = NotificationPermission | 'unsupported';
 export type Counts = Partial<Record<ScreenId, number>>;
 
-export const SETTINGS_WHY = '설정 화면은 아직 없다. 검토 단계는 작업 화면에서 켜고 끈다';
 const DENIED_FIX = '주소창 왼쪽의 사이트 설정에서 알림을 허용한다';
 
 type Props = {
@@ -15,6 +13,9 @@ type Props = {
   onToggle: () => void;
   permission: Permission;
   onAskPermission: () => void;
+  /** Focus mode; null until the server said. */
+  focus?: boolean | null;
+  onToggleFocus?: () => void;
 };
 
 /**
@@ -22,7 +23,7 @@ type Props = {
  * The current screen is marked by a light background and bold letters only. Folded, it shows
  * icons with a name tooltip on hover and on keyboard focus; the names stay for screen readers.
  */
-export function Sidebar({ current, counts, open, onToggle, permission, onAskPermission }: Props) {
+export function Sidebar({ current, counts, open, onToggle, permission, onAskPermission, focus = null, onToggleFocus = () => {} }: Props) {
   const rail = !open;
   const titled = NAV_GROUPS.length > 1 && !rail;
   return (
@@ -49,11 +50,16 @@ export function Sidebar({ current, counts, open, onToggle, permission, onAskPerm
       </nav>
       <div className="side-foot">
         <ul>
-          <li>
-            <SettingsItem rail={rail} />
-          </li>
+          {FOOT_ITEMS.map((id) => (
+            <li key={id}>
+              <NavItem id={id} count={0} current={id === current} rail={rail} />
+            </li>
+          ))}
           <li>
             <NotifyItem permission={permission} onAsk={onAskPermission} rail={rail} />
+          </li>
+          <li>
+            <FocusItem focus={focus} onToggle={onToggleFocus} rail={rail} />
           </li>
           <li>
             <button
@@ -94,21 +100,6 @@ function NavItem({ id, count, current, rail }: { id: ScreenId; count: number; cu
   );
 }
 
-/** Settings has no screen yet: locked, with the reason on hover, on focus and for screen readers. */
-export function SettingsItem({ rail }: { rail: boolean }) {
-  const whyId = useId();
-  return (
-    <button type="button" className="it tipped" aria-disabled="true" aria-describedby={whyId} data-tip={rail ? `설정: ${SETTINGS_WHY}` : SETTINGS_WHY}>
-      <Icon name="settings" />
-      <span className="nm">설정</span>
-      <Icon name="lock" className="lock" />
-      <span id={whyId} className="sr">
-        {SETTINGS_WHY}
-      </span>
-    </button>
-  );
-}
-
 /**
  * Browser notifications come from the first screen's poll, so the page must stay open (contract
  * 「알림과 집중 모드」 3). Asking is a button; granted or blocked is a status line.
@@ -132,5 +123,22 @@ export function NotifyItem({ permission, onAsk, rail, inline = false }: { permis
       <span className="nm">{text}</span>
       {fix && <span className={inline ? 'why' : 'sr'}>{fix}</span>}
     </span>
+  );
+}
+
+/**
+ * Focus mode (contract 「알림과 집중 모드」 4): while it is on, only a conflict with my live work
+ * alerts at once, the rest wait until it ends, and new permission requests and questions go to
+ * the terminal instead of here. The button says what pressing it does.
+ */
+export function FocusItem({ focus, onToggle, rail }: { focus: boolean | null; onToggle: () => void; rail: boolean }) {
+  if (focus === null) return null;
+  const label = focus ? '집중 모드 끄기' : '집중 모드 켜기';
+  const tip = focus ? '집중 모드 끄기: 쌓인 알림을 한 번에 띄우고, 권한 요청을 다시 여기로 중계한다' : '집중 모드 켜기: 충돌만 바로 알리고, 새 권한 요청은 터미널에서 묻는다';
+  return (
+    <button type="button" className={rail ? 'it tipped' : 'it'} data-tip={rail ? tip : undefined} aria-pressed={focus} onClick={onToggle}>
+      <Icon name="focus" />
+      <span className="nm">{label}</span>
+    </button>
   );
 }

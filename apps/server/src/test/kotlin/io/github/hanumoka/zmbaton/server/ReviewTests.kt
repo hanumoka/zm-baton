@@ -76,10 +76,15 @@ class ReviewTests @Autowired constructor(
 	 * Hands the work item over (or on: [note] sends a result in result review back) and reports a
 	 * submitted result: the final Git change list with [files] and [snapshot], and tool calls on [toolPaths].
 	 */
-	private fun result(s: Setup, files: List<String>, snapshot: String? = sha(), toolPaths: List<String> = emptyList(), note: String? = null): String {
+	private fun result(
+		s: Setup, files: List<String>, snapshot: String? = sha(), toolPaths: List<String> = emptyList(), note: String? = null,
+		billingStopped: Boolean = false,
+	): String {
 		delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, "main", listOf("Read", "Edit"), version(s.workId), note))
 		val runId = newestRun(s.workId)
 		val gen = runs.claim(runId, s.device).generation
+		// An extra billing signal during the run stops the work item (UsageService); a handoff clears it, so it comes after.
+		if (billingStopped) jdbc.sql("update work_items set wait_reasons = array['billing_stopped'] where id = :id").param("id", s.workId).update()
 		val changes = linkedMapOf<String, Any?>("files" to files, "base_overlap" to emptyList<String>(), "base_branch_overlap" to emptyList<String>())
 		if (snapshot != null) changes["snapshot"] = snapshot
 		val events = mutableListOf(
@@ -249,8 +254,7 @@ class ReviewTests @Autowired constructor(
 	@Test
 	fun `a work item stopped for extra billing raises its own request next to the risk one`() = withSkipped(listOf("plan_review")) {
 		val s = setup()
-		jdbc.sql("update work_items set wait_reasons = array['billing_stopped'] where id = :id").param("id", s.workId).update()
-		val runId = result(s, listOf("AGENTS.md"))
+		val runId = result(s, listOf("AGENTS.md"), billingStopped = true)
 		assertEquals(setOf("risk_path", "extra_billing"), reviewsOf(runId).map { it.reason }.toSet())
 		// Rejecting both: only the first moves the work item back; the second is recorded (contract boundary 6).
 		val risk = reviewsOf(runId).single { it.reason == "risk_path" }

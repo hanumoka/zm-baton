@@ -44,6 +44,12 @@ object Ids {
 	/** Document versions have no contract prefix; `dvr_` keeps them readable. */
 	fun documentVersion(): String = "dvr_" + uuidV7()
 
+	/** An AI account reference (contract "식별자" `acc_`): never a login, only whose account it is. */
+	fun account(): String = "acc_" + uuidV7()
+
+	/** A usage signal has no contract prefix; `usg_` keeps it readable. */
+	fun usageSignal(): String = "usg_" + uuidV7()
+
 	/** Audit rows have no contract prefix; `aud_` keeps them readable next to the others. */
 	fun audit(): String = "aud_" + uuidV7()
 

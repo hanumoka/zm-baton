@@ -5,6 +5,7 @@ package claude
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -47,7 +48,17 @@ type Options struct {
 	// Resume continues the executor session SessionID with --resume instead of starting it
 	// (contract "실행마다 별도 작업 트리" 6). The session id still sits in a flag: it stays the marker.
 	Resume bool
+	// MaxTurns, when above 0, is passed as --max-turns: Claude Code ends the run with the result
+	// subtype error_max_turns when it reaches that many turns (FN-0409 run limit).
+	MaxTurns int
+	// MaxBudgetUSD, when above 0, is passed as --max-budget-usd: Claude Code ends the run with
+	// error_max_budget_usd once its price-list cost estimate reaches it. Measured with Claude Code
+	// 2.1.296 on a subscription login: it applies there too. It is never below one cent (0 is refused).
+	MaxBudgetUSD float64
 }
+
+// MinBudgetUSD is the smallest --max-budget-usd passed; Claude Code refuses 0.
+const MinBudgetUSD = 0.01
 
 // Args builds the argument list (without the program name). The session id is the
 // marker checked before a kill, so it sits in a flag and never in the prompt
@@ -68,6 +79,12 @@ func Args(o Options) []string {
 	}
 	if o.Restricted {
 		args = append(args, "--restricted", "--strict-mcp-config")
+	}
+	if o.MaxTurns > 0 {
+		args = append(args, "--max-turns", strconv.Itoa(o.MaxTurns))
+	}
+	if o.MaxBudgetUSD > 0 {
+		args = append(args, "--max-budget-usd", strconv.FormatFloat(max(o.MaxBudgetUSD, MinBudgetUSD), 'f', 2, 64))
 	}
 	if o.StreamInput {
 		return append(args, "--input-format", "stream-json", "--replay-user-messages")
@@ -99,6 +116,11 @@ type Mapper struct {
 	// numTurns is the last result's turn count; assistantSeen whether any assistant line arrived.
 	numTurns      float64
 	assistantSeen bool
+	// apiKeySource is what the init line said the executor signs in with ("none" for a login);
+	// initSeen whether an init line arrived. resultSubtype is the last result's subtype.
+	apiKeySource  string
+	initSeen      bool
+	resultSubtype string
 }
 
 // NewMapper returns an empty mapper.
@@ -114,6 +136,14 @@ func (m *Mapper) Succeeded() bool { return m.resultSeen && !m.failed }
 
 // SessionID is the session id Claude reported, if any line carried one.
 func (m *Mapper) SessionID() string { return m.sessionID }
+
+// APIKeySource is the init line's apiKeySource: "none" when Claude Code signs in with a login,
+// "ANTHROPIC_API_KEY" when it uses that variable (Claude Code 2.1.296, measured). ok is false
+// when no init line arrived.
+func (m *Mapper) APIKeySource() (source string, ok bool) { return m.apiKeySource, m.initSeen }
+
+// ResultSubtype is the last result's subtype, e.g. success, error_max_turns or error_max_budget_usd.
+func (m *Mapper) ResultSubtype() string { return m.resultSubtype }
 
 // TakeReplays returns the user messages echoed back since the last call, oldest first.
 func (m *Mapper) TakeReplays() []string {
@@ -154,6 +184,10 @@ type streamLine struct {
 	DurationAPIMS   *float64        `json:"duration_api_ms"`
 	NumTurns        *float64        `json:"num_turns"`
 	RateLimitInfo   map[string]any  `json:"rate_limit_info"`
+	APIKeySource    *string         `json:"apiKeySource"`
+	TerminalReason  string          `json:"terminal_reason"`
+	APIErrorStatus  *float64        `json:"api_error_status"`
+	ModelUsage      map[string]any  `json:"modelUsage"`
 	Denials         []struct {
 		ToolName string `json:"tool_name"`
 	} `json:"permission_denials"`
@@ -201,11 +235,28 @@ func (m *Mapper) Map(line []byte) []Activity {
 	case "assistant":
 		m.assistantSeen = true
 		return m.mapMessage(sl)
+	case "system":
+		if sl.Subtype == "init" {
+			m.initSeen = true
+			if sl.APIKeySource != nil {
+				m.apiKeySource = truncate(*sl.APIKeySource, 60)
+			}
+		}
+		m.dropped["type:system"]++
+		return nil
 	case "rate_limit_event":
-		return []Activity{{Kind: KindUsage, Payload: map[string]any{
-			"source":     "rate_limit_event",
-			"rate_limit": scalars(sl.RateLimitInfo),
-		}}}
+		p := map[string]any{"source": "rate_limit_event", "rate_limit": scalars(sl.RateLimitInfo)}
+		// The five-hour and seven-day windows (billing-signals): utilization and resetsAt per window.
+		if windows, ok := sl.RateLimitInfo["unifiedWindows"].(map[string]any); ok {
+			w := map[string]any{}
+			for name, v := range windows {
+				if inner, ok := v.(map[string]any); ok && len(w) < 10 {
+					w[truncate(name, 60)] = scalars(inner)
+				}
+			}
+			p["windows"] = w
+		}
+		return []Activity{{Kind: KindUsage, Payload: p}}
 	case "result":
 		return m.mapResult(sl)
 	default:
@@ -269,7 +320,25 @@ func (m *Mapper) mapResult(sl streamLine) []Activity {
 	if sl.NumTurns != nil {
 		m.numTurns = *sl.NumTurns
 	}
-	usage := map[string]any{"source": "result", "usage": scalars(sl.Usage)}
+	m.resultSubtype = truncate(sl.Subtype, 60)
+	usage := map[string]any{"source": "result", "usage": scalars(sl.Usage), "subtype": m.resultSubtype}
+	if sl.TerminalReason != "" {
+		usage["terminal_reason"] = truncate(sl.TerminalReason, 60)
+	}
+	if sl.APIErrorStatus != nil {
+		usage["api_error_status"] = *sl.APIErrorStatus
+	}
+	// Claude Code 2.1.296 puts the run's token totals and cost per model here; the top-level usage
+	// can be all zeros (measured), so the server reads these first.
+	if len(sl.ModelUsage) > 0 {
+		models := map[string]any{}
+		for name, v := range sl.ModelUsage {
+			if inner, ok := v.(map[string]any); ok && len(models) < 10 {
+				models[truncate(name, 100)] = scalars(inner)
+			}
+		}
+		usage["model_usage"] = models
+	}
 	for key, v := range map[string]*float64{
 		"total_cost_usd":  sl.TotalCostUSD,
 		"duration_ms":     sl.DurationMS,
