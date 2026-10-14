@@ -1,4 +1,5 @@
 import { useRef, useState, type KeyboardEvent } from 'react';
+import { questionsApi } from '../questionsApi';
 import { Sheet } from '../shell/Sheet';
 import { useNarrow } from '../shell/useNarrow';
 import { EmptyState } from '../ui/EmptyState';
@@ -150,6 +151,7 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
     delegate: (choice) => swallow(act((d) => workApi.delegate(d.item.id, d.item.version, choice))()),
     withdraw: (runId) => swallow(act((d) => workApi.withdraw(runId, d.item.version))()),
     cancel: (runId) => swallow(act((d) => workApi.cancel(runId, d.item.version))()),
+    ask: (body) => swallow(act((d) => questionsApi.ask(d.item.id, d.item.version, body))()),
   };
 
   function select(id: string) {

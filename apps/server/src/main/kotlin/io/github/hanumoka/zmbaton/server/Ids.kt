@@ -31,6 +31,8 @@ object Ids {
 
 	fun review(): String = "rvw_" + uuidV7()
 
+	fun question(): String = "qst_" + uuidV7()
+
 	/** An instruction a person sends to a running executor. Beyond the contract's prefixes, like `aud_`. */
 	fun input(): String = "inp_" + uuidV7()
 

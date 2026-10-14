@@ -87,6 +87,8 @@ data class WorkItemDetail(
 	val history: List<HistoryEntry>,
 	/** Added with the third stage-1 slice: whether the work item can be handed to an AI now. */
 	val delegation: DelegationAvailability,
+	/** Added with questions: whether a question can be left on the work item now, and why not. */
+	val question: ActionAvailability = ActionAvailability(true, null),
 )
 
 /** Whether a person can hand the work item to an AI now, and if not, why (contract "위임"). */
@@ -100,6 +102,8 @@ data class DelegationAvailability(
 	@JsonProperty("needs_note") val needsNote: Boolean = false,
 	/** The run a continuing run follows, so a screen can offer its repository and tools again. */
 	@JsonProperty("resume_from") val resumeFrom: PreviousRun? = null,
+	/** Added with questions: answered questions of earlier runs that the next run carries (`answer_arrived`). */
+	@JsonProperty("answers_ready") val answersReady: Int = 0,
 )
 
 /** The newest delegated run of a work item that a connector claimed and that has ended. */
@@ -229,7 +233,26 @@ class WorkItemService(
 			id, "work_item.stage_changed",
 			mapOf("from" to row.stage, "to" to move.finalStage, "path" to move.path, "note" to note),
 		)
+		if (move.finalStage == "cancelled") closeQuestions(id)
 		return detail(id)
+	}
+
+	/**
+	 * A cancelled work item takes its questions with it (question path: close reason
+	 * `work_cancelled`), and their first-screen items close in the same transaction.
+	 */
+	private fun closeQuestions(id: String) {
+		jdbc.sql(
+			"""
+			update inbox_items set state = 'closed', closed_at = now()
+			 where source_kind = 'qst' and state = 'open'
+			   and source_id in (select q.id from questions q where q.work_item_id = :id and q.state <> 'resolved')
+			""".trimIndent(),
+		).param("id", id).update()
+		val closed = jdbc.sql(
+			"update questions set state = 'resolved', close_reason = 'work_cancelled' where work_item_id = :id and state <> 'resolved'",
+		).param("id", id).update()
+		if (closed > 0) history(id, "question.closed_with_work", mapOf("count" to closed))
 	}
 
 	@Transactional
@@ -313,7 +336,9 @@ class WorkItemService(
 			DelegationAvailability(
 				plan.mode != null, plan.refusal, plan.mode?.name?.lowercase(), plan.needsNote,
 				if (plan.mode == Workflow.DelegationMode.FIRST) null else previousRun(id),
+				if (plan.mode == Workflow.DelegationMode.RESUME) answersReady(id) else 0,
 			),
+			questionAvailability(facts),
 		)
 	}
 
@@ -419,6 +444,20 @@ class WorkItemService(
 				rs.getString(6)?.let { json.readValue(it, mapType) }, rs.getString(7),
 			)
 		}.optional().orElse(null)
+
+	/** Whether a question can be left now (QuestionService.ask refuses with the same reasons). */
+	private fun questionAvailability(facts: Workflow.Facts): ActionAvailability = when {
+		facts.readOnlyReason != null -> ActionAvailability(false, "${facts.readOnlyReason}. 질문은 원본 저장소에서 다룬다")
+		facts.stage in Workflow.CLOSED ->
+			ActionAvailability(false, "${Workflow.label(facts.stage)}된 작업에는 질문을 남기지 않는다. 이어서 할 일이면 새 작업으로 만든다")
+		else -> ActionAvailability(true, null)
+	}
+
+	/** Answered questions of the work item's runs that no continuing run carried yet (QuestionService). */
+	private fun answersReady(id: String): Int =
+		jdbc.sql(
+			"select count(*) from questions where work_item_id = :id and state = 'answered' and run_id is not null and delivery_run_id is null",
+		).param("id", id).query(Int::class.javaObjectType).single()
 
 	/** Whether the organisation skips result review (contract "단계": `workflow.skipped_stages`). */
 	fun skipsResultReview(): Boolean = "result_review" in skippedStages()

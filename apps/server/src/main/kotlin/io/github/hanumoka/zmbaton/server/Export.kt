@@ -91,6 +91,8 @@ class ExportService(
 			Triple("work_item_links", "work_item_links", "created_at, from_id, to_id"),
 			// What executors said runs used and the provider's limit signals: counts, ratios and estimates, no secret.
 			Triple("usage_signals", "usage_signals", "received_at, id"),
+			// Questions with their answers and routing: what people and runs asked, in their own words.
+			Triple("questions", "questions", "created_at, id"),
 			Triple("audit_log", "audit_log", "at, id"),
 		)
 

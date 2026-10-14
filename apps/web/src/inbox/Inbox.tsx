@@ -11,8 +11,6 @@ import { useSheet } from '../ui/useSheet';
 import { useShownRow } from '../ui/useShownRow';
 import { InboxDetail } from './InboxDetail';
 import { InboxList } from './InboxList';
-import { outcomeText } from '../review/reviewModel';
-import type { ReviewOutcome } from '../reviewsApi';
 import { inboxGroups, kindOf, listState, readView, rowOrder, writeView } from './inboxView';
 import type { Send } from './inboxView';
 import type { RelaySend } from './RelayDetail';
@@ -56,7 +54,7 @@ export function Inbox({ items, error, sessions, now, onChanged, onError, onReloa
   const root = useRef<HTMLElement>(null);
   /** Where the focus goes once the next item is selected after a judgement. */
   const afterJudge = useRef<'title' | 'row' | null>(null);
-  /** What the last review verdict did, until the next one. */
+  /** What the last review verdict or answer did, until the next one. */
   const [done, setDone] = useState<{ text: string; href: string | null } | null>(null);
   const { selected } = view;
 
@@ -103,8 +101,8 @@ export function Inbox({ items, error, sessions, now, onChanged, onError, onReloa
     onChanged();
   }
 
-  function onDecided(id: string, effect: ReviewOutcome, href: string | null) {
-    setDone({ text: outcomeText(effect), href });
+  function onDone(id: string, text: string, href: string | null) {
+    setDone({ text, href });
     onJudged(id);
   }
 
@@ -115,7 +113,7 @@ export function Inbox({ items, error, sessions, now, onChanged, onError, onReloa
       sessions={sessions}
       now={now}
       onJudged={onJudged}
-      onDecided={onDecided}
+      onDone={onDone}
       onError={onError}
       titleRef={titleRef}
       inSheet={narrow}

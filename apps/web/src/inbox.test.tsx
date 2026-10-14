@@ -122,7 +122,7 @@ describe('buckets', () => {
 
   it('says a bucket the server does not fill yet is not made, and a clear bucket that it is clear', () => {
     const notes = inboxGroups([]).map(groupNote);
-    expect(notes).toEqual(['권한 요청이 없다', '기다리는 세션이 없다', '겹친 파일이 없다', '사람이 볼 위험 결과가 없다', '고른 표본과 알림이 없다']);
+    expect(notes).toEqual(['권한 요청이 없다', '기다리는 질문과 세션이 없다', '겹친 파일이 없다', '사람이 볼 위험 결과가 없다', '고른 표본과 알림이 없다']);
   });
 
   it('draws an empty bucket as one line in its head, not a box, and a full one with its rows', () => {
