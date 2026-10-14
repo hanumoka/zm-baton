@@ -35,6 +35,8 @@ const usage = `zm-baton — connects AI sessions you open yourself to the zm-bat
   zm-baton import zm-docs [--repo DIR] [--ref REV] [--apply]
                                                copy zm-docs work items and decisions to the
                                                server; shows what would change unless --apply
+  zm-baton export --out FILE                   write every record of the server, with where it
+                                               came from, to a new JSON file
   zm-baton repo add [DIR] [--worktrees DIR]    let this device run handed-over work in a repository
   zm-baton repo list                           show the repositories registered on this device
   zm-baton repo remove DIR|KEY                 stop running handed-over work in a repository
@@ -67,6 +69,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return report(stderr, sessionCmd(args[1:], stdout))
 	case "import":
 		return report(stderr, importCmd(args[1:], stdout))
+	case "export":
+		return report(stderr, exportCmd(args[1:], stdout))
 	case "repo":
 		return report(stderr, repoCmd(args[1:], stdout))
 	case "agent":

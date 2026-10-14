@@ -22,6 +22,10 @@ COPY --from=web /web/dist/ web/
 # PC's loopback only (127.0.0.1:18081), because there is no person authentication yet.
 ENV ZM_BATON_WEB_DIR=file:/app/web/ \
     ZM_BATON_SERVER_ADDRESS=0.0.0.0
+# The commit this image was built from, when the builder passes it (update.ps1 does); the export
+# reports it. Last, so a new commit rebuilds only this layer.
+ARG ZM_BATON_BUILD_COMMIT=unknown
+ENV ZM_BATON_BUILD_COMMIT=${ZM_BATON_BUILD_COMMIT}
 USER zmbaton
 EXPOSE 18081
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

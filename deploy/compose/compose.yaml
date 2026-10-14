@@ -1,8 +1,15 @@
 # Local stage-1 services on one PC.
 # Put ZM_BATON_DB_PASSWORD in deploy/compose/.env (git-ignored); see .env.example.
 #   database only (compat test):  docker compose -f deploy/compose/compose.yaml up -d
-#   database, server and Web:     docker compose -f deploy/compose/compose.yaml --profile app up -d --build
+#   database, server, Web and the daily backup:
+#                                 docker compose -f deploy/compose/compose.yaml --profile app up -d --build
+# Backup, restore and update: backup.ps1, restore.ps1 and update.ps1 (or .sh) next to this file,
+# explained in docs/stage1/backup-restore-update.md.
 # Everything is published on 127.0.0.1 only: there is no person authentication yet.
+#
+# Keep the project name and the volume key `zm-baton-pg` as they are: together they name the
+# Docker volume zm-baton-dev_zm-baton-pg that holds the data. Rebuilding (`up -d --build`) and
+# `down` keep it; only `down -v` or `docker volume rm` delete it.
 name: zm-baton-dev
 services:
   postgres:
@@ -12,7 +19,7 @@ services:
       POSTGRES_USER: zm_baton
       POSTGRES_PASSWORD: ${ZM_BATON_DB_PASSWORD:?set ZM_BATON_DB_PASSWORD in deploy/compose/.env}
     ports:
-      - "127.0.0.1:15432:5432"
+      - "127.0.0.1:${ZM_BATON_DB_PORT:-15432}:5432"
     volumes:
       - zm-baton-pg:/var/lib/postgresql/data
     healthcheck:
@@ -26,12 +33,50 @@ services:
     build:
       context: ../../apps
       dockerfile: ../deploy/compose/server.Dockerfile
+      args:
+        # update.ps1 sets it to the checked-out commit; the export shows it as the server's commit.
+        ZM_BATON_BUILD_COMMIT: ${ZM_BATON_BUILD_COMMIT:-unknown}
     environment:
       ZM_BATON_DB_URL: jdbc:postgresql://postgres:5432/zm_baton
       ZM_BATON_DB_USER: zm_baton
       ZM_BATON_DB_PASSWORD: ${ZM_BATON_DB_PASSWORD:?set ZM_BATON_DB_PASSWORD in deploy/compose/.env}
+      # Retention in days per kind of record. Empty (the default) keeps everything forever.
+      ZM_BATON_RETENTION_AUDIT_LOG_DAYS: ${ZM_BATON_RETENTION_AUDIT_LOG_DAYS:-}
+      ZM_BATON_RETENTION_ENDED_SESSIONS_DAYS: ${ZM_BATON_RETENTION_ENDED_SESSIONS_DAYS:-}
+      ZM_BATON_RETENTION_CLOSED_INBOX_ITEMS_DAYS: ${ZM_BATON_RETENTION_CLOSED_INBOX_ITEMS_DAYS:-}
+      ZM_BATON_RETENTION_CLOSED_NOTICES_DAYS: ${ZM_BATON_RETENTION_CLOSED_NOTICES_DAYS:-}
+      ZM_BATON_RETENTION_ENDED_RUN_EVENTS_DAYS: ${ZM_BATON_RETENTION_ENDED_RUN_EVENTS_DAYS:-}
     ports:
-      - "127.0.0.1:18081:18081"
+      - "127.0.0.1:${ZM_BATON_HTTP_PORT:-18081}:18081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # The daily backup (FN-1403): a pg_dump of the database once a day into a folder on this PC,
+  # keeping the newest 14. It comes up with the server (`--profile app`); `--profile backup` brings
+  # it up with the database alone. ZM_BATON_BACKUP=off in .env turns it off.
+  # The same container image runs backup.ps1, restore.ps1 and update.ps1's steps on demand.
+  backup:
+    profiles: ["app", "backup"]
+    image: postgres:17 # the server's major version, so pg_dump and pg_restore match it
+    entrypoint: ["sh", "/ops/zmb-backup.sh"]
+    command: ["loop"]
+    user: "${ZM_BATON_BACKUP_USER:-0:0}"
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: zm_baton
+      PGUSER: zm_baton
+      PGPASSWORD: ${ZM_BATON_DB_PASSWORD:?set ZM_BATON_DB_PASSWORD in deploy/compose/.env}
+      ZM_BATON_BACKUP: ${ZM_BATON_BACKUP:-on}
+      ZM_BATON_BACKUP_KEEP: ${ZM_BATON_BACKUP_KEEP:-14}
+      ZM_BATON_BACKUP_EVERY_HOURS: ${ZM_BATON_BACKUP_EVERY_HOURS:-24}
+    volumes:
+      # Outside the Git checkout by default: a folder next to it. Use an absolute path in .env to
+      # put backups elsewhere, ideally on another disk.
+      - ${ZM_BATON_BACKUP_DIR:-../../../zm-baton-backups}:/backups
+      - ./ops:/ops:ro
     depends_on:
       postgres:
         condition: service_healthy
