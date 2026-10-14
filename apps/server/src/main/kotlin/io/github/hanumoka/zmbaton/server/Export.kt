@@ -80,6 +80,10 @@ class ExportService(
 			Triple("session_events", "session_events", "received_at, event_id"),
 			Triple("inbox_items", "inbox_items", "created_at, id"),
 			Triple("notices", "notices", "created_at, id"),
+			// The master's contradiction checks: what changed, the texts it compared (copies of document
+			// versions and decisions already in this bundle) and what came of it. No secret: the API key
+			// is never stored.
+			Triple("master_checks", "master_checks", "created_at, id"),
 			// Delegation scopes and run workspaces hold repository keys, branches and tool names, never a path.
 			Triple("delegations", "delegations", "created_at, id"),
 			Triple("runs", "runs", "created_at, id"),

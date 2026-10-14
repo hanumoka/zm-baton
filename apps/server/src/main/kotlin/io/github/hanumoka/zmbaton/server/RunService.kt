@@ -28,6 +28,8 @@ class RunService(
 	private val workItems: WorkItemService,
 	private val sessions: SessionService,
 	private val usage: UsageService,
+	/** The master's own run limits, narrower than an account's (MasterChecks.kt). */
+	private val master: MasterSettings,
 	transactions: PlatformTransactionManager,
 	/** Contract "실행 권리 청구" 6: how long a lapsed lease may stay silent before the run is lost. */
 	@Value("\${zm-baton.run-lost-grace-seconds:300}") private val lostGraceSeconds: Long,
@@ -96,7 +98,7 @@ class RunService(
 			" and d.device_id = :device and d.revoked_at is null and d.expires_at > now()"
 		val stmt = jdbc.sql(
 			"""
-			select r.id, r.work_item_id, r.executor, r.delegation_id, d.device_id, d.scope ->> 'repo_key'
+			select r.id, r.work_item_id, r.executor, r.delegation_id, d.device_id, d.scope ->> 'repo_key', d.scope ->> 'purpose'
 			  from runs r left join delegations d on d.id = r.delegation_id
 			 where r.state = 'requested'$forDevice
 			 order by r.created_at limit :limit
@@ -104,7 +106,7 @@ class RunService(
 		).param("limit", limit)
 		if (deviceId != null) stmt.param("device", deviceId)
 		return stmt.query { rs, _ ->
-			PendingRun(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6))
+			PendingRun(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7))
 		}.list()
 	}
 
@@ -150,27 +152,31 @@ class RunService(
 		sessions.audit("system", deviceId, "run.claimed", "run", runId,
 			mapOf("work_item_id" to workItemId, "delegation_id" to delegationId, "generation" to generation))
 		jdbc.sql("update devices set last_seen_at = now() where id = :id").param("id", deviceId).update()
-		val delegation = delegationId?.let { id ->
-			val scope = jdbc.sql("select scope::text from delegations where id = :id").param("id", id)
+		val scope = delegationId?.let { id ->
+			jdbc.sql("select scope::text from delegations where id = :id").param("id", id)
 				.query(String::class.java).single().let { json.readValue(it, mapType) }
+		}
+		val delegation = scope?.let {
 			ClaimedDelegation(
-				id, scope["executor"] as String, scope["repo_key"] as String, scope["base_branch"] as String?,
-				(scope["allowed_tools"] as List<*>).map { it as String },
+				delegationId, it["executor"] as String, it["repo_key"] as String?, it["base_branch"] as String?,
+				(it["allowed_tools"] as List<*>).map { t -> t as String },
 			)
 		}
+		// The master's run (MasterChecks.kt) works in no repository and gets the master's smaller limits.
+		val purpose = scope?.get("purpose") as String?
 		val resume = resumedFrom?.let { previousForClaim(it, deviceId, accountId, continueReason ?: "resume_after_cut") }
 		// The account's sign-in method and the limits this run gets now (UsageService.limitsForClaim).
 		val acc = accountId?.let { usage.account(it) }
-		val limits = acc?.let { usage.limitsForClaim(it) }
+		val limits = acc?.let { usage.limitsForClaim(it) }?.let { if (purpose == MasterCheckService.PURPOSE) master.cap(it) else it }
 		if (limits != null) {
 			jdbc.sql("update runs set limits = cast(:l as jsonb) where id = :id").param("l", json.writeValueAsString(limits)).param("id", runId).update()
 		}
 		val account = acc?.let { ClaimedAccount(it.id, it.name, UsageService.authMethod(it.authKind), it.authSource) }
-		return Claimed(runId, workItemId, generation, LEASE_SECONDS, delegation, instruction, resume, account, limits?.let(::claimedLimits))
+		return Claimed(runId, workItemId, generation, LEASE_SECONDS, delegation, instruction, resume, account, limits?.let(::claimedLimits), purpose)
 	}
 
 	private fun claimedLimits(l: Map<String, Any?>) = ClaimedLimits(
-		(l["max_turns"] as? Number)?.toInt(), l["max_budget_usd"] as? java.math.BigDecimal, (l["max_minutes"] as? Number)?.toInt(),
+		(l["max_turns"] as? Number)?.toInt(), (l["max_budget_usd"] as? Number)?.let { java.math.BigDecimal(it.toString()) }, (l["max_minutes"] as? Number)?.toInt(),
 		l["budget_from"] as? String,
 	)
 

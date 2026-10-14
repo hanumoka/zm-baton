@@ -1,5 +1,6 @@
 package io.github.hanumoka.zmbaton.server
 
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -36,6 +37,7 @@ class DecisionWriteService(
 	private val decisions: DecisionService,
 	private val approvals: ApprovalService,
 	private val sessions: SessionService,
+	private val events: ApplicationEventPublisher,
 ) {
 	companion object {
 		const val QUESTION_MAX = 1000
@@ -144,7 +146,8 @@ class DecisionWriteService(
 	/**
 	 * The approver's verdict on a proposal. Accepting one that names an earlier decision in
 	 * `supersedes_id` replaces that decision in the same transaction: it becomes `superseded`
-	 * and points back here.
+	 * and points back here. Once an acceptance commits, the master compares the decision with related
+	 * documents and decisions (contract "문서 모순 후보" 1, MasterChecks.kt).
 	 */
 	@Transactional
 	fun approve(id: String, body: ApprovalIn, actor: String): DecisionDetail {
@@ -175,6 +178,10 @@ class DecisionWriteService(
 			actor, if (action == DecisionRules.ACCEPT) "decision.accepted" else "decision.rejected", id,
 			mapOf("approval" to approval, "version" to row.version, "note" to note, "supersedes" to target?.ref),
 		)
+		if (action == DecisionRules.ACCEPT) {
+			val trigger = if (target != null) "decision_superseded" else "decision_accepted"
+			events.publishEvent(ContradictionTrigger(trigger, listOf(CheckSubject("decision", id))))
+		}
 		return decisions.detail(id, actor)
 	}
 

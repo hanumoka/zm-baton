@@ -1,6 +1,7 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -43,6 +44,7 @@ class DocumentWriteService(
 	private val documents: DocumentService,
 	private val approvals: ApprovalService,
 	private val sessions: SessionService,
+	private val events: ApplicationEventPublisher,
 ) {
 	companion object {
 		const val TITLE_MAX = 300
@@ -154,7 +156,10 @@ class DocumentWriteService(
 		return documents.detail(id, null, actor)
 	}
 
-	/** The approver approves one version. This is where a contradiction check will start (contract "문서 모순 후보" 1). */
+	/**
+	 * The approver approves one version. Once that commits, the master compares it with related
+	 * documents and decisions (contract "문서 모순 후보" 1, MasterChecks.kt).
+	 */
 	@Transactional
 	fun approve(id: String, number: Int, input: DocumentApprovalIn, actor: String): DocumentDetail {
 		if (input.decision.trim() != "approved") throw BadRequestException("decision must be approved")
@@ -170,6 +175,7 @@ class DocumentWriteService(
 		val approval = approvals.record("document_version", row.first, number.toLong(), actor, "approved", note)
 		jdbc.sql("update documents set updated_at = now() where id = :id").param("id", id).update()
 		audit(actor, "document.version_approved", id, mapOf("number" to number, "approval" to approval, "note" to note))
+		events.publishEvent(ContradictionTrigger("document_version_approved", listOf(CheckSubject("document_version", row.first))))
 		return documents.detail(id, number, actor)
 	}
 
