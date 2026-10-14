@@ -93,7 +93,10 @@ func fakeClaude(mode string, args []string) int {
 				os.Exit(4)
 			})
 			for in.Scan() {
-				// a message after the result would start another turn; none is expected here
+				// A message after the result would start another turn. None is expected: the
+				// connector writes each instruction once and ends the input once the result came.
+				// Say so on stdout, where the connector still reads, so a test can see it.
+				emit(blocks("assistant", map[string]any{"type": "text", "text": "extra message after the result: " + in.Text()}))
 			}
 			deadline.Stop()
 		}

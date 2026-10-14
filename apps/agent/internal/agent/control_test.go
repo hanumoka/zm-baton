@@ -123,8 +123,18 @@ func TestAnInstructionReachesTheRunningExecutorOnce(t *testing.T) {
 			answers = append(answers, e.Payload["text"].(string))
 		}
 	}
-	if !slices.Contains(answers, "got: "+inputPrefix+"README도 고친다") {
-		t.Fatalf("the executor did not take the instruction: %q", answers)
+	// Written once: the executor took it in one turn and got nothing more after its result.
+	took := 0
+	for _, a := range answers {
+		if a == "got: "+inputPrefix+"README도 고친다" {
+			took++
+		}
+		if strings.HasPrefix(a, "extra message after the result") {
+			t.Fatalf("the executor got a message after its result: %q", a)
+		}
+	}
+	if took != 1 {
+		t.Fatalf("the executor took the instruction %d times: %q", took, answers)
 	}
 	started := evs[0].Payload
 	if caps, _ := started["capabilities"].(map[string]any); caps["live_input"] != true {
@@ -135,11 +145,17 @@ func TestAnInstructionReachesTheRunningExecutorOnce(t *testing.T) {
 	if len(inputs) != 1 || inputs[0].(map[string]any)["id"] != "inp_1" || inputs[0].(map[string]any)["state"] != "delivered" {
 		t.Fatalf("ended inputs %v", ended["inputs"])
 	}
+	// Renewals report the latest state seen since the last one, so whether one carries "sent",
+	// "delivered" or nothing depends on timing: the echo can come before the next renewal (the
+	// state goes straight to delivered, which the server accepts from pending), and the run can
+	// end before any renewal (the end report above settles it). What they carry must be true.
 	f.mu.Lock()
 	reports := slices.Clone(f.reports)
 	f.mu.Unlock()
-	if !slices.Contains(reports, api.InputReport{ID: "inp_1", State: "sent"}) {
-		t.Fatalf("the renewal never reported the instruction as sent: %v", reports)
+	for _, r := range reports {
+		if r.ID != "inp_1" || (r.State != "sent" && r.State != "delivered") {
+			t.Fatalf("a renewal reported %v", reports)
+		}
 	}
 }
 
