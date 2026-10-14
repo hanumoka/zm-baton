@@ -435,3 +435,16 @@ describe('work screen', () => {
     expect(html).not.toContain('type="search"');
   });
 });
+
+describe('sharing scope on the work detail', () => {
+  it('shows the scope on the fact line, the server default when an older server leaves it out', () => {
+    const personal = detail({}, { visibility: 'personal' });
+    expect(renderToStaticMarkup(<WorkDetail item={personal.item} detail={personal} projects={[]} skipped={[]} actions={actions} error={null} />)).toContain(
+      '<dt>공유 범위</dt><dd>개인</dd>',
+    );
+    const old = detail();
+    expect(renderToStaticMarkup(<WorkDetail item={old.item} detail={old} projects={[]} skipped={[]} actions={actions} error={null} />)).toContain(
+      '<dt>공유 범위</dt><dd>조직</dd>',
+    );
+  });
+});

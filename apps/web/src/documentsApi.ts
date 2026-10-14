@@ -27,6 +27,8 @@ export type Doc = {
   /** The highest approved version number; null when none is approved. */
   approved_number: number | null;
   updated_at: string;
+  /** The sharing scope (G06.1); an older server leaves it out, which means `org`. */
+  visibility?: string;
 };
 
 export type DocVersion = {

@@ -4,6 +4,7 @@ import { Icon } from '../icons/Icon';
 import { StageGlyph } from '../icons/StageGlyph';
 import { RowSkeleton } from '../ui/Group';
 import { ReadOnly } from '../ui/ReadOnly';
+import { visibilityLabel } from '../ui/visibility';
 import type { HandoffChoice, Move, Project, Stage, WorkItem, WorkItemDetail } from '../workApi';
 import { at, historyLine, moveParts, STAGES, waitLabel } from '../workModel';
 import { Questions } from '../question/Questions';
@@ -75,6 +76,10 @@ export function WorkDetail({ item, detail, projects, skipped, actions, error, ti
         <div>
           <dt>책임자</dt>
           <dd>{d ? <code>{d.responsible_user_id}</code> : <span className="wd-wait">읽는 중</span>}</dd>
+        </div>
+        <div>
+          <dt>공유 범위</dt>
+          <dd>{visibilityLabel(it.visibility)}</dd>
         </div>
         <div>
           <dt>시작</dt>

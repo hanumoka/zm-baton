@@ -7,6 +7,8 @@ import { BUCKETS, inboxHref, newImmediate, waitingItems } from './inboxModel';
 import { Inbox } from './inbox/Inbox';
 import { isRelay, relayed } from './inbox/relayView';
 import { Kit } from './kit/Kit';
+import { Me } from './me/Me';
+import { Org } from './org/Org';
 import { RiskRules } from './review/RiskRules';
 import { clear, fail, lines, type Problems, type Source } from './problems';
 import { Sessions } from './sessions/Sessions';
@@ -76,6 +78,8 @@ export function Shell() {
       if (next !== 'documents') cleared('documents');
       if (next !== 'risk') cleared('risk');
       if (next !== 'accounts') cleared('accounts');
+      if (next !== 'me') cleared('me');
+      if (next !== 'org') cleared('org');
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
@@ -291,6 +295,8 @@ export function Shell() {
             />
           )}
           {screen === 'risk' && <RiskRules onError={failed('risk')} onRead={() => cleared('risk')} />}
+          {screen === 'me' && <Me onError={failed('me')} onRead={() => cleared('me')} />}
+          {screen === 'org' && <Org onError={failed('org')} onRead={() => cleared('org')} />}
           {screen === 'accounts' && <Accounts onError={failed('accounts')} onRead={() => cleared('accounts')} />}
           {screen === 'runs' && <RunTest />}
           {screen === 'kit' && <Kit />}

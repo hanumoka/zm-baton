@@ -5,6 +5,7 @@ import { StageGlyph } from '../icons/StageGlyph';
 import { RowSkeleton } from '../ui/Group';
 import { Prose } from '../ui/Prose';
 import { ReadOnly } from '../ui/ReadOnly';
+import { visibilityLabel } from '../ui/visibility';
 import { isBlocked } from '../work/workView';
 import type { Decision, DecisionDetail, DecisionRef, LinkedWork } from '../workApi';
 import { at, decisionStatusLabel, stageLabel } from '../workModel';
@@ -96,6 +97,10 @@ export function DecisionDetailView({ decision, detail, related, onJump, resolveD
             <dd>여기서 만든 결정</dd>
           </div>
         )}
+        <div>
+          <dt>공유 범위</dt>
+          <dd>{visibilityLabel(it.visibility)}</dd>
+        </div>
       </dl>
       {d && !product && <ReadOnly gitRef={d.git_ref} reason={d.read_only_reason ?? '1단계는 결정을 웹에서 고치지 않는다.'} />}
       {d === null ? <RowSkeleton rows={3} /> : product ? <Made d={d} actions={actions} error={error} onJump={onJump} /> : <Copied d={d} related={related} onJump={onJump} resolveDecision={resolveDecision} titleId={titleId} />}

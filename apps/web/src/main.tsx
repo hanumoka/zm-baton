@@ -16,6 +16,8 @@ import './review/review.css';
 import './question/question.css';
 import './sessions/sessions.css';
 import './accounts/accounts.css';
+import './org/org.css';
+import './me/me.css';
 import './kit/kit.css';
 
 createRoot(document.getElementById('root')!).render(
