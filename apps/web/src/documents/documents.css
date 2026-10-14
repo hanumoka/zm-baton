@@ -1,0 +1,70 @@
+/*
+ * The documents screen's own parts. The list-and-detail layout, the row and the detail head are
+ * shared (ui/panes.css); the links, the aside headings and the forms are the decisions screen's
+ * (decisions/decisions.css). Here are the source on a row, the version list, the state label and
+ * the Markdown field with its preview. Every value is a token.
+ */
+
+/* Row: the source in words, then the project (gone below 1180px) and a Git document's path */
+.doc-src { margin-right: var(--s-3); }
+.doc-path { font-size: var(--fs-xs); color: var(--c-ink-2); }
+
+/* Facts line */
+.doc-source { align-items: center; font-weight: var(--fw-semi); }
+.dt-facts .doc-source { align-self: center; }
+
+/* A version's state: words in a thin frame, the approved one in ink */
+.doc-state {
+  display: inline-block;
+  margin-left: var(--s-2);
+  padding: 0 var(--s-1);
+  border: var(--rule) solid var(--c-rule-strong);
+  border-radius: var(--r-xs);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  line-height: var(--lh-row);
+  color: var(--c-ink-2);
+  vertical-align: baseline;
+}
+.doc-state.is-approved { border-color: var(--c-ink-2); color: var(--c-ink); }
+.dt-sec h3 .doc-old { margin-left: var(--s-2); font-weight: var(--fw-regular); }
+.doc-git code { overflow-wrap: anywhere; }
+
+/* Versions, newest first; the one shown is marked in words and by its background */
+.doc-vers { display: flex; flex-direction: column; gap: var(--s-1); max-width: var(--w-text); margin: 0; padding: 0; list-style: none; }
+.doc-vers li { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); }
+.doc-vers li.is-shown { background: var(--c-canvas); }
+.doc-ver-t { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-1) var(--s-2); margin: 0; }
+.doc-ver-t .doc-state { margin-left: 0; }
+.doc-ver-t code { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.doc-ver-t small { font-size: var(--fs-xs); font-weight: var(--fw-semi); color: var(--c-ink); }
+.doc-ver-sub { margin: var(--s-0) 0 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.doc-ver-sub code { font-size: var(--fs-xs); }
+.doc-ver-acts { display: flex; flex-wrap: wrap; gap: var(--s-1); margin: var(--s-1) 0 0 calc(var(--s-2) * -1); }
+.doc-ver-acts .btn { min-height: var(--h-btn-sm); font-size: var(--fs-xs); }
+.doc-ver-acts .btn:hover { background: var(--c-canvas-2); }
+
+/* A commit typed in a form reads in the monospace numbers and paths use */
+.field.mono { font-family: var(--font-mono); font-size: var(--fs-sm); }
+
+/* Markdown field: its label and the two views on one line, then the source or the preview */
+.mdf { display: grid; gap: var(--s-1); min-width: 0; }
+.mdf-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-2); }
+.mdf-label { font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.mdf-modes { display: inline-flex; padding: var(--s-0); border: var(--rule) solid var(--c-rule-strong); border-radius: var(--r-sm); background: var(--c-canvas); }
+.mdf-modes button {
+  min-height: var(--h-btn-sm);
+  padding: 0 var(--s-3);
+  border: 0;
+  border-radius: var(--r-xs);
+  background: transparent;
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  color: var(--c-ink-2);
+  transition: background-color var(--dur-fast) var(--ease);
+}
+.mdf-modes button:hover { color: var(--c-ink); }
+.mdf-modes button.is-on { background: var(--c-paper); color: var(--c-ink); box-shadow: var(--sh-seg); }
+.mdf-modes button:focus-visible { outline: var(--ring) solid var(--c-accent); outline-offset: calc(var(--ring) * -1); }
+.mdf-text { width: 100%; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--c-ink); }
+.mdf-preview { min-height: calc(var(--h-ctl) * 4); padding: var(--s-3); border: var(--rule) solid var(--c-rule); border-radius: var(--r-sm); background: var(--c-paper); }

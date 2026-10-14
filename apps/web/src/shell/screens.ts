@@ -6,7 +6,7 @@ import type { IconName } from '../icons/Icon';
  * address (#inbox, #work, ...) so a reload stays on the same screen.
  */
 
-export type ScreenId = 'inbox' | 'sessions' | 'work' | 'decisions' | 'runs' | 'kit';
+export type ScreenId = 'inbox' | 'sessions' | 'work' | 'decisions' | 'documents' | 'runs' | 'kit';
 
 export type Screen = {
   id: ScreenId;
@@ -35,6 +35,7 @@ export const SCREENS: Screen[] = [
   },
   { id: 'work', label: '작업', short: '작업', icon: 'work', aliases: ['work'], inNav: true },
   { id: 'decisions', label: '결정', short: '결정', icon: 'decision', aliases: ['결정 기록', 'decisions'], inNav: true },
+  { id: 'documents', label: '문서', short: '문서', icon: 'doc', aliases: ['documents', 'docs'], inNav: true },
   { id: 'runs', label: '실행 시험', short: '실행', icon: 'run', aliases: ['실행', 'runs'], inNav: true },
   { id: 'kit', label: '디자인 키트', short: '키트', icon: 'doc', aliases: [], inNav: false },
 ];
@@ -44,7 +45,7 @@ export const SCREENS: Screen[] = [
  * here (DESIGN.md 「화면 배치」 1) and the sidebar draws group names once there is more than one.
  */
 export const NAV_GROUPS: { id: string; label: string; items: ScreenId[] }[] = [
-  { id: 'screens', label: '화면', items: ['inbox', 'sessions', 'work', 'decisions', 'runs'] },
+  { id: 'screens', label: '화면', items: ['inbox', 'sessions', 'work', 'decisions', 'documents', 'runs'] },
 ];
 
 /** The four screens in the bottom tab bar; the rest go under 「더 보기」. */
