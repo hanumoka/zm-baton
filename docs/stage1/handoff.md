@@ -37,7 +37,7 @@ git pull --ff-only
 docker compose -f deploy/compose/compose.yaml --profile app up -d --build
 ```
 
-서버가 뜰 때 데이터베이스 구조 변경이 한 번 적용된다. `V4`는 표 둘(`device_repositories`, `delegations`)과 `runs`의 칸 다섯을 더하고 `run_events`의 종류 검사에 `git_changes`를 넣는다. `V8`은 `runs`에 이어 간 실행(`resumed_from_run_id`)과 이어 가는 이유(`continue_reason`) 칸을, 표 `run_inputs`(사람이 실행 중에 보낸 지시)를 더한다. 지우는 것은 없고 이미 있던 기록은 그대로다.
+서버가 뜰 때 데이터베이스 구조 변경이 한 번 적용된다. `V4`는 표 둘(`device_repositories`, `delegations`)과 `runs`의 칸 다섯을 더하고 `run_events`의 종류 검사에 `git_changes`를 넣는다. `V7`은 `runs`에 이어 간 실행(`resumed_from_run_id`)과 이어 가는 이유(`continue_reason`) 칸을, 표 `run_inputs`(사람이 실행 중에 보낸 지시)를 더한다. 지우는 것은 없고 이미 있던 기록은 그대로다.
 
 실행 중에 서버를 다시 띄워도 그 실행은 끊기지 않는다. 서버는 다시 뜬 때부터 재연결 유예(5분)를 새로 세고, 연결 프로그램은 서버가 돌아오면 임대를 다시 갱신한다.
 
@@ -236,4 +236,4 @@ AI가 돌린 작업이 「수행」에 있으면(실행이 끊겼거나, 취소�
 - 연결 프로그램은 `Ctrl+C`로 끈다.
 - 저장소를 더 쓰지 않으면 `zm-baton repo remove '<폴더>'`. 작업 트리와 브랜치는 6단계의 Git 명령으로 지운다.
 - `runs\` 폴더의 실행기 기록은 이어서 맡길 때만 읽는다. 지워도 되며, 지우면 다음 이어서 맡기기는 이전 브랜치 끝에서 새 작업 트리로 시작한다.
-- `V4`와 `V8`은 되돌리는 마이그레이션이 없다. 셋째 묶음을 통째로 떼려면 둘째 묶음 안내서의 「정리」처럼 데이터베이스 볼륨까지 지우고 옛 판으로 다시 띄운다.
+- `V4`와 `V7`은 되돌리는 마이그레이션이 없다. 셋째 묶음을 통째로 떼려면 둘째 묶음 안내서의 「정리」처럼 데이터베이스 볼륨까지 지우고 옛 판으로 다시 띄운다.
