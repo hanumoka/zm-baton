@@ -45,7 +45,46 @@ data class Claimed(
 	val delegation: ClaimedDelegation? = null,
 	/** What the executor is asked to do, built by the server from the work item. */
 	val instruction: String? = null,
+	/** Added with run control: set when the run continues an earlier one (contract "실행 권리 청구" 1-2). */
+	val resume: ClaimedResume? = null,
 )
+
+/**
+ * The run a continuing run follows. On the device that ran it, its executor session and worktree,
+ * which the connector reuses only after confirming that the earlier executor and its child
+ * processes ended (contract "실행마다 별도 작업 트리" 6). Elsewhere neither is sent.
+ */
+data class ClaimedResume(
+	@JsonProperty("run_id") val runId: String,
+	@JsonProperty("continue_reason") val continueReason: String,
+	@JsonProperty("same_device") val sameDevice: Boolean,
+	@JsonProperty("session_id") val sessionId: String?,
+	/** `repo_key`, `base_commit`, `branch`, `base_ref` of the earlier run: never a path on the device. */
+	val workspace: Map<String, Any?>?,
+)
+
+/** A lease renewal (contract "실행 권리 청구" 5), with what became of the instructions the connector took. */
+data class LeaseIn(
+	@JsonProperty("device_id") val deviceId: String,
+	val generation: Long,
+	val inputs: List<InputReport> = emptyList(),
+)
+
+/** `sent`: written to the executor; `delivered`: the executor took it; `undelivered`: it could not. */
+data class InputReport(val id: String, val state: String)
+
+data class LeaseOut(
+	/** `claimed`, `running` or `stopping`. */
+	val state: String,
+	@JsonProperty("lease_seconds") val leaseSeconds: Int,
+	@JsonProperty("lease_expires_at") val leaseExpiresAt: OffsetDateTime,
+	/** `cancel` when a person asked to stop the run (state `stopping`); null otherwise. */
+	val stop: String?,
+	/** Instructions a person sent that wait for the executor, oldest first. */
+	val inputs: List<PendingInput>,
+)
+
+data class PendingInput(val id: String, val text: String)
 
 /** The part of a delegation the connector turns into executor options (contract "실행할 때 넘기는 것"). */
 data class ClaimedDelegation(
@@ -111,4 +150,9 @@ class ApiController(private val service: RunService) {
 	@PostMapping("/runs/{id}/events")
 	fun events(@PathVariable id: String, @RequestBody body: EventBatch): EventResult =
 		service.ingest(id, body)
+
+	/** The connector renews the lease of a run it holds and hears whether to stop and what to pass on. */
+	@PostMapping("/runs/{id}/lease")
+	fun renew(@PathVariable id: String, @RequestBody body: LeaseIn): LeaseOut =
+		service.renew(id, body)
 }

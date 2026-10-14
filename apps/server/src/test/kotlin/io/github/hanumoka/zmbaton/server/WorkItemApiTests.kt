@@ -205,6 +205,8 @@ class WorkItemApiTests @Autowired constructor(
 		assertEquals(403, call("GET", "/api/repositories", token = token).first)
 		assertEquals(403, call("POST", "/api/work-items/wrk_x/delegations", """{"executor":"claude_code","device_id":"d","repo_key":"git:abc1234","version":0}""", token).first)
 		assertEquals(403, call("POST", "/api/runs/run_x/withdraw", """{"version":0}""", token).first)
+		assertEquals(403, call("POST", "/api/runs/run_x/cancel", """{"version":0}""", token).first)
+		assertEquals(403, call("POST", "/api/runs/run_x/inputs", """{"text":"x"}""", token).first)
 		assertEquals(403, call("POST", "/api/devices/dev_x/repositories", """{"repo_key":"git:abc1234","name":"x"}""", token).first)
 	}
 
@@ -247,9 +249,31 @@ class WorkItemApiTests @Autowired constructor(
 		assertEquals(409, refused)
 		assertContains(obj(why)["message"] as String, "살아 있는 실행 시도")
 
+		// Before a connector claims it, the run has no lease to renew and takes no instruction.
+		assertEquals(409, call("POST", "/api/runs/${run["id"]}/lease", """{"device_id":"$device","generation":1}""").first)
+		val (inputStatus, inputBody) = call("POST", "/api/runs/${run["id"]}/inputs", """{"text":"README도"}""")
+		assertEquals(409, inputStatus)
+		assertContains(obj(inputBody)["message"] as String, "아직 시작되지 않았다")
+		val actions = run["actions"] as Map<*, *>
+		assertEquals(true, (actions["cancel"] as Map<*, *>)["allowed"])
+
 		val (backStatus, backBody) = call("POST", "/api/runs/${run["id"]}/withdraw", """{"version":${version(id)}}""")
 		assertEquals(200, backStatus, backBody)
 		assertNull(item(obj(backBody))["executor_kind"])
+		val (claimStatus, claimBody) = call("POST", "/api/work-items/$id/delegations",
+			"""{"executor":"claude_code","device_id":"$device","repo_key":"$key","version":${version(id)}}""")
+		assertEquals(201, claimStatus, claimBody)
+		val second = (json.readValue(call("GET", "/api/work-items/$id/runs").second, List::class.java).last() as Map<*, *>)["id"] as String
+		val (claimed, claimedBody) = call("POST", "/api/runs/$second/claim", """{"device_id":"$device"}""")
+		assertEquals(200, claimed, claimedBody)
+		val generation = (obj(claimedBody)["generation"] as Number).toLong()
+		val (leaseStatus, leaseBody) = call("POST", "/api/runs/$second/lease", """{"device_id":"$device","generation":$generation,"inputs":[]}""")
+		assertEquals(200, leaseStatus, leaseBody)
+		assertEquals("claimed", obj(leaseBody)["state"])
+		assertEquals(null, obj(leaseBody)["stop"])
+		val (cancelStatus, cancelBody) = call("POST", "/api/runs/$second/cancel", """{"version":${version(id)}}""")
+		assertEquals(200, cancelStatus, cancelBody)
+		assertEquals("cancel", obj(call("POST", "/api/runs/$second/lease", """{"device_id":"$device","generation":$generation}""").second)["stop"])
 		assertEquals(200, call("DELETE", "/api/devices/$device/repositories?repo_key=$key").first)
 	}
 

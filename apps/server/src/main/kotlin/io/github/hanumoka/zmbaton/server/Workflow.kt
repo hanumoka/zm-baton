@@ -10,6 +10,7 @@ package io.github.hanumoka.zmbaton.server
  * `version` (checked by the caller), no move into `in_progress` for an AI executor except by an
  * accepted run, and no cancelling while a run is alive. A delegated run moves its work item on its
  * own (WorkItemService.followRun): started into `in_progress`, submitted on to `result_review`.
+ * Handing a work item to an AI again continues it: [delegationPlan].
  */
 object Workflow {
 
@@ -62,6 +63,8 @@ object Workflow {
 		val skippedStages: Set<String>,
 		/** Non-null when this copy may not be changed here, e.g. its source of truth is a Git file. */
 		val readOnlyReason: String? = null,
+		/** How the newest delegated run of this work item ended; null when no AI ran it yet. */
+		val lastRunEnd: String? = null,
 	)
 
 	/**
@@ -93,28 +96,53 @@ object Workflow {
 				"${label(facts.stage)}에서 ${label(target)}(으)로는 넘어갈 수 없다"
 			target == "in_progress" && facts.stage == "ready" && facts.executorKind !in setOf(null, "human") ->
 				"AI가 실행 담당이면 실행 시도가 수락될 때 수행으로 넘어간다"
-			target == "cancelled" && facts.hasLiveRun -> "살아 있는 실행 시도를 먼저 멈춘다"
+			target == "cancelled" && facts.hasLiveRun -> "살아 있는 실행 시도를 먼저 멈춘다. 실행 기록의 「실행 취소」로 멈춘 뒤 취소한다"
 			else -> null
 		}
 		return Move(target, path, reason == null, reason, needsNote)
 	}
 
-	/**
-	 * Why this work item cannot be handed to an AI now, or null when it can (contract "실행 권리
-	 * 청구" 1). Stage 1 hands over only the first run of a `ready` work item. Continuing an
-	 * `in_progress` one (an answer arrived, a result was sent back, a cut run resumes) comes with
-	 * resuming. A Git copy is refused: a run moves its stage, and only an import changes that copy.
-	 */
-	fun delegationRefusal(facts: Facts): String? = when {
-		facts.readOnlyReason != null ->
-			"${facts.readOnlyReason}. AI가 실행하면 단계가 바뀌므로 이 복사본은 맡길 수 없다. 「새 작업」으로 만들어 맡긴다"
-		facts.hasLiveRun -> "살아 있는 실행 시도가 있다. 끝나거나 거둔 뒤에 다시 맡긴다"
-		facts.stage == "ready" -> null
-		facts.stage in CLOSED -> "${label(facts.stage)}된 작업은 맡길 수 없다"
-		facts.stage in setOf("in_progress", "result_review") ->
-			"${label(facts.stage)} 단계다. 이어서 맡기기(반려·끊김 뒤 다시 실행)는 아직 없다. 「다시 계획하기」로 수행 준비까지 돌린 뒤 맡긴다"
-		else -> "${label(facts.stage)} 단계다. 수행 준비로 옮긴 뒤에 맡긴다"
+	/** How a work item is handed to an AI (contract v1 "실행 권리 청구" 1). */
+	enum class DelegationMode {
+		/** A `ready` work item: its first run, or a new first run after one that never started. */
+		FIRST,
+		/** An `in_progress` work item whose last AI run ended: the next run continues it. */
+		RESUME,
+		/** A result in `result_review` goes back with a reason, and the next run continues the work. */
+		REJECT_AND_RESUME,
 	}
+
+	/** The mode, or why the work item cannot be handed to an AI now (exactly one is null). */
+	data class DelegationPlan(val mode: DelegationMode?, val refusal: String?) {
+		/** Sending a result back needs its reason (contract "단계": `result_review` → `in_progress`). */
+		val needsNote: Boolean get() = mode == DelegationMode.REJECT_AND_RESUME
+	}
+
+	/**
+	 * Whether and how this work item can be handed to an AI now (contract v1 "실행 권리 청구" 1).
+	 * A `ready` work item gets its first run. An `in_progress` one continues when an AI already ran
+	 * it: after a cut run, a cancelled run or a result sent back. A result still in `result_review`
+	 * is sent back with a reason by the same request. A work item a person carries out is not taken
+	 * over here, and a Git copy is refused: a run moves its stage, and only an import changes it.
+	 */
+	fun delegationPlan(facts: Facts): DelegationPlan {
+		fun refuse(reason: String) = DelegationPlan(null, reason)
+		return when {
+			facts.readOnlyReason != null ->
+				refuse("${facts.readOnlyReason}. AI가 실행하면 단계가 바뀌므로 이 복사본은 맡길 수 없다. 「새 작업」으로 만들어 맡긴다")
+			facts.hasLiveRun -> refuse("살아 있는 실행 시도가 있다. 끝나거나 취소한 뒤에 다시 맡긴다")
+			facts.stage == "ready" -> DelegationPlan(DelegationMode.FIRST, null)
+			facts.stage in CLOSED -> refuse("${label(facts.stage)}된 작업은 맡길 수 없다")
+			facts.stage == "in_progress" && facts.lastRunEnd != null -> DelegationPlan(DelegationMode.RESUME, null)
+			facts.stage == "result_review" && facts.lastRunEnd != null -> DelegationPlan(DelegationMode.REJECT_AND_RESUME, null)
+			facts.stage in setOf("in_progress", "result_review") ->
+				refuse("${label(facts.stage)} 단계를 사람이 맡고 있다. AI가 이어 갈 실행이 없으니 「다시 계획하기」로 수행 준비까지 돌린 뒤 맡긴다")
+			else -> refuse("${label(facts.stage)} 단계다. 수행 준비로 옮긴 뒤에 맡긴다")
+		}
+	}
+
+	/** Why this work item cannot be handed to an AI now, or null when it can. */
+	fun delegationRefusal(facts: Facts): String? = delegationPlan(facts).refusal
 
 	private fun path(target: String, skipped: Set<String>): List<String> {
 		val path = mutableListOf(target)

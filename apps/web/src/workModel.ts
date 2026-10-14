@@ -104,10 +104,18 @@ export function historyLine(h: HistoryEntry): string {
     }
     case 'work_item.delegated': {
       const tools = (d.allowed_tools as string[] | undefined)?.join(', ') ?? '';
-      return `AI에게 맡김 (도구 ${tools}${d.base_branch ? `, 기준 ${String(d.base_branch)}` : ''})`;
+      const what = d.resumed_from_run_id ? 'AI에게 이어서 맡김' : 'AI에게 맡김';
+      const note = d.note ? ` — ${String(d.note)}` : '';
+      return `${what} (도구 ${tools}${d.base_branch ? `, 기준 ${String(d.base_branch)}` : ''})${note}`;
     }
     case 'work_item.delegation_withdrawn':
       return '맡긴 일을 거둠';
+    case 'work_item.run_cancel_requested':
+      return '실행 취소를 요청함';
+    case 'run.input_sent':
+      return `실행 중인 AI에게 지시함 — ${String(d.text ?? '')}`;
+    case 'run.lost':
+      return '연결 프로그램의 신호가 끊겨 서버가 실행을 「연결 끊김」으로 끝냄';
     case 'work_item.updated':
       return `고침: ${Object.keys(d).join(', ')}`;
     case 'work_item.wait_added':

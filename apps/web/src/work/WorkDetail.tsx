@@ -18,6 +18,8 @@ export type DetailActions = {
   delegate: (choice: HandoffChoice) => Promise<void>;
   /** Takes back a delegation whose run no connector has claimed yet. */
   withdraw: (runId: string) => Promise<void>;
+  /** Stops a claimed or running run (FN-0410); the server says when it may not. */
+  cancel?: (runId: string) => Promise<void>;
 };
 
 type Props = {
@@ -102,7 +104,7 @@ export function WorkDetail({ item, detail, projects, skipped, actions, error, ti
             )}
             <Fields detail={d} editable={editable} onRemoveWait={actions.removeWait} />
             {d.moves.length > 0 && <Moves moves={d.moves} from={it.stage} onMove={actions.move} />}
-            <Handoff detail={d} onDelegate={actions.delegate} onWithdraw={actions.withdraw} />
+            <Handoff detail={d} onDelegate={actions.delegate} onWithdraw={actions.withdraw} onCancel={actions.cancel} />
             {editable && !isClosed(it) && <WaitControls reasons={it.wait_reasons} onAdd={actions.addWait} />}
             {editable && <EditFields key={`${it.id}:${it.version}`} detail={d} projects={projects} onSave={actions.update} />}
           </div>

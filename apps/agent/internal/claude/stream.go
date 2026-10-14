@@ -29,14 +29,24 @@ const (
 
 // Options are the per-run inputs to the Claude Code command line.
 type Options struct {
-	SessionID    string // new UUIDv4 per run; also the kill marker
+	SessionID    string // new UUIDv4 per run, or the session a resumed run continues; also the kill marker
 	AllowedTools string // comma-separated, passed to --allowedTools
 	Prompt       string
-	// Restricted adds --restricted (Claude Code 2.1.296): the user's, project's and local settings
-	// files are ignored, so the person's own permission mode and allow rules do not widen what
-	// --allowedTools grants; command-running tools (Bash, PowerShell) are removed; file tools stay
-	// in the working folder. Delegated runs use it; the compat test does not.
+	// Restricted adds --restricted and --strict-mcp-config (Claude Code 2.1.296): the user's,
+	// project's and local settings files are ignored, so the person's own permission mode and
+	// allow rules do not widen what --allowedTools grants; command-running tools (Bash,
+	// PowerShell) are removed; file tools stay in the working folder; and no MCP server of the
+	// person's own setup is started. Both narrow what the executor can do.
 	Restricted bool
+	// StreamInput takes the prompt and later messages on stdin as stream-json user messages
+	// (--input-format stream-json), so a person can send an instruction while the run goes on
+	// (contract "어댑터가 알려야 하는 능력" 실행 중 입력). --replay-user-messages echoes each message
+	// back once Claude Code took it into the conversation: that is the delivery confirmation.
+	// The prompt is then not an argument; write UserMessage(prompt) first.
+	StreamInput bool
+	// Resume continues the executor session SessionID with --resume instead of starting it
+	// (contract "실행마다 별도 작업 트리" 6). The session id still sits in a flag: it stays the marker.
+	Resume bool
 }
 
 // Args builds the argument list (without the program name). The session id is the
@@ -44,18 +54,31 @@ type Options struct {
 // (contract v1 "프로세스 관리" 2). "--" ends option parsing so the prompt is never
 // read as another --allowedTools value or as a flag.
 func Args(o Options) []string {
+	session := "--session-id"
+	if o.Resume {
+		session = "--resume"
+	}
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
 		"--verbose",
-		"--session-id", o.SessionID,
+		session, o.SessionID,
 		"--permission-prompts", "none",
 		"--allowedTools", o.AllowedTools,
 	}
 	if o.Restricted {
-		args = append(args, "--restricted")
+		args = append(args, "--restricted", "--strict-mcp-config")
+	}
+	if o.StreamInput {
+		return append(args, "--input-format", "stream-json", "--replay-user-messages")
 	}
 	return append(args, "--", o.Prompt)
+}
+
+// UserMessage is one stream-json input line carrying text as a user message (StreamInput).
+func UserMessage(text string) []byte {
+	line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}})
+	return append(line, '\n')
 }
 
 // Activity is one contract event before it gets a seq.
@@ -71,6 +94,11 @@ type Mapper struct {
 	failed     bool
 	sessionID  string
 	dropped    map[string]int
+	// replays are the user messages Claude Code echoed back after taking them (StreamInput).
+	replays []string
+	// numTurns is the last result's turn count; assistantSeen whether any assistant line arrived.
+	numTurns      float64
+	assistantSeen bool
 }
 
 // NewMapper returns an empty mapper.
@@ -86,6 +114,20 @@ func (m *Mapper) Succeeded() bool { return m.resultSeen && !m.failed }
 
 // SessionID is the session id Claude reported, if any line carried one.
 func (m *Mapper) SessionID() string { return m.sessionID }
+
+// TakeReplays returns the user messages echoed back since the last call, oldest first.
+func (m *Mapper) TakeReplays() []string {
+	out := m.replays
+	m.replays = nil
+	return out
+}
+
+// ResumeRefused reports whether the run ended with an error result before any turn and without
+// any assistant output: what Claude Code 2.1.296 prints when --resume names a session it does not
+// have ("No conversation found with session ID").
+func (m *Mapper) ResumeRefused() bool {
+	return m.resultSeen && m.failed && m.numTurns == 0 && !m.assistantSeen
+}
 
 // Dropped counts lines and blocks that produced no event, by reason.
 func (m *Mapper) Dropped() map[string]int {
@@ -103,6 +145,7 @@ type streamLine struct {
 	ParentToolUseID *string         `json:"parent_tool_use_id"`
 	Message         *streamMessage  `json:"message"`
 	IsError         bool            `json:"is_error"`
+	IsReplay        bool            `json:"isReplay"`
 	Result          string          `json:"result"`
 	Errors          json.RawMessage `json:"errors"`
 	Usage           map[string]any  `json:"usage"`
@@ -148,7 +191,15 @@ func (m *Mapper) Map(line []byte) []Activity {
 		m.sessionID = sl.SessionID
 	}
 	switch sl.Type {
-	case "assistant", "user":
+	case "user":
+		if sl.IsReplay {
+			m.replays = append(m.replays, replayText(sl.Message))
+			m.dropped["user:replay"]++
+			return nil
+		}
+		return m.mapMessage(sl)
+	case "assistant":
+		m.assistantSeen = true
 		return m.mapMessage(sl)
 	case "rate_limit_event":
 		return []Activity{{Kind: KindUsage, Payload: map[string]any{
@@ -214,6 +265,10 @@ func (m *Mapper) mapBlock(lineType string, b contentBlock) (Activity, bool) {
 func (m *Mapper) mapResult(sl streamLine) []Activity {
 	m.resultSeen = true
 	m.failed = sl.IsError || strings.HasPrefix(sl.Subtype, "error")
+	m.numTurns = 0
+	if sl.NumTurns != nil {
+		m.numTurns = *sl.NumTurns
+	}
 	usage := map[string]any{"source": "result", "usage": scalars(sl.Usage)}
 	for key, v := range map[string]*float64{
 		"total_cost_usd":  sl.TotalCostUSD,
@@ -244,6 +299,28 @@ func (m *Mapper) mapResult(sl streamLine) []Activity {
 		out = append(out, Activity{Kind: KindError, Payload: p})
 	}
 	return out
+}
+
+// replayText reads an echoed user message: a string, or a list whose text blocks are joined.
+func replayText(msg *streamMessage) string {
+	if msg == nil {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(msg.Content, &s) == nil {
+		return s
+	}
+	var blocks []contentBlock
+	if json.Unmarshal(msg.Content, &blocks) != nil {
+		return ""
+	}
+	parts := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		if b.Type == "text" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // textPayload holds one text field, truncated to MaxText characters.

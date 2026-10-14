@@ -20,6 +20,7 @@ var (
 	procTerminateJobObject       = kernel32.NewProc("TerminateJobObject")
 	procNtResumeProcess          = ntdll.NewProc("NtResumeProcess")
 	procNtQueryInformation       = ntdll.NewProc("NtQueryInformationProcess")
+	procQueryInformationJob      = kernel32.NewProc("QueryInformationJobObject")
 )
 
 const (
@@ -121,6 +122,33 @@ func (r *Run) Kill(marker string) error {
 		return fmt.Errorf("terminate the job of pid %d: %w", r.pid, callErr)
 	}
 	return nil
+}
+
+// jobBasicAccounting is JOBOBJECT_BASIC_ACCOUNTING_INFORMATION (JobObjectBasicAccountingInformation = 1).
+type jobBasicAccounting struct {
+	TotalUserTime, TotalKernelTime, ThisPeriodUserTime, ThisPeriodKernelTime int64
+	TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminated    uint32
+}
+
+// Remaining reports how many processes are still in the executor's job: the executor and the
+// processes it started the usual way. It only reads; it stops nothing. 0 after the executor exited
+// means its children ended too (contract v1 "실행마다 별도 작업 트리" 6). A process started through
+// WMI or a similar service is not in the job and is not counted.
+func (r *Run) Remaining() (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return 0, errClosed
+	}
+	if err := procQueryInformationJob.Find(); err != nil {
+		return 0, err
+	}
+	var info jobBasicAccounting
+	ok, _, callErr := procQueryInformationJob.Call(r.job, 1, uintptr(unsafe.Pointer(&info)), unsafe.Sizeof(info), 0)
+	if ok == 0 {
+		return 0, fmt.Errorf("query the job of pid %d: %w", r.pid, callErr)
+	}
+	return int(info.ActiveProcesses), nil
 }
 
 // Close releases the pin. Processes still in the job keep running.

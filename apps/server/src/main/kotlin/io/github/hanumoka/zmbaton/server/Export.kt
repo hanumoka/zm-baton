@@ -78,6 +78,8 @@ class ExportService(
 			// Delegation scopes and run workspaces hold repository keys, branches and tool names, never a path.
 			Triple("delegations", "delegations", "created_at, id"),
 			Triple("runs", "runs", "created_at, id"),
+			// Instructions a person sent to a running executor: the person's own words, no secret by contract.
+			Triple("run_inputs", "run_inputs", "created_at, id"),
 			Triple("run_events", "run_events", "received_at, event_id"),
 			Triple("audit_log", "audit_log", "at, id"),
 		)

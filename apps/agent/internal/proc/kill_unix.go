@@ -72,6 +72,15 @@ func (r *Run) Kill(marker string) error {
 	return nil
 }
 
+// ErrUnknown means these systems cannot tell whether the executor's child processes ended.
+var ErrUnknown = errors.New("child processes are not tracked on this system")
+
+// Remaining cannot count the executor's child processes here: they are not collected (see Run).
+// A caller must treat the answer as unknown, never as "they ended".
+func (r *Run) Remaining() (int, error) {
+	return 0, ErrUnknown
+}
+
 // Close releases the pin.
 func (r *Run) Close() {
 	r.mu.Lock()

@@ -1,6 +1,7 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
 import org.springframework.web.bind.annotation.GetMapping
@@ -43,6 +44,21 @@ data class RunView(
 	/** The newest `git_changes` report: `files`, `base_overlap`, and at the end `base_branch_overlap`. */
 	@JsonProperty("git_changes") val gitChanges: Map<String, Any?>? = null,
 	val instruction: String? = null,
+	// Added with run control (stopping, resuming and steering a run).
+	@JsonProperty("lease_expires_at") val leaseExpiresAt: OffsetDateTime? = null,
+	/** A live run whose lease lapsed: its connector has not renewed it. It ends `lost` at [lostAt]. */
+	@JsonProperty("lease_lapsed") val leaseLapsed: Boolean = false,
+	@JsonProperty("lost_at") val lostAt: OffsetDateTime? = null,
+	@JsonProperty("continue_reason") val continueReason: String? = null,
+	@JsonProperty("resumed_from_run_id") val resumedFromRunId: String? = null,
+	/** What the connector checked before starting the executor, from the end report: `ok` and `checks`. */
+	val readiness: Map<String, Any?>? = null,
+	/** What the adapter said it supports when the executor started, e.g. `live_input`. */
+	val capabilities: Map<String, Any?>? = null,
+	/** Instructions a person sent to the running executor, oldest first. */
+	val inputs: List<RunInputView> = emptyList(),
+	/** What a person may do with the run now; null once it ended. */
+	val actions: RunActions? = null,
 )
 
 data class RunDelegationView(
@@ -68,13 +84,24 @@ data class EventView(
 )
 
 @Service
-class ReadService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
+class ReadService(
+	private val jdbc: JdbcClient,
+	private val json: ObjectMapper,
+	@Value("\${zm-baton.run-lost-grace-seconds:300}") private val lostGraceSeconds: Long,
+) {
 
 	private val payloadType = object : TypeReference<Map<String, Any?>>() {}
 
 	/** The newest [limit] runs of a work item, oldest first. */
 	fun runs(workItemId: String, limit: Int): List<RunView> {
 		exists("work_items", workItemId)
+		val inputs = jdbc.sql(
+			"""
+			select i.id, i.run_id, i.body, i.state, i.created_at, i.sent_at, i.delivered_at
+			  from run_inputs i join runs r on r.id = i.run_id where r.work_item_id = :wid order by i.created_at, i.id
+			""".trimIndent(),
+		).param("wid", workItemId).query { rs, _ -> rs.getString("run_id") to RunControlService.inputView(rs) }.list()
+			.groupBy({ it.first }, { it.second })
 		return jdbc.sql(
 			"""
 			select * from (
@@ -83,6 +110,12 @@ class ReadService(private val jdbc: JdbcClient, private val json: ObjectMapper) 
 			         r.workspace::text as workspace, r.instruction,
 			         (select e.payload::text from run_events e where e.run_id = r.id and e.kind = 'git_changes'
 			           order by e.seq desc limit 1) as git_changes,
+			         r.lease_expires_at, (r.state in ('claimed', 'running', 'stopping') and r.lease_expires_at < now()) as lease_lapsed,
+			         r.lease_expires_at + make_interval(secs => :grace) as lost_at, r.continue_reason, r.resumed_from_run_id,
+			         (select (e.payload -> 'readiness')::text from run_events e
+			           where e.run_id = r.id and e.kind = 'lifecycle' and e.payload ->> 'phase' = 'ended' order by e.seq desc limit 1) as readiness,
+			         (select (e.payload -> 'capabilities')::text from run_events e
+			           where e.run_id = r.id and e.kind = 'lifecycle' and e.payload ->> 'phase' = 'started' order by e.seq desc limit 1) as capabilities,
 			         d.id as dlg_id, d.device_id as dlg_device, dv.name as dlg_device_name, d.scope::text as dlg_scope,
 			         dr.name as dlg_repo_name, d.expires_at as dlg_expires, d.revoked_at as dlg_revoked
 			    from runs r
@@ -92,7 +125,7 @@ class ReadService(private val jdbc: JdbcClient, private val json: ObjectMapper) 
 			   where r.work_item_id = :wid order by r.created_at desc, r.id desc limit :limit
 			) newest order by created_at, id
 			""".trimIndent(),
-		).param("wid", workItemId).param("limit", limit).query { rs, _ ->
+		).param("wid", workItemId).param("limit", limit).param("grace", lostGraceSeconds).query { rs, _ ->
 			val delegation = rs.getString("dlg_id")?.let { id ->
 				val scope = json.readValue(rs.getString("dlg_scope"), payloadType)
 				RunDelegationView(
@@ -102,8 +135,11 @@ class ReadService(private val jdbc: JdbcClient, private val json: ObjectMapper) 
 					rs.getObject("dlg_expires", OffsetDateTime::class.java), rs.getObject("dlg_revoked", OffsetDateTime::class.java),
 				)
 			}
+			val state = rs.getString("state")
+			val capabilities = rs.getString("capabilities")?.let { json.readValue(it, payloadType) }
+			val live = state in RunService.LIVE_STATES
 			RunView(
-				rs.getString("id"), rs.getString("work_item_id"), rs.getString("state"), rs.getString("end_reason"),
+				rs.getString("id"), rs.getString("work_item_id"), state, rs.getString("end_reason"),
 				rs.getString("executor"), rs.getObject("generation") as Long?, rs.getString("device_id"),
 				rs.getBoolean("late_reports"), rs.getObject("created_at", OffsetDateTime::class.java),
 				rs.getObject("last_event_at", OffsetDateTime::class.java),
@@ -111,6 +147,12 @@ class ReadService(private val jdbc: JdbcClient, private val json: ObjectMapper) 
 				rs.getObject("ended_at", OffsetDateTime::class.java), rs.getObject("last_activity_at", OffsetDateTime::class.java),
 				delegation, rs.getString("workspace")?.let { json.readValue(it, payloadType) },
 				rs.getString("git_changes")?.let { json.readValue(it, payloadType) }, rs.getString("instruction"),
+				rs.getObject("lease_expires_at", OffsetDateTime::class.java), rs.getBoolean("lease_lapsed"),
+				if (live) rs.getObject("lost_at", OffsetDateTime::class.java) else null,
+				rs.getString("continue_reason"), rs.getString("resumed_from_run_id"),
+				rs.getString("readiness")?.let { json.readValue(it, payloadType) }, capabilities,
+				inputs[rs.getString("id")].orEmpty(),
+				RunActionRules.of(state, delegation != null, capabilities?.get("live_input") == true),
 			)
 		}.list()
 	}

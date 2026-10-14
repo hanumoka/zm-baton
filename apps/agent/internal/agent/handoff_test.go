@@ -44,7 +44,8 @@ func handoffRepo(t *testing.T) Repo {
 	}
 	gitT(t, root, "add", "README.md")
 	gitT(t, root, "commit", "--quiet", "-m", "first")
-	return Repo{Key: "git:demo", Root: root, Worktrees: filepath.Join(base, "demo-zm-baton-runs")}
+	key := "git:" + gitT(t, root, "rev-list", "--max-parents=0", "HEAD")
+	return Repo{Key: key, Root: root, Worktrees: filepath.Join(base, "demo-zm-baton-runs")}
 }
 
 func newTestHandoff(t *testing.T, c *api.Client, mode string, repos ...Repo) *Handoff {
@@ -57,7 +58,8 @@ func newTestHandoff(t *testing.T, c *api.Client, mode string, repos ...Repo) *Ha
 	// No temp folders to stay out of: the test repositories live under the test's temp folder.
 	h, err := NewHandoff(Config{
 		Client: c, DeviceID: "dev_test", ClaudePath: os.Args[0], PollInterval: 20 * time.Millisecond,
-		FlushInterval: 20 * time.Millisecond, ChangesInterval: 20 * time.Millisecond,
+		FlushInterval: 20 * time.Millisecond, ChangesInterval: 20 * time.Millisecond, RenewInterval: 20 * time.Millisecond,
+		StateDir: filepath.Join(t.TempDir(), "runs"),
 	}, func() (map[string]Repo, error) { return byKey, nil }, nil)
 	if err != nil {
 		t.Fatal(err)
