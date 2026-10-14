@@ -73,6 +73,7 @@ class RunService(
 			throw ConflictException("work item $workItemId already has a live run")
 		}
 		if (inserted == 0) throw NotFoundException("no ready work item $workItemId")
+		sessions.audit("person", SessionService.OWNER, "run.requested", "run", id, mapOf("work_item_id" to workItemId, "executor" to executor))
 		return RunCreated(id, workItemId, "requested")
 	}
 
@@ -128,6 +129,9 @@ class RunService(
 		).param("wid", workItemId).query(Long::class.javaObjectType).single()
 		jdbc.sql("update runs set generation = :gen where id = :runId")
 			.param("gen", generation).param("runId", runId).update()
+		// The device's local connector claimed it: no person or session, so the actor is the device.
+		sessions.audit("system", deviceId, "run.claimed", "run", runId,
+			mapOf("work_item_id" to workItemId, "delegation_id" to delegationId, "generation" to generation))
 		jdbc.sql("update devices set last_seen_at = now() where id = :id").param("id", deviceId).update()
 		val delegation = delegationId?.let { id ->
 			val scope = jdbc.sql("select scope::text from delegations where id = :id").param("id", id)
@@ -222,6 +226,8 @@ class RunService(
 			.param("id", runId).update()
 		addWait(workItemId, "outcome_unknown")
 		finishInputs(runId)
+		sessions.audit("system", runId, "run.ended", "run", runId,
+			mapOf("work_item_id" to workItemId, "end_reason" to "lost", "outcome_unknown" to true))
 		sessions.audit("system", runId, "run.lost", "wrk", workItemId,
 			mapOf("run_id" to runId, "reason" to "lease lapsed for more than $lostGraceSeconds seconds"))
 		return true
@@ -423,6 +429,8 @@ class RunService(
 					""".trimIndent(),
 				).param("reason", reason).param("workspace", workspace).param("runId", runId).update()
 				if (ended != 1) return
+				sessions.audit("system", runId, "run.ended", "run", runId,
+					mapOf("work_item_id" to target.workItemId, "end_reason" to reason, "outcome_unknown" to outcomeUnknown(reason, payload)))
 				(payload["inputs"] as? List<*>).orEmpty().forEach { r ->
 					val m = r as Map<*, *> // checked by valid
 					applyInputReport(runId, m["id"] as String, m["state"] as String)

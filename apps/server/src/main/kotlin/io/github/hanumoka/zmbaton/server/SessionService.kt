@@ -29,6 +29,8 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		const val CARD_WORK_ITEMS = 5
 		const val CARD_DECISIONS = 5
 		const val MAX_BATCH = 100
+		/** The actor id of audit rows the server writes on its own (actor_kind `system`), e.g. an expired token. */
+		const val SYSTEM_ACTOR = "server"
 		/** The first key of an advisory lock; each kind of lock has its own number space. */
 		private const val LOCK_REGISTER = 1
 		private const val LOCK_FILE = 2
@@ -240,7 +242,10 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		)
 		for ((name, value) in params) statement = statement.param(name, value)
 		val ended = statement.query(String::class.java).list()
-		for (id in ended) closeWaits(id!!)
+		for (id in ended) {
+			closeWaits(id!!)
+			audit("system", SYSTEM_ACTOR, "session.expired", "ses", id, emptyMap())
+		}
 		return ended.size
 	}
 
@@ -249,15 +254,25 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			// Only a newer summary replaces the current one. Each summary carries its own sharing
 			// setting, so no event depends on another one having arrived first; the CLI remembers a
 			// session's choice and states it every time.
-			"current_work" -> jdbc.sql(
-				"""
-				update agent_sessions
-				   set current_work = :summary, current_work_refs = cast(:refs as jsonb), current_work_at = now(),
-				       share_current_work = :share, current_work_seq = :seq
-				 where id = :id and current_work_seq < :seq
-				""".trimIndent(),
-			).param("summary", payload["summary"]).param("refs", json.writeValueAsString(payload["refs"] ?: emptyList<String>()))
-				.param("share", payload["share"] as Boolean).param("seq", seq).param("id", session.id).update()
+			"current_work" -> {
+				val share = payload["share"] as Boolean
+				// The row is locked (authenticate), so this is the setting the update replaces.
+				val sharedBefore = jdbc.sql("select share_current_work from agent_sessions where id = :id")
+					.param("id", session.id).query(Boolean::class.javaObjectType).single()
+				val applied = jdbc.sql(
+					"""
+					update agent_sessions
+					   set current_work = :summary, current_work_refs = cast(:refs as jsonb), current_work_at = now(),
+					       share_current_work = :share, current_work_seq = :seq
+					 where id = :id and current_work_seq < :seq
+					""".trimIndent(),
+				).param("summary", payload["summary"]).param("refs", json.writeValueAsString(payload["refs"] ?: emptyList<String>()))
+					.param("share", share).param("seq", seq).param("id", session.id).update()
+				// Summaries themselves stay in session_events; turning sharing on or off is the decision kept here.
+				if (applied == 1 && sharedBefore != share) {
+					audit("session", session.id, "session.sharing_changed", "ses", session.id, mapOf("share" to share))
+				}
+			}
 
 			// A report older than the newest resume is already over (contract "세션이 보내는 사건" 6).
 			"waiting" -> if (seq > session.maxResumedSeq) refreshWait(session, payload["wait_kind"] as String)
@@ -277,6 +292,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			"ended" -> {
 				jdbc.sql("update agent_sessions set ended_at = now() where id = :id").param("id", session.id).update()
 				closeWaits(session.id)
+				audit("session", session.id, "session.ended", "ses", session.id, emptyMap())
 			}
 
 			"deregistered" -> {
@@ -392,11 +408,12 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			val summary = "두 세션이 같은 파일을 고침: $path · " +
 				"${short(session.id)}(${session.executor}${session.branch?.let { ", $it" } ?: ""}) · " +
 				"${short(other.id)}(${other.executor}${other.branch?.let { ", $it" } ?: ""})"
-			raiseConflict("work_conflict|$repoKey|$path|${pair[0]}|${pair[1]}", evidence, summary.take(300))
+			raiseConflict("work_conflict|$repoKey|$path|${pair[0]}|${pair[1]}", evidence, summary.take(300), session.id)
 		}
 	}
 
-	private fun raiseConflict(dedupeKey: String, evidence: Map<String, Any?>, summary: String) {
+	/** [sessionId] is the session whose report revealed the conflict: the actor of the audit row. */
+	private fun raiseConflict(dedupeKey: String, evidence: Map<String, Any?>, summary: String, sessionId: String) {
 		val evidenceJson = json.writeValueAsString(evidence)
 		val existing = jdbc.sql("select id, status from notices where dedupe_key = :key for update")
 			.param("key", dedupeKey).query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional()
@@ -409,6 +426,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 				values (:id, 'work_conflict', cast(:evidence as jsonb), :key, array[:owner])
 				""".trimIndent(),
 			).param("id", noticeId).param("evidence", evidenceJson).param("key", dedupeKey).param("owner", OWNER).update()
+			audit("session", sessionId, "notice.raised", "ntc", noticeId, noticeAuditDetails(evidence))
 		} else {
 			noticeId = existing.get().first
 			// The same evidence again is a repeat of the same notice (G05.2). A resolved conflict
@@ -425,6 +443,8 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 				""".trimIndent(),
 			).param("evidence", evidenceJson).param("id", noticeId).update()
 			val status = existing.get().second
+			// A repeat only counts up; a resolved conflict that comes back is a new judgement to make.
+			if (status == "resolved") audit("session", sessionId, "notice.reopened", "ntc", noticeId, noticeAuditDetails(evidence))
 			if (status != "open" && status != "resolved") return
 		}
 		// "진행 중인 내 작업과 겹친 충돌" is raised at once (DEC-0092 5).
@@ -437,6 +457,15 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		).param("id", Ids.inbox()).param("user", OWNER).param("notice", noticeId).param("summary", summary)
 			.param("detail", evidenceJson).update()
 	}
+
+	/** What an audit row keeps of a conflict: the file and the sessions, not the branch names or times. */
+	@Suppress("UNCHECKED_CAST")
+	private fun noticeAuditDetails(evidence: Map<String, Any?>): Map<String, Any?> = mapOf(
+		"kind" to "work_conflict",
+		"repo_key" to evidence["repo_key"],
+		"path" to evidence["path"],
+		"sessions" to (evidence["sessions"] as List<Map<String, Any?>>).map { it["session_id"] },
+	)
 
 	// ---------------------------------------------------------------- status card
 
