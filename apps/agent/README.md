@@ -67,7 +67,7 @@ go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 
 ## 이 시험에서 하지 않는 것
 
-다음은 이 시험이 끝난 뒤 1단계 본작업에서 한다: WebSocket 깨우기, 보내지 못한 사건의 디스크 보관, `request_id`, 질문 경로, 실행기 설정 격리(`CLAUDE_CONFIG_DIR`). 임대 갱신은 둘째 판에서 이 시험에도 들어왔고, 끊긴 실행의 재개는 아래 `zm-baton agent`에 있다. 도구 결과 본문은 4,000자로 자르기만 하고 비밀값을 가리지 않는다.
+다음은 이 시험이 끝난 뒤 1단계 본작업에서 한다: WebSocket 깨우기, 보내지 못한 사건의 디스크 보관, `request_id`, 질문 경로. 계정에 따른 인증 방식 고정과 설정 격리(`CLAUDE_CONFIG_DIR`)는 아래 `zm-baton agent`에만 있고, 이 시험은 그대로다. 임대 갱신은 둘째 판에서 이 시험에도 들어왔고, 끊긴 실행의 재개는 아래 `zm-baton agent`에 있다. 도구 결과 본문은 4,000자로 자르기만 하고 비밀값을 가리지 않는다.
 
 ## `zm-baton repo`·`zm-baton agent` — 맡긴 작업을 실행한다
 
@@ -83,7 +83,9 @@ go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 8. 맡긴 실행은 지시를 표준 입력(`--input-format stream-json --replay-user-messages`)으로 넣는다. 임대 갱신의 답으로 받은 사람의 지시도 같은 입력에 넣고, Claude Code가 되돌려 보내면 받은 것으로 친다. 결과가 오면 입력을 닫는다. 지시마다의 상태는 다음 갱신과 끝 보고의 `inputs`로 보낸다.
 9. 이어서 맡긴 실행(청구 응답의 `resume`)은 같은 기기이고 `runs/<이전 실행 시도 번호>.json`(설정 폴더)이 이전 실행기와 하위 프로세스가 끝났다고 말할 때만 이전 작업 트리와 세션(`--resume`)을 이어 쓴다. 아니면 이전 실행 브랜치 끝에서 새 작업 트리와 새 세션으로, 다른 기기면 기준에서 시작한다. 어느 쪽인지는 작업 트리 보고의 `origin`과 지시 끝에 덧붙인 문장으로 알린다. Claude Code에 그 세션이 없으면 같은 작업 트리에서 새 세션으로 다시 띄운다.
 
-종료 코드는 실행 시험과 같다: 0 정상(`--once`이면 `submitted`이고 서버가 사건을 다 받음), 1 실패, 2 플래그·설정 오류, 130 Ctrl+C. `--run-timeout` 기본값은 30분이다.
+10. 위임마다 AI 계정이 붙는다(청구 응답의 `account`·`limits`, `internal/agent/auth.go`). 계정이 정한 인증 방식이 아닌 자격 환경 변수(`CLAUDE_CODE_USE_BEDROCK`·`CLAUDE_CODE_USE_VERTEX`·`CLAUDE_CODE_USE_FOUNDRY`·`ANTHROPIC_AUTH_TOKEN`·`ANTHROPIC_API_KEY`·`CLAUDE_CODE_OAUTH_TOKEN`·`ANTHROPIC_PROFILE`)를 실행기 환경에서 빼고, 뺀 이름을 준비 검사의 `account` 항목에 적는다. 값은 읽어 남기거나 보내지 않는다. API 키 계정은 이 창의 `ANTHROPIC_API_KEY`가 있어야 하고, 설정 폴더의 `executors/<계정 번호>/claude`를 `CLAUDE_CONFIG_DIR`로 넘긴다. 구독 계정은 사람의 설정 폴더를 그대로 쓴다(그곳에 로그인이 있다). 턴·비용 상한은 `--max-turns`·`--max-budget-usd`로 넘기고, 시간 상한은 연결 프로그램이 잰다. 시작 보고에 `auth_method`, 끝 보고에 실행기 첫 줄의 `apiKeySource`로 확인한 `auth`와 닿은 상한 `limit_hit`을 싣는다. 쓰는 순서는 [docs/stage1/accounts.md](../../docs/stage1/accounts.md)에 있다.
+
+종료 코드는 실행 시험과 같다: 0 정상(`--once`이면 `submitted`이고 서버가 사건을 다 받음), 1 실패, 2 플래그·설정 오류, 130 Ctrl+C. `--run-timeout` 기본값은 0이고, 0이면 계정의 「실행마다 시간」을 쓴다(서버가 보내지 않으면 30분). 값을 주면 그것이 더 짧을 때만 쓴다.
 
 ## `zm-baton` 명령 — 사람이 직접 연 AI 세션을 서버에 잇는다
 

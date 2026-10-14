@@ -43,6 +43,29 @@ type Claim struct {
 	Instruction string      `json:"instruction,omitempty"`
 	// Resume is set when the run continues an earlier one (contract "실행 권리 청구" 1-2).
 	Resume *Resume `json:"resume,omitempty"`
+	// Account is the AI account the run goes on; nil for a run handed over before accounts, or by an
+	// older server. The connector keeps only its sign-in method in the executor's environment.
+	Account *Account `json:"account,omitempty"`
+	// Limits are the run's usage limits; nil or a zero field means no limit.
+	Limits *Limits `json:"limits,omitempty"`
+}
+
+// Account names the AI account a run goes on (contract "실행할 때 넘기는 것" 인증). It is a reference:
+// AuthSource says where this device keeps the sign-in, never a value.
+type Account struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	AuthMethod string `json:"auth_method"` // subscription_login or api_key
+	AuthSource string `json:"auth_source"` // device_login or env:ANTHROPIC_API_KEY
+}
+
+// Limits are a run's usage limits (FN-0409): turns and the price-list cost go to Claude Code's own
+// --max-turns and --max-budget-usd, minutes to the connector's timer. BudgetFrom is "run" or "daily".
+type Limits struct {
+	MaxTurns     int     `json:"max_turns,omitempty"`
+	MaxBudgetUSD float64 `json:"max_budget_usd,omitempty"`
+	MaxMinutes   int     `json:"max_minutes,omitempty"`
+	BudgetFrom   string  `json:"budget_from,omitempty"`
 }
 
 // Resume names the run a continuing run follows. On the device that ran it, the server also sends
@@ -55,6 +78,9 @@ type Resume struct {
 	SessionID      string `json:"session_id,omitempty"`
 	// Workspace holds repo_key, base_commit, branch and base_ref; never a path on the device.
 	Workspace map[string]any `json:"workspace,omitempty"`
+	// SameAccount is false when the earlier run went on another AI account; then the server sends
+	// neither its session nor its worktree. An older server leaves it out: nil.
+	SameAccount *bool `json:"same_account,omitempty"`
 }
 
 // InputReport says what became of one instruction a person sent: sent, delivered or undelivered.
