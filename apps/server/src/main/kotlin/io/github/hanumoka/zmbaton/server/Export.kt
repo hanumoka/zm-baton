@@ -68,6 +68,9 @@ class ExportService(
 			Triple("document_work_items", "document_work_items", "document_id, work_item_id"),
 			Triple("document_decisions", "document_decisions", "document_id, decision_id"),
 			Triple("devices", "devices", "created_at, id"),
+			// AI accounts are references: kind, purpose, affiliation, terms, limits and where the device keeps
+			// the sign-in (`device_login` or `env:ANTHROPIC_API_KEY`). No key or login value is ever stored.
+			Triple("ai_accounts", "ai_accounts", "created_at, id"),
 			// Remotes are stored cleaned (DelegationService.addRepository: SessionService.cleanRemote
 			// drops user info, query and fragment, and local paths), so no credential is exported.
 			Triple("device_repositories", "device_repositories", "device_id, repo_key"),
@@ -81,6 +84,8 @@ class ExportService(
 			// Instructions a person sent to a running executor: the person's own words, no secret by contract.
 			Triple("run_inputs", "run_inputs", "created_at, id"),
 			Triple("run_events", "run_events", "received_at, event_id"),
+			// What executors said runs used and the provider's limit signals: counts, ratios and estimates, no secret.
+			Triple("usage_signals", "usage_signals", "received_at, id"),
 			Triple("audit_log", "audit_log", "at, id"),
 		)
 
