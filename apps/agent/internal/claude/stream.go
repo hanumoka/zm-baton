@@ -32,6 +32,11 @@ type Options struct {
 	SessionID    string // new UUIDv4 per run; also the kill marker
 	AllowedTools string // comma-separated, passed to --allowedTools
 	Prompt       string
+	// Restricted adds --restricted (Claude Code 2.1.296): the user's, project's and local settings
+	// files are ignored, so the person's own permission mode and allow rules do not widen what
+	// --allowedTools grants; command-running tools (Bash, PowerShell) are removed; file tools stay
+	// in the working folder. Delegated runs use it; the compat test does not.
+	Restricted bool
 }
 
 // Args builds the argument list (without the program name). The session id is the
@@ -39,15 +44,18 @@ type Options struct {
 // (contract v1 "프로세스 관리" 2). "--" ends option parsing so the prompt is never
 // read as another --allowedTools value or as a flag.
 func Args(o Options) []string {
-	return []string{
+	args := []string{
 		"-p",
 		"--output-format", "stream-json",
 		"--verbose",
 		"--session-id", o.SessionID,
 		"--permission-prompts", "none",
 		"--allowedTools", o.AllowedTools,
-		"--", o.Prompt,
 	}
+	if o.Restricted {
+		args = append(args, "--restricted")
+	}
+	return append(args, "--", o.Prompt)
 }
 
 // Activity is one contract event before it gets a seq.

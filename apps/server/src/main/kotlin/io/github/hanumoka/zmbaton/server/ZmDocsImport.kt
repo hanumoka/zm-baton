@@ -154,15 +154,18 @@ class ZmDocsImportService(
 					.query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional().orElse(null)
 				when {
 					existing == null -> {
+						val id = Ids.project()
 						jdbc.sql("insert into projects (id, org_id, external_ref, name) values (:id, :org, :ref, :name)")
-							.param("id", Ids.project()).param("org", WorkItemService.ORG).param("ref", ref).param("name", name)
+							.param("id", id).param("org", WorkItemService.ORG).param("ref", ref).param("name", name)
 							.update()
+						audit("project.imported", "prj", id, ref, emptyList())
 						projects.created++
 						changes += ImportChange("project", ref, "created")
 					}
 					existing.second != name -> {
 						jdbc.sql("update projects set name = :name, updated_at = now() where id = :id")
 							.param("name", name).param("id", existing.first).update()
+						audit("project.synced", "prj", existing.first, ref, listOf("name"))
 						projects.updated++
 						changes += ImportChange("project", ref, "updated", listOf("name"))
 					}
@@ -349,6 +352,7 @@ class ZmDocsImportService(
 					values (:id, :org, :ref, :question, :status, :decided_on, :choice, cast(:sections as jsonb), cast(:git as jsonb), :sha)
 					""".trimIndent(),
 				).params(params).update()
+				audit("decision.imported", "dcs", id, ref, emptyList())
 				decisions.created++
 				changes += ImportChange("decision", ref, "created")
 			} else {
@@ -361,8 +365,10 @@ class ZmDocsImportService(
 					""".trimIndent(),
 				).params(params - "org" - "ref").update()
 				jdbc.sql("delete from decision_projects where decision_id = :id").param("id", id).update()
+				val fields = if (existing.second == sha) listOf("projects") else listOf("content")
+				audit("decision.synced", "dcs", id, ref, fields)
 				decisions.updated++
-				changes += ImportChange("decision", ref, "updated", if (existing.second == sha) listOf("projects") else listOf("content"))
+				changes += ImportChange("decision", ref, "updated", fields)
 			}
 			for (p in projectIds) {
 				jdbc.sql("insert into decision_projects (decision_id, project_id) values (:d, :p)").param("d", id).param("p", p).update()
@@ -389,6 +395,13 @@ class ZmDocsImportService(
 				.optional().orElse(null) ?: null.also { warnings += "$from: 대체 관계의 $ref 을(를) 찾지 못했다" }
 
 		// ------------------------------------------------------------ helpers
+
+		/** One audit row per project or decision copy this import creates or changes (a dry run rolls it back). */
+		private fun audit(action: String, targetKind: String, id: String, ref: String, fields: List<String>) =
+			sessions.audit(
+				"person", SessionService.OWNER, action, targetKind, id,
+				mapOf("ref" to ref, "repo_key" to repoKey, "commit" to commit, "fields" to fields),
+			)
 
 		/** Where a copy came from: the repository, the file and, when known, the commit read. */
 		private fun gitRef(path: String): Map<String, String> =

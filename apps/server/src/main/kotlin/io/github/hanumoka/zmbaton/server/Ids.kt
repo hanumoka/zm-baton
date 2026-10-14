@@ -4,7 +4,7 @@ import java.security.SecureRandom
 import java.util.UUID
 
 /**
- * Prefixed, time-ordered identifiers (contract v1 "식별자"): `wrk_<uuidv7>`, `run_<uuidv7>`.
+ * Prefixed, time-ordered identifiers (contract v1 "식별자"): `wrk_<uuidv7>`, `run_<uuidv7>`, `dlg_<uuidv7>`.
  */
 object Ids {
 	private val random = SecureRandom()
@@ -12,6 +12,8 @@ object Ids {
 	fun workItem(): String = "wrk_" + uuidV7()
 
 	fun run(): String = "run_" + uuidV7()
+
+	fun delegation(): String = "dlg_" + uuidV7()
 
 	fun device(): String = "dev_" + uuidV7()
 

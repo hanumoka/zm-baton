@@ -109,7 +109,7 @@ cd $repo
 ## 실패하면
 
 1. **세션이 나타나지 않는다**: `& $zb status`로 서버 응답을 본다. 훅의 실패는 세션에 보이지 않고 `%AppData%\zm-baton\hook.log`에 남는다. 훅을 붙인 뒤 새로 연 세션인지, `claude plugin list`에 `zm-baton@zm-baton-local`이 켜져 있는지 확인한다.
-2. **서버가 데이터베이스에 붙지 못한다**: `docker compose -f "$repo/deploy/compose/compose.yaml" logs server`를 본다. `.env`의 비밀번호를 볼륨을 만든 뒤에 바꿨다면, 시험 자료를 버려도 될 때만 `docker compose -f "$repo/deploy/compose/compose.yaml" --profile app down -v`로 볼륨을 지우고 다시 띄운다.
+2. **서버가 데이터베이스에 붙지 못한다**: `docker compose -f "$repo/deploy/compose/compose.yaml" logs server`를 본다. `.env`의 비밀번호를 볼륨을 만든 뒤에 바꿨다면, 시험 자료를 버려도 될 때만 `docker compose -f "$repo/deploy/compose/compose.yaml" --profile app down -v`로 볼륨을 지우고 다시 띄운다. 지우기 전에 `.env`의 비밀번호를 볼륨을 만들 때의 값으로 잠시 되돌리고 [backup-restore-update.md](backup-restore-update.md)의 「손으로 백업하기」를 먼저 한다. 옛 값을 모르면 백업할 수 없다.
 3. **파일을 고쳤는데 고친 파일에 안 나온다**: 셸 명령(예: `sed`, 스크립트)으로 바꾼 파일은 보고되지 않는다. 파일을 고치는 도구(`Edit`·`Write`·`MultiEdit`·`NotebookEdit`)만 보고된다.
 4. **훅 때문에 세션이 느려졌다고 느낀다**: 훅마다 시간 상한이 있다(시작 4초, 끝 1초, 나머지 3초). 상한을 넘기면 훅 프로세스가 스스로 끝난다. 서버가 꺼져 있으면 훅은 연결 실패 즉시 끝난다. 그래도 문제면 「정리」의 훅 빼기를 한다.
 5. **`claude plugin marketplace add`가 이미 추가되어 있다며 실패한다**: 앞서 한 번 했다는 뜻이다. `claude plugin marketplace list`에 `zm-baton-local`이 보이면 그 줄은 건너뛰고 `claude plugin install`부터 한다.

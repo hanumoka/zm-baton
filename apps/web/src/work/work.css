@@ -1,7 +1,8 @@
 /*
  * The work screen's own parts. The list-and-detail layout, the row, the detail head and its
  * sections are shared with the decisions screen (ui/panes.css); here are the review stage setting,
- * the wait reason on a row, the stage path, the move buttons, the forms and the history.
+ * the wait reason on a row, the stage path, the move buttons, the forms, handing the work item to
+ * an AI with its runs, and the history.
  * Every value is a token.
  */
 
@@ -135,6 +136,50 @@ textarea.field { height: auto; padding: var(--s-1) var(--s-2); line-height: var(
 .wd-hist { display: flex; flex-direction: column; gap: var(--s-2); margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); line-height: var(--lh-row); }
 .wd-hist li { display: flex; flex-direction: column; }
 .wd-hist time { font-size: var(--fs-xs); color: var(--c-ink-2); }
+
+/* Handing the work item to an AI: the form and the run list (Handoff.tsx) */
+.dt-sec > .btn .ico { margin-right: var(--s-1); }
+.hf .wn-lead { max-width: var(--w-text); }
+.hf-tools { display: flex; flex-direction: column; gap: var(--s-1); margin: 0; padding: 0; border: 0; min-width: 0; }
+.hf-tools legend { margin-bottom: var(--s-1); padding: 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.hf-tools .check { display: flex; flex-direction: row; align-items: flex-start; gap: var(--s-2); color: var(--c-ink); }
+/* styles.css stretches every input (`input { flex: 1 }`); a radio keeps its own size. */
+.hf-tools .check input { flex: none; margin-top: var(--s-1); }
+.hf-tools small { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.hf .ctl-why code { font-size: var(--fs-xs); color: var(--c-ink); }
+
+.hr-runs { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.hr-run { display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-3) 0; }
+.hr-run + .hr-run { border-top: var(--rule) solid var(--c-rule-soft); }
+.hr-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-1) var(--s-3); margin: 0; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.hr-head strong { font-size: var(--fs-md); font-weight: var(--fw-semi); color: var(--c-ink); }
+.hr-head time,
+.hr-head code { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.hr-facts { margin: 0; }
+.hr-dim { color: var(--c-ink-2); }
+.hr-wait { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2) var(--s-3); }
+.hr-wait .dt-none { flex: 1 1 var(--w-cell); font-size: var(--fs-sm); line-height: var(--lh-row); }
+.hr-label { margin: 0; font-size: var(--fs-sm); font-weight: var(--fw-semi); line-height: var(--lh-row); color: var(--c-ink-2); }
+.hr-acts,
+.hr-files { display: flex; flex-direction: column; gap: var(--s-1); margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.hr-acts li { display: grid; grid-template-columns: var(--w-ref) minmax(0, 1fr); gap: var(--s-2); }
+.hr-acts li > span:last-child { overflow-wrap: anywhere; }
+.hr-kind { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.hr-files li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-1) var(--s-2); }
+.hr-files code { overflow-wrap: anywhere; }
+.hr-flag { padding: 0 var(--s-1); border-radius: var(--r-xs); background: var(--c-warn-tint); font-size: var(--fs-xs); font-weight: var(--fw-semi); color: var(--c-warn); }
+.hr-branch { margin: 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.hr-branch code { color: var(--c-ink); overflow-wrap: anywhere; }
+.hr-merge,
+.hr-warn { display: flex; align-items: flex-start; gap: var(--s-2); max-width: var(--w-text); margin: 0; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-sm); line-height: var(--lh-row); }
+.hr-merge { background: var(--c-canvas); color: var(--c-ink); }
+.hr-warn { background: var(--c-warn-tint); color: var(--c-ink); }
+.hr-merge .ico,
+.hr-warn .ico { flex: none; margin-top: var(--s-0); }
+.hr-warn .ico { color: var(--c-warn); }
+.hr-inst summary { font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); cursor: pointer; }
+.hr-inst summary:hover { color: var(--c-ink); }
+.hr-inst .dt-text { margin-top: var(--s-2); padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--c-canvas); font-size: var(--fs-sm); }
 
 @media (max-width: 1180px) {
   .wn { padding: var(--s-4) var(--s-6) var(--s-10); }

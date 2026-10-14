@@ -93,6 +93,20 @@ class WorkflowTests {
 	}
 
 	@Test
+	fun `only a ready work item made here without a live run can be handed to an AI`() {
+		assertNull(Workflow.delegationRefusal(facts("ready")))
+		assertNull(Workflow.delegationRefusal(facts("ready", executor = "manager")))
+		for (stage in Workflow.STAGES - "ready") {
+			val reason = Workflow.delegationRefusal(facts(stage))
+			assertTrue(reason != null && Workflow.label(stage) in reason, "$stage: $reason")
+		}
+		assertTrue(Workflow.delegationRefusal(facts("in_progress"))!!.contains("다시 계획하기"))
+		assertTrue(Workflow.delegationRefusal(facts("ready", liveRun = true))!!.contains("살아 있는 실행 시도"))
+		val copy = Workflow.delegationRefusal(facts("ready", readOnly = "정본이 Git 파일(registry/tasks.json)이다"))!!
+		assertTrue(copy.startsWith("정본이 Git 파일(registry/tasks.json)이다.") && "새 작업" in copy, copy)
+	}
+
+	@Test
 	fun `labels cover every stage and wait reason`() {
 		for (stage in Workflow.STAGES) assertTrue(Workflow.label(stage) != stage, stage)
 		for (reason in Workflow.WAIT_REASONS) assertTrue(Workflow.waitLabel(reason) != reason, reason)

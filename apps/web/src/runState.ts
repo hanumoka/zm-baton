@@ -2,13 +2,14 @@ import type { Run, RunEvent } from './api';
 
 /**
  * Report status (contract v1 "보고 상태"). The run's lifecycle state and end reason come
- * from the server, which decided them; this only adds what the events say on top.
+ * from the server, which decided them; this only adds what the events say on top. Only the
+ * executor's activity counts: the connector's own lifecycle and Git change list do not.
  *
- * Two contract rules are not judged in this compat screen, and it says so instead of guessing:
+ * Contract rules this screen does not judge, and says so instead of guessing:
  * - 입력 필요 needs to know whether a question is still open; the question path is not built.
- * - 응답 없음 within the first response window is measured from the claim, and the claim
- *   time is not stored (data model "runs"), so a claimed run without events is shown as
- *   waiting for its first event.
+ * - 응답 없음 within the first response window is measured from the claim. A server from before
+ *   the third stage-1 slice does not send the claim time; then a claimed run without events is
+ *   shown as waiting for its first event.
  */
 export type ReportStatus =
   | 'claim_pending' // not claimed yet, before the contract's table applies
@@ -23,10 +24,16 @@ export type ReportStatus =
 /** From the contract: events at least every 10 minutes. */
 export const SILENCE_MS = 10 * 60_000;
 
-/** The run's last event in seq order, of any kind (contract: the error is the last event). */
-function lastEvent(events: readonly RunEvent[]): RunEvent | undefined {
+/** From the contract: the first activity within 60 seconds of the claim. */
+export const FIRST_RESPONSE_MS = 60_000;
+
+/** Reports the connector makes itself; they are not executor activity (contract "보고 상태"). */
+const NOT_ACTIVITY: ReadonlySet<string> = new Set(['lifecycle', 'git_changes']);
+
+/** The run's last executor activity event in seq order (contract: the error is the last one). */
+function lastActivity(events: readonly RunEvent[]): RunEvent | undefined {
   let last: RunEvent | undefined;
-  for (const e of events) if (!last || e.seq > last.seq) last = e;
+  for (const e of events) if (!NOT_ACTIVITY.has(e.kind) && (!last || e.seq > last.seq)) last = e;
   return last;
 }
 
@@ -44,11 +51,15 @@ export function reportStatus(run: Run, events: readonly RunEvent[], now: number)
         return 'error'; // failed, lost
     }
   }
-  if (lastEvent(events)?.kind === 'error') return 'error';
-  // last_event_at comes from the server, so "no event yet" does not depend on whether this
-  // screen has fetched the events already.
-  if (run.last_event_at === null) return 'first_event_pending';
-  return now - Date.parse(run.last_event_at) > SILENCE_MS ? 'no_response' : 'working';
+  if (lastActivity(events)?.kind === 'error') return 'error';
+  // The times come from the server, so "no event yet" does not depend on whether this screen has
+  // fetched the events already. An older server has no activity time; then any event counts.
+  const activityAt = run.last_activity_at !== undefined ? run.last_activity_at : run.last_event_at;
+  if (activityAt === null) {
+    if (run.claimed_at && now - Date.parse(run.claimed_at) > FIRST_RESPONSE_MS) return 'no_response';
+    return 'first_event_pending';
+  }
+  return now - Date.parse(activityAt) > SILENCE_MS ? 'no_response' : 'working';
 }
 
 /** A contract rule this screen does not judge, and why. */
@@ -66,11 +77,10 @@ export function undecidedRules(run: Run, events: readonly RunEvent[]): Undecided
       reason: '질문에 답이 왔는지 알 수단(질문 경로)이 아직 없다',
       relevant: events.some((e) => e.kind === 'question'),
     },
-    {
-      rule: '첫 응답 기한',
-      reason: '청구 시각이 저장되지 않는다',
-      relevant: run.last_event_at === null,
-    },
+    // Judged once the server sends the claim time.
+    ...(run.claimed_at
+      ? []
+      : [{ rule: '첫 응답 기한', reason: '청구 시각이 저장되지 않는다', relevant: run.last_event_at === null }]),
   ];
 }
 
@@ -103,6 +113,8 @@ export function summary(e: RunEvent): string {
   switch (e.kind) {
     case 'lifecycle':
       return p.phase === 'ended' ? `종료 보고: ${text(p.end_reason)}` : '시작';
+    case 'git_changes':
+      return `바뀐 파일 목록: ${Array.isArray(p.files) ? p.files.length : 0}개`;
     case 'action':
       return `도구 호출: ${text(p.name)}`;
     case 'action_result':
