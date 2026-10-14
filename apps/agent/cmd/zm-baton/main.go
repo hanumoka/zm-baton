@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,7 +26,9 @@ import (
 
 const usage = `zm-baton — connects AI sessions you open yourself to the zm-baton server
 
-  zm-baton login [--server URL] [--name NAME]   register this device (once)
+  zm-baton login [--server URL] [--name NAME] [--force]
+                                               register this device and keep its device token;
+                                               a device without a token gets one for itself
   zm-baton hooks install [--project DIR]      make the Claude Code plugin and show how to turn it on
   zm-baton hooks uninstall [--project DIR]    show how to turn it off
   zm-baton session work [--ref REF]... [--private|--share] "<what, where>"
@@ -91,6 +94,11 @@ func report(stderr io.Writer, err error) int {
 		return 0
 	}
 	fmt.Fprintln(stderr, "zm-baton:", err)
+	var status *session.StatusError
+	if errors.As(err, &status) && status.Status == http.StatusUnauthorized {
+		// The server wants a device token this device lacks, or the device was revoked (docs/stage1/auth.md).
+		fmt.Fprintln(stderr, "zm-baton: 서버가 이 기기를 받지 않았다. zm-baton login으로 기기 토큰을 다시 받는다(폐기한 기기면 --force로 새 기기로 등록한다)")
+	}
 	return 1
 }
 
@@ -147,9 +155,18 @@ func hookLog(dir string) (*slog.Logger, func()) {
 	return slog.New(slog.NewTextHandler(f, nil)), func() { _ = f.Close() }
 }
 
+// login is `zm-baton login`. In order:
+//  1. A device saved with a token is left as it is unless --force (then a new device is registered).
+//  2. A device saved without a token (registered before tokens) gets a token for itself and keeps its
+//     id, repositories and history.
+//  3. Otherwise a new device is registered.
+//
+// On a server in local mode this is one call. On a server in required mode the command shows a page
+// and a code, a signed-in person approves the code on the Web, and the command waits up to 10
+// minutes. The device token goes into config.json in the config folder and is never printed.
 func login(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("login", flag.ContinueOnError)
-	server := fs.String("server", "http://127.0.0.1:18081", "zm-baton server URL")
+	server := fs.String("server", "", "zm-baton server URL (default: the saved one, else http://127.0.0.1:18081)")
 	host, _ := os.Hostname()
 	name := fs.String("name", host, "a name for this device")
 	force := fs.Bool("force", false, "register a new device even when this one is registered")
@@ -160,24 +177,43 @@ func login(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if cfg, err := session.LoadConfig(dir); err == nil && !*force {
-		fmt.Fprintf(stdout, "이미 등록된 기기다: %s (서버 %s). 새로 등록하려면 --force\n", cfg.DeviceID, cfg.Server)
+	var existing *session.Config
+	if cfg, err := session.LoadConfig(dir); err == nil {
+		existing = &cfg
+	}
+	url := *server
+	if url == "" {
+		url = "http://127.0.0.1:18081"
+		if existing != nil {
+			url = existing.Server
+		}
+	}
+	if existing != nil && existing.DeviceToken != "" && !*force {
+		fmt.Fprintf(stdout, "이미 등록된 기기다: %s (서버 %s, 기기 토큰 있음). 새 기기로 등록하려면 --force\n", existing.DeviceID, existing.Server)
 		return nil
 	}
-	client, err := session.NewClient(*server, 10*time.Second)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 11*time.Minute)
 	defer cancel()
-	deviceID, err := client.RegisterDevice(ctx, *name, runtime.GOOS)
+	res, err := session.Login(ctx, session.LoginOptions{
+		Server: strings.TrimRight(url, "/"), Name: *name, OS: runtime.GOOS, Existing: existing, Force: *force, Show: stdout,
+	})
 	if err != nil {
 		return err
 	}
-	if err := session.SaveConfig(dir, session.Config{Server: *server, DeviceID: deviceID}); err != nil {
+	if err := session.SaveConfig(dir, res.Config); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "기기를 등록했다: %s\n설정 폴더: %s\n", deviceID, dir)
+	if res.Rekeyed {
+		fmt.Fprintf(stdout, "이 기기의 기기 토큰을 받았다: %s\n", res.Config.DeviceID)
+	} else {
+		fmt.Fprintf(stdout, "기기를 등록했다: %s\n", res.Config.DeviceID)
+	}
+	if res.Config.DeviceToken == "" {
+		fmt.Fprintln(stdout, "이 서버는 기기 토큰을 주지 않는 이전 판이다.")
+	} else {
+		fmt.Fprintln(stdout, "기기 토큰은 설정 폴더의 config.json에만 있다. 화면에는 보이지 않는다.")
+	}
+	fmt.Fprintf(stdout, "설정 폴더: %s\n", dir)
 	return nil
 }
 
@@ -335,8 +371,12 @@ func status(stdout io.Writer) error {
 		fmt.Fprintf(stdout, "이 기기는 아직 등록하지 않았다(zm-baton login). 설정 폴더: %s\n", dir)
 		return nil
 	}
-	fmt.Fprintf(stdout, "기기: %s\n서버: %s\n설정 폴더: %s\n", cfg.DeviceID, cfg.Server, dir)
-	client, err := session.NewClient(cfg.Server, 3*time.Second)
+	token := "없음(기기 토큰이 생기기 전에 등록한 기기다)"
+	if cfg.DeviceToken != "" {
+		token = "있음"
+	}
+	fmt.Fprintf(stdout, "기기: %s\n서버: %s\n기기 토큰: %s\n설정 폴더: %s\n", cfg.DeviceID, cfg.Server, token, dir)
+	client, err := session.ClientFor(cfg, 3*time.Second)
 	if err != nil {
 		return err
 	}
@@ -344,8 +384,25 @@ func status(stdout io.Writer) error {
 	defer cancel()
 	if err := client.Health(ctx); err != nil {
 		fmt.Fprintf(stdout, "서버 응답: 없음 (%v). 훅은 아무것도 하지 않고 끝난다.\n", err)
+		return nil
+	}
+	fmt.Fprintln(stdout, "서버 응답: 정상")
+	if cfg.DeviceToken != "" {
+		if self, err := client.Self(ctx); err != nil {
+			fmt.Fprintf(stdout, "기기 토큰 확인: 서버가 받지 않았다 (%v). zm-baton login으로 다시 받는다\n", err)
+		} else {
+			fmt.Fprintf(stdout, "기기 토큰 확인: 정상 (%s, 서버 모드 %s)\n", self.Name, self.Mode)
+		}
+		return nil
+	}
+	state, err := client.AuthState(ctx)
+	if err != nil {
+		return err
+	}
+	if state.Mode == "required" {
+		fmt.Fprintln(stdout, "이 서버는 기기 토큰을 요구한다(required). zm-baton login을 실행해 이 기기의 기기 토큰을 받는다")
 	} else {
-		fmt.Fprintln(stdout, "서버 응답: 정상")
+		fmt.Fprintln(stdout, "서버 모드: local. 지금은 기기 토큰 없이도 된다. 서버를 required로 바꾸기 전에 zm-baton login을 실행한다")
 	}
 	return nil
 }

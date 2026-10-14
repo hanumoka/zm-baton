@@ -197,6 +197,9 @@ func ResolveExecutable(name string) (string, error) {
 func (r *Runner) Run(ctx context.Context, once bool) (Result, error) {
 	for {
 		claim, err := r.claimNext(ctx)
+		if errors.Is(err, api.ErrUnauthorized) {
+			return Result{}, err
+		}
 		if err != nil && ctx.Err() == nil {
 			r.log.Warn("poll or claim failed", "err", err)
 		}

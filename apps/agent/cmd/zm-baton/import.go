@@ -51,7 +51,7 @@ func importCmd(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	client, err := session.NewClient(cfg.Server, 2*time.Minute)
+	client, err := session.ClientFor(cfg, 2*time.Minute)
 	if err != nil {
 		return err
 	}

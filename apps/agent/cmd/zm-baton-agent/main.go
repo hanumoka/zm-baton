@@ -47,6 +47,9 @@ func run() int {
 	if err != nil {
 		return fail("bad --server", err)
 	}
+	// A server in required mode takes a device's calls with its device token only. It comes from the
+	// environment, never a flag, so it does not show in the process list (docs/stage1/auth.md).
+	client = client.WithToken(os.Getenv("ZM_BATON_DEVICE_TOKEN"))
 	claudePath, err := agent.ResolveExecutable(*claudeBin)
 	if err != nil {
 		return fail("bad --claude", err)

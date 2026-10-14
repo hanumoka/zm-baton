@@ -65,6 +65,9 @@ func NewHandoff(cfg Config, repos func() (map[string]Repo, error), tempDirs []st
 func (h *Handoff) Run(ctx context.Context, once bool) (Result, error) {
 	for {
 		claim, repo, err := h.claimNext(ctx)
+		if errors.Is(err, api.ErrUnauthorized) {
+			return Result{}, err
+		}
 		if err != nil && ctx.Err() == nil {
 			h.log.Warn("poll or claim failed", "err", err)
 		}

@@ -19,10 +19,13 @@ import (
 	"time"
 )
 
-// Config is what `zm-baton login` keeps on the device.
+// Config is what `zm-baton login` keeps on the device. DeviceToken is a secret of this device's: the
+// file is readable by the owner only and the token goes to Server alone. It is empty for a device
+// registered before tokens, which a server in local mode still takes (docs/stage1/auth.md).
 type Config struct {
-	Server   string `json:"server"`
-	DeviceID string `json:"device_id"`
+	Server      string `json:"server"`
+	DeviceID    string `json:"device_id"`
+	DeviceToken string `json:"device_token,omitempty"`
 }
 
 // Dir is the zm-baton config folder. ZM_BATON_HOME overrides it (tests, separate profiles).

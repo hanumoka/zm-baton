@@ -20,6 +20,10 @@ const ProtocolVersion = 2
 type Client struct {
 	base string
 	http *http.Client
+	// deviceToken is sent as `Authorization: Bearer` on the calls that carry no session token: the
+	// device's own calls (registering a session, its repositories, import, export). Empty for a device
+	// registered before tokens (docs/stage1/auth.md).
+	deviceToken string
 }
 
 // NewClient checks the server URL. Credentials in the URL are refused so they never reach logs,
@@ -96,15 +100,18 @@ func (e *StatusError) Error() string {
 	return fmt.Sprintf("%s: server answered HTTP %d", e.Op, e.Status)
 }
 
-// RegisterDevice is `zm-baton login`.
-func (c *Client) RegisterDevice(ctx context.Context, name, osName string) (string, error) {
-	var out struct {
-		DeviceID string `json:"device_id"`
-	}
-	if err := c.do(ctx, http.MethodPost, "/api/devices", "", map[string]string{"name": name, "os": osName}, http.StatusCreated, &out, "register device"); err != nil {
-		return "", err
-	}
-	return out.DeviceID, nil
+// DeviceLogin is what a server gives a device that logs in: its id and its device token. An older
+// server gives no token.
+type DeviceLogin struct {
+	DeviceID    string `json:"device_id"`
+	DeviceToken string `json:"device_token"`
+}
+
+// RegisterDevice is `zm-baton login` on a server in local mode: a new device and its token.
+func (c *Client) RegisterDevice(ctx context.Context, name, osName string) (DeviceLogin, error) {
+	var out DeviceLogin
+	err := c.do(ctx, http.MethodPost, "/api/devices", "", map[string]string{"name": name, "os": osName}, http.StatusCreated, &out, "register device")
+	return out, err
 }
 
 // Register registers (or re-registers) an executor session.
@@ -132,9 +139,11 @@ func (c *Client) StatusCard(ctx context.Context, sessionID, token string) (strin
 	return out.StatusCard, err
 }
 
-// Health checks that the server answers.
+// Health checks that the server answers. It sends no token: the health check needs none.
 func (c *Client) Health(ctx context.Context) error {
-	return c.do(ctx, http.MethodGet, "/actuator/health", "", nil, http.StatusOK, nil, "health")
+	plain := *c
+	plain.deviceToken = ""
+	return plain.do(ctx, http.MethodGet, "/actuator/health", "", nil, http.StatusOK, nil, "health")
 }
 
 func (c *Client) do(ctx context.Context, method, path, token string, in any, want int, out any, op string) error {
@@ -153,6 +162,9 @@ func (c *Client) do(ctx context.Context, method, path, token string, in any, wan
 	req.Header.Set("Accept", "application/json")
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if token == "" {
+		token = c.deviceToken
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
