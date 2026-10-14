@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Accounts } from './accounts/Accounts';
+import { Audit } from './audit/Audit';
 import { App as RunTest } from './App';
 import { Decisions } from './decisions/Decisions';
 import { Documents } from './documents/Documents';
@@ -76,6 +77,7 @@ export function Shell() {
       if (next !== 'documents') cleared('documents');
       if (next !== 'risk') cleared('risk');
       if (next !== 'accounts') cleared('accounts');
+      if (next !== 'audit') cleared('audit');
     };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
@@ -292,6 +294,7 @@ export function Shell() {
           )}
           {screen === 'risk' && <RiskRules onError={failed('risk')} onRead={() => cleared('risk')} />}
           {screen === 'accounts' && <Accounts onError={failed('accounts')} onRead={() => cleared('accounts')} />}
+          {screen === 'audit' && <Audit onError={failed('audit')} onRead={() => cleared('audit')} chipHost={chipHost} />}
           {screen === 'runs' && <RunTest />}
           {screen === 'kit' && <Kit />}
         </div>
