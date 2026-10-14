@@ -82,3 +82,77 @@
 @media (max-width: 760px) {
   .ib-acts .btn { flex: 1 1 auto; }
 }
+
+/*
+ * Relays (permission requests and questions): their state as a shape and words, the command or
+ * input in full, where the session works, and the options of a question. A relay that ended stays
+ * a while in a quieter tone.
+ */
+.ib-rs { display: inline-flex; align-items: baseline; gap: var(--s-1); color: var(--c-ink-2); }
+.ib-rs .ico { align-self: center; color: currentColor; }
+.ib-rs.is-now { font-weight: var(--fw-semi); color: var(--c-ink); }
+.ib-rs.is-done { font-weight: var(--fw-medium); color: var(--c-ink); }
+.ib-rs.is-fail { font-weight: var(--fw-medium); color: var(--c-block); }
+.ib .lrow:not([data-state="open"], [data-state="answered"]) .lrow-title { color: var(--c-ink-2); }
+
+.ib-cmd {
+  max-width: var(--w-text);
+  margin: 0;
+  padding: var(--s-2) var(--s-3);
+  overflow-x: auto;
+  background: var(--c-canvas);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-row);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.ib-cmd code { font-size: var(--fs-sm); color: var(--c-ink); }
+
+.ib-where { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s-1) var(--s-4); margin: 0; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.ib-where div { display: contents; }
+.ib-where dt { color: var(--c-ink-2); }
+.ib-where dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.ib-where code { font-size: var(--fs-sm); color: var(--c-ink); }
+
+.ib-term strong { font-weight: var(--fw-semi); }
+
+/* A question: its short header, the question, then one row per option with its description */
+.ib-q { max-width: var(--w-text); margin: 0 0 var(--s-4); padding: 0; border: 0; }
+.ib-q-t { margin: 0 0 var(--s-2); padding: 0; font-size: var(--fs-md); font-weight: var(--fw-semi); line-height: var(--lh-row); color: var(--c-ink); }
+.ib-q-h {
+  display: inline-block;
+  margin-right: var(--s-2);
+  padding: 0 var(--s-1);
+  border: var(--rule) solid var(--c-rule-strong);
+  border-radius: var(--r-xs);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  color: var(--c-ink-2);
+  vertical-align: 1px;
+}
+.ib-q .ib-sub { margin: 0 0 var(--s-2); }
+.ib-opts { display: flex; flex-direction: column; gap: var(--s-1); margin: 0; padding: 0; list-style: none; }
+.ib-opt {
+  display: grid;
+  grid-template-columns: var(--check) minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0 var(--s-2);
+  min-height: var(--h-ctl);
+  padding: var(--s-1) var(--s-2);
+  border: var(--rule) solid var(--c-rule);
+  border-radius: var(--r-sm);
+  background: var(--c-paper);
+  cursor: pointer;
+}
+.ib-opt:hover { border-color: var(--c-ink-2); }
+.ib-opt:has(input:checked) { border-color: var(--c-accent); background: var(--c-accent-tint); }
+.ib-opt:has(input:focus-visible) { outline: var(--ring) solid var(--c-accent); outline-offset: var(--rule); }
+.ib-opt:has(input:disabled) { cursor: not-allowed; color: var(--c-ink-2); }
+.ib-opt input { margin: 0; align-self: center; }
+.ib-opt-l { font-weight: var(--fw-medium); }
+.ib-opt-d { grid-column: 2; font-size: var(--fs-sm); color: var(--c-ink-2); }
+.ib-opts.is-read li { display: flex; flex-direction: column; padding: var(--s-1) 0; }
+.ib-opts.is-read .ib-opt-d { font-size: var(--fs-sm); }

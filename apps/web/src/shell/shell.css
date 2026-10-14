@@ -70,6 +70,9 @@ button.it:hover:not([aria-disabled="true"]) .ico { color: var(--c-ink); }
 .it[aria-disabled="true"] .ico { color: var(--c-ink-3); }
 .it .lock { width: var(--fs-xs); height: var(--fs-xs); }
 .it.is-status { cursor: default; }
+/* A toggle that is on (focus mode) looks like the current screen: a light background and bold words. */
+.it[aria-pressed="true"] { background: var(--c-paper); color: var(--c-ink); font-weight: var(--fw-semi); }
+.it[aria-pressed="true"] .ico { color: var(--c-ink); }
 
 /* Folded sidebar: icons only; names stay for screen readers and show as tooltips */
 .side[data-mode="rail"] { align-items: center; padding: var(--s-3) var(--s-1) var(--s-2); }

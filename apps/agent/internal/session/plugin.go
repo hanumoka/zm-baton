@@ -12,7 +12,7 @@ import (
 const (
 	MarketplaceName = "zm-baton-local"
 	PluginName      = "zm-baton"
-	pluginVersion   = "0.1.0"
+	pluginVersion   = "0.2.0"
 )
 
 // HookSpec is one Claude Code hook zm-baton adds (contract "직접 연 AI 세션을 서버에 등록한다").
@@ -20,16 +20,22 @@ type HookSpec struct {
 	Event   string // Claude Code event name
 	Arg     string // `zm-baton hook <Arg>`
 	Timeout int    // seconds
+	Matcher string // Claude Code matcher; empty matches everything
 }
 
-// ClaudeHooks are the hooks for a Claude Code session. No matcher: every source, tool and
-// notification type reaches zm-baton, which decides what to send.
+// ClaudeHooks are the hooks for a Claude Code session. Most have no matcher: every source, tool
+// and notification type reaches zm-baton, which decides what to send. PreToolUse matches only
+// AskUserQuestion, so no other tool waits for a process start. The relay hooks wait for a person
+// on the first screen: their timeout is longer than the server's relay deadline (60 seconds, at
+// most 70) and the hook's own limit (80 seconds), so the server's deadline always ends the wait.
 var ClaudeHooks = []HookSpec{
-	{"SessionStart", "session-start", 10},
-	{"UserPromptSubmit", "prompt-submit", 5},
-	{"PostToolUse", "post-tool-use", 5},
-	{"Notification", "notification", 5},
-	{"SessionEnd", "session-end", 2},
+	{"SessionStart", "session-start", 10, ""},
+	{"UserPromptSubmit", "prompt-submit", 5, ""},
+	{"PostToolUse", "post-tool-use", 5, ""},
+	{"Notification", "notification", 5, ""},
+	{"SessionEnd", "session-end", 2, ""},
+	{"PermissionRequest", "permission-request", 90, ""},
+	{"PreToolUse", "pre-tool-use", 90, "AskUserQuestion"},
 }
 
 // HookExecutable is the executable a hook runs. Each hook names it apart from its arguments
@@ -51,11 +57,12 @@ func PluginFiles(exe string) (map[string][]byte, error) {
 		Timeout int      `json:"timeout"`
 	}
 	type entry struct {
-		Hooks []hook `json:"hooks"`
+		Matcher string `json:"matcher,omitempty"`
+		Hooks   []hook `json:"hooks"`
 	}
 	events := map[string][]entry{}
 	for _, spec := range ClaudeHooks {
-		events[spec.Event] = []entry{{Hooks: []hook{{"command", HookExecutable(exe), HookArgs(spec.Arg), spec.Timeout}}}}
+		events[spec.Event] = []entry{{Matcher: spec.Matcher, Hooks: []hook{{"command", HookExecutable(exe), HookArgs(spec.Arg), spec.Timeout}}}}
 	}
 	docs := map[string]any{
 		".claude-plugin/marketplace.json": map[string]any{
@@ -63,16 +70,16 @@ func PluginFiles(exe string) (map[string][]byte, error) {
 			"owner": map[string]string{"name": "zm-baton"},
 			"plugins": []map[string]string{{
 				"name": PluginName, "source": "./" + PluginName,
-				"description": "Registers this Claude Code session with the zm-baton server on this PC",
+				"description": "Registers this Claude Code session with the zm-baton server on this PC and relays its permission requests and questions to the first screen",
 			}},
 		},
 		PluginName + "/.claude-plugin/plugin.json": map[string]any{
 			"name": PluginName, "version": pluginVersion,
-			"description": "Registers this Claude Code session with the zm-baton server on this PC",
+			"description": "Registers this Claude Code session with the zm-baton server on this PC and relays its permission requests and questions to the first screen",
 			"author":      map[string]string{"name": "zm-baton"},
 		},
 		PluginName + "/hooks/hooks.json": map[string]any{
-			"description": "zm-baton session hooks: registration, current status card, file changes, waits",
+			"description": "zm-baton session hooks: registration, current status card, file changes, waits, first-screen relays",
 			"hooks":       events,
 		},
 	}

@@ -3,12 +3,13 @@ import { Accounts } from './accounts/Accounts';
 import { App as RunTest } from './App';
 import { Decisions } from './decisions/Decisions';
 import { Documents } from './documents/Documents';
-import { BUCKETS, newImmediate } from './inboxModel';
+import { BUCKETS, inboxHref, newImmediate, waitingItems } from './inboxModel';
 import { Inbox } from './inbox/Inbox';
+import { isRelay, relayed } from './inbox/relayView';
 import { Kit } from './kit/Kit';
 import { clear, fail, lines, type Problems, type Source } from './problems';
 import { Sessions } from './sessions/Sessions';
-import { sessionsApi, type InboxItem, type SessionView } from './sessionsApi';
+import { sessionsApi, type InboxItem, type MeView, type SessionView } from './sessionsApi';
 import { CommandBar, type Find } from './shell/CommandBar';
 import { isCommand, screenFromHash, type ScreenId } from './shell/screens';
 import { readSideOpen, writeSideOpen } from './shell/sidePref';
@@ -48,6 +49,13 @@ export function Shell() {
   const [problems, setProblems] = useState<Problems>({});
   const [permission, setPermission] = useState<Permission>(() => (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission));
   const seen = useRef<Set<string> | null>(null);
+  /** The person's settings (focus mode); null until the server answered. */
+  const [me, setMe] = useState<MeView | null>(null);
+  const focusOn = me?.focus_on ?? false;
+  const focusRef = useRef(false);
+  focusRef.current = focusOn;
+  /** Alerts held back while focus mode is on, shown when it ends (contract 「알림과 집중 모드」 4). */
+  const held = useRef<Map<string, InboxItem>>(new Map());
   const content = useRef<HTMLDivElement>(null);
   const app = useRef<HTMLDivElement>(null);
   const tool = useRef<HTMLElement>(null);
@@ -68,12 +76,49 @@ export function Shell() {
       if (next !== 'accounts') cleared('accounts');
     };
     window.addEventListener('hashchange', onHash);
-    const clock = setInterval(() => setNow(Date.now()), 15_000);
-    return () => {
-      window.removeEventListener('hashchange', onHash);
-      clearInterval(clock);
-    };
+    return () => window.removeEventListener('hashchange', onHash);
   }, []);
+
+  // A relay counts down in seconds; otherwise the clock only moves 「3분째」 along.
+  const counting = (items ?? []).some((i) => isRelay(i) && relayed(i) && (i.state ?? 'open') === 'open');
+  useEffect(() => {
+    setNow(Date.now());
+    const clock = setInterval(() => setNow(Date.now()), counting ? 1000 : 15_000);
+    return () => clearInterval(clock);
+  }, [counting]);
+
+  // The first screen tells the server while its tab is visible, so a question is relayed only then
+  // (contract relay 12). A signal lasts 30 seconds on the server and goes every 15 seconds here.
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    let told: boolean | null = null;
+    const tell = (visible: boolean) => {
+      told = visible;
+      sessionsApi.setFirstScreen(visible).catch(() => {});
+    };
+    const tick = () => {
+      const visible = screen === 'inbox' && document.visibilityState === 'visible';
+      if (visible || told !== false) tell(visible);
+    };
+    tick();
+    const id = setInterval(tick, 15_000);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', tick);
+      if (told) tell(false);
+    };
+  }, [screen]);
+
+  usePoll(
+    async (alive, signal) => {
+      const settings = await sessionsApi.me(signal);
+      if (alive()) setMe(settings);
+    },
+    60_000,
+    [],
+    () => {}, // focus mode stays as last read; the first screen's own poll reports a stopped server
+  );
 
   // Words typed to find on one screen mean nothing on the next.
   useEffect(() => setFindQ(''), [screen]);
@@ -89,18 +134,26 @@ export function Shell() {
     return () => observer.disconnect();
   }, []);
 
+  // While a relay waits for an answer or is on its way, the list reads faster so its state shows soon.
+  const relaying = (items ?? []).some((i) => isRelay(i) && relayed(i) && (i.state === 'open' || i.state === 'answered'));
   usePoll(
     async (alive, signal) => {
       const list = await sessionsApi.inbox(signal);
       if (!alive()) return;
-      for (const item of newImmediate(seen.current, list)) notify(item);
-      seen.current = new Set(list.map((i) => i.id));
+      const waiting = waitingItems(list);
+      for (const item of newImmediate(seen.current, waiting)) {
+        // Focus mode: only a conflict with my live work alerts at once; the rest wait for its end.
+        if (focusRef.current && item.bucket !== 3) held.current.set(item.id, item);
+        else notify(item);
+      }
+      seen.current = new Set(waiting.map((i) => i.id));
+      for (const id of held.current.keys()) if (!seen.current.has(id)) held.current.delete(id);
       setItems(list);
       setInboxError(null);
       cleared('inbox');
     },
-    3000,
-    [refresh],
+    relaying ? 1000 : 3000,
+    [refresh, relaying],
     (e) => {
       setInboxError(e instanceof Error ? e.message : String(e));
       failed('inbox')(e);
@@ -130,12 +183,25 @@ export function Shell() {
     writeSideOpen(next);
   }
 
+  async function toggleFocus() {
+    try {
+      const next = await sessionsApi.setFocus(!focusOn);
+      setMe(next);
+      if (!next.focus_on) {
+        for (const item of held.current.values()) notify(item);
+        held.current.clear();
+      }
+    } catch (e) {
+      failed('judge')(e);
+    }
+  }
+
   async function askPermission() {
     if (typeof Notification === 'undefined') return;
     setPermission(await Notification.requestPermission());
   }
 
-  const counts = { inbox: items?.length ?? 0, sessions: (sessions ?? []).filter((s) => s.state === 'live').length };
+  const counts = { inbox: items === null ? 0 : waitingItems(items).length, sessions: (sessions ?? []).filter((s) => s.state === 'live').length };
   // The work, decisions, documents and session screens find through the command line; a leading > still opens a screen.
   const finds = FINDS[screen];
   const find: Find | undefined = finds && {
@@ -149,7 +215,16 @@ export function Shell() {
     <div className="app" ref={app} data-side={sideOpen ? 'open' : 'rail'}>
       {/* The column carries the sidebar's colour to the bottom of a long page; the sidebar itself stays in view. */}
       <div className="side-col">
-        <Sidebar current={screen} counts={counts} open={sideOpen} onToggle={toggleSide} permission={permission} onAskPermission={askPermission} />
+        <Sidebar
+          current={screen}
+          counts={counts}
+          open={sideOpen}
+          onToggle={toggleSide}
+          permission={permission}
+          onAskPermission={askPermission}
+          focus={me?.focus_on ?? null}
+          onToggleFocus={() => void toggleFocus()}
+        />
       </div>
       <div className="main">
         <header className="tool" ref={tool}>
@@ -171,6 +246,8 @@ export function Shell() {
               }}
               onError={failed('judge')}
               onReload={() => setRefresh((r) => r + 1)}
+              focusOn={focusOn}
+              relayOn={me === null ? null : me.relay_enabled === true}
             />
           )}
           {screen === 'sessions' && (
@@ -216,7 +293,14 @@ export function Shell() {
           {screen === 'kit' && <Kit />}
         </div>
       </div>
-      <TabBar current={screen} counts={counts} permission={permission} onAskPermission={askPermission} />
+      <TabBar
+        current={screen}
+        counts={counts}
+        permission={permission}
+        onAskPermission={askPermission}
+        focus={me?.focus_on ?? null}
+        onToggleFocus={() => void toggleFocus()}
+      />
     </div>
   );
 }
@@ -237,9 +321,17 @@ export function ProblemList({ problems, onDismiss }: { problems: Problems; onDis
   );
 }
 
-/** One browser notification per new immediate item (DEC-0092 5: conflicts and what blocks work). */
+/**
+ * One browser notification per new immediate item (DEC-0092 5: conflicts and what blocks work,
+ * such as a relayed permission request). Clicking it brings the tab forward with the item open.
+ */
 function notify(item: InboxItem) {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   const label = BUCKETS.find((b) => b.bucket === item.bucket)?.label ?? '나를 기다리는 것';
-  new Notification(`zm-baton · ${label}`, { body: item.summary, tag: item.id });
+  const n = new Notification(`zm-baton · ${label}`, { body: item.summary, tag: item.id });
+  n.onclick = () => {
+    window.focus();
+    window.location.hash = inboxHref(item.id);
+    n.close();
+  };
 }
