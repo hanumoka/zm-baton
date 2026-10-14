@@ -179,7 +179,7 @@ describe('the readiness check and continuing runs', () => {
     });
     const html = list([stopped], [{ event_id: 'e', generation: 2, seq: 1, kind: 'error', payload: { text: '시작 전 준비 검사에서 멈췄다: x' }, occurred_at: null, received_at: '' }]);
     expect(html).toContain('시작 전 준비 검사에서 멈춰 실행기를 띄우지 않았다');
-    expect(html).toContain('<strong>기준</strong> 기준 브랜치 dev이(가) 이 저장소에 없다');
+    expect(html).toContain('<li>기준 브랜치 dev이(가) 이 저장소에 없다</li>');
     expect(html).toContain('시작 전 준비 검사 미달');
     expect(html).not.toContain('시작 전 준비 검사에서 멈췄다: x');
   });

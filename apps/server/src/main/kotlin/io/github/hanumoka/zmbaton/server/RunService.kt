@@ -54,6 +54,13 @@ class RunService(
 	private val mapType = object : TypeReference<Map<String, Any?>>() {}
 	private val tx = TransactionTemplate(transactions)
 
+	/**
+	 * When this server started. No connector could renew while the server was down, so a lease
+	 * counts as lapsed only from this time on: an update or a restore never cuts runs whose
+	 * connectors are still there. Tests set it to look like a recent start.
+	 */
+	internal var startedAt: OffsetDateTime = OffsetDateTime.now()
+
 	/** The compat test's work item: `ready`, no executor. */
 	fun createWorkItem(title: String, responsibleUserId: String): WorkItemCreated =
 		workItems.create(CreateWorkItem(title, responsibleUserId))
@@ -206,10 +213,11 @@ class RunService(
 		val candidates = jdbc.sql(
 			"""
 			select id from runs
-			 where state in ('claimed', 'running', 'stopping') and lease_expires_at < now() - make_interval(secs => :grace)
+			 where state in ('claimed', 'running', 'stopping')
+			   and greatest(lease_expires_at, cast(:started as timestamptz)) < now() - make_interval(secs => :grace)
 			 order by lease_expires_at limit 100
 			""".trimIndent(),
-		).param("grace", lostGraceSeconds).query(String::class.java).list().filterNotNull()
+		).param("grace", lostGraceSeconds).param("started", startedAt).query(String::class.java).list().filterNotNull()
 		return candidates.filter { id -> tx.execute { loseIfLapsed(id) } == true }
 	}
 
@@ -218,10 +226,11 @@ class RunService(
 			"""
 			select r.work_item_id from runs r join work_items w on w.id = r.work_item_id
 			 where r.id = :id and r.state in ('claimed', 'running', 'stopping')
-			   and r.lease_expires_at < now() - make_interval(secs => :grace)
+			   and greatest(r.lease_expires_at, cast(:started as timestamptz)) < now() - make_interval(secs => :grace)
 			   for update of r, w
 			""".trimIndent(),
-		).param("id", runId).param("grace", lostGraceSeconds).query(String::class.java).optional().orElse(null) ?: return false
+		).param("id", runId).param("grace", lostGraceSeconds).param("started", startedAt).query(String::class.java)
+			.optional().orElse(null) ?: return false
 		jdbc.sql("update runs set state = 'ended', end_reason = 'lost', ended_at = now(), lease_expires_at = null where id = :id")
 			.param("id", runId).update()
 		addWait(workItemId, "outcome_unknown")

@@ -202,9 +202,7 @@ export function RunRow({ run, events, now, outcomeUnknown, onWithdraw, onCancel,
             <p className="hr-tight">시작 전 준비 검사에서 멈춰 실행기를 띄우지 않았다. 고친 뒤 다시 맡긴다.</p>
             <ul className="hr-checks">
               {failedChecks.map((c) => (
-                <li key={c.name}>
-                  <strong>{CHECK_LABELS[c.name] ?? c.name}</strong> {c.detail}
-                </li>
+                <li key={c.name}>{c.detail || (CHECK_LABELS[c.name] ?? c.name)}</li>
               ))}
             </ul>
           </div>

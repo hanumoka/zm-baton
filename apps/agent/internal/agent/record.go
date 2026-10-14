@@ -100,7 +100,7 @@ func (r runRecords) endedConfirmed(runID, sessionID string) (ok bool, why string
 	case sessionID == "" || rec.SessionID != sessionID:
 		return false, "이전 실행의 세션 번호가 이 기기의 기록과 다르다"
 	case !rec.Exited:
-		return false, "이전 실행기가 끝난 것을 이 기기가 보지 못했다(연결 프로그램이 도중에 꺼졌을 수 있다)"
+		return false, "이전 실행기가 끝난 것을 이 기기가 보지 못했다. 연결 프로그램이 도중에 꺼졌을 수 있다"
 	case !rec.ChildrenGone:
 		return false, "이전 실행기의 하위 프로세스가 모두 끝났는지 확인하지 못했다"
 	}

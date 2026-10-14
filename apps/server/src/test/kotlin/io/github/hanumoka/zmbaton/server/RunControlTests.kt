@@ -33,6 +33,11 @@ class RunControlTests @Autowired constructor(
 
 	private val commit = "b".repeat(40)
 
+	init {
+		// The server has been up for a while: a lapsed lease is judged from its own expiry.
+		runs.startedAt = java.time.OffsetDateTime.now().minusDays(1)
+	}
+
 	private data class Setup(val device: String, val repoKey: String, val workId: String)
 
 	private fun setup(): Setup {
@@ -154,6 +159,23 @@ class RunControlTests @Autowired constructor(
 		assertEquals("resume", again.mode)
 		assertEquals(runId, again.resumeFrom!!.runId)
 		assertEquals("lost", again.resumeFrom.endReason)
+	}
+
+	@Test
+	fun `after the server itself was down a lapsed lease gets the whole grace again`() {
+		val s = setup()
+		val (runId, _) = running(s)
+		lapse(runId, 3600) // the server was down for an hour; the connector could not renew
+		val before = runs.startedAt
+		runs.startedAt = java.time.OffsetDateTime.now()
+		try {
+			assertTrue(runs.sweepLost().none { it == runId })
+			assertEquals("running", view(s.workId, runId).state)
+			runs.startedAt = java.time.OffsetDateTime.now().minusSeconds(120)
+			assertTrue(runId in runs.sweepLost())
+		} finally {
+			runs.startedAt = before
+		}
 	}
 
 	// ---------------------------------------------------------------- cancel

@@ -237,7 +237,7 @@ func (h *Handoff) workspaceFor(ctx context.Context, c api.Claim, repo Repo, read
 					return nil, "", "", ready.Fail("worktree", "이전 실행의 브랜치에서 새 작업 트리를 만들지 못했다", err)
 				}
 				ready.Pass("resume", why+". 이전 실행의 브랜치 끝에서 새 작업 트리와 새 세션으로 시작한다")
-				return ws, "", fmt.Sprintf("이전 실행(%s)의 작업 트리를 이어 쓰지 않았다(%s). 그 브랜치 끝에서 새 작업 트리를 만들었으므로 이전 실행이 커밋하지 않은 변경은 여기에 없다.", r.RunID, why), nil
+				return ws, "", fmt.Sprintf("이전 실행(%s)의 작업 트리를 이어 쓰지 않았다. 이유: %s. 그 브랜치 끝에서 새 작업 트리를 만들었으므로 이전 실행이 커밋하지 않은 변경은 여기에 없다.", r.RunID, why), nil
 			}
 			log.Warn("no worktree from the earlier run's branch", "err", err)
 		}
