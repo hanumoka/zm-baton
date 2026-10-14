@@ -25,7 +25,9 @@ import java.time.OffsetDateTime
 // here to Claude Code on one device and one repository; the server keeps the delegation, makes one
 // requested run with an instruction built from the work item, and makes the owner's manager the
 // executor. Stage 1 has no AI account registration yet, so the run uses whatever login the
-// executor already has on that device.
+// executor already has on that device. Handing over an `in_progress` work item again continues it:
+// the new run names the run it follows and why (contract "실행 권리 청구" 1-2), and a result in
+// `result_review` goes back with the person's reason in the same request.
 
 data class DelegateIn(
 	val executor: String,
@@ -36,6 +38,11 @@ data class DelegateIn(
 	/** Claude Code tools the run may use without asking. Absent: `Read`, as in the compat test. */
 	@JsonProperty("allowed_tools") val allowedTools: List<String>? = null,
 	val version: Long,
+	/**
+	 * Added with run control: what the person adds to the instruction. Sending a result in
+	 * `result_review` back needs it: it is the reason the result goes back.
+	 */
+	val note: String? = null,
 )
 
 data class WithdrawIn(val version: Long)
@@ -71,6 +78,8 @@ class DelegationService(
 		val DEFAULT_TOOLS = listOf("Read")
 		/** Contract "위임": an offline delegation lasts at most 8 hours (G14.2). */
 		const val DELEGATION_HOURS = 8
+		/** The server-set wait reasons a person deals with by handing the work item on again. */
+		val CLEARED_BY_HANDOFF = listOf("outcome_unknown", "readiness_failed")
 		private val BRANCH = Regex("^[A-Za-z0-9._/-]{1,200}$")
 
 		/**
@@ -147,7 +156,11 @@ class DelegationService(
 
 	/**
 	 * Hands the work item to an AI: one delegation, one requested run with its instruction, and the
-	 * owner's manager as the executor, in one transaction with the version check.
+	 * owner's manager as the executor, in one transaction with the version check. A continuing run
+	 * (Workflow.delegationPlan) follows the newest ended run: it records that run and why it goes on
+	 * (`resume_after_cut` after a cut or cancelled run, `result_rejected` after a result went back),
+	 * and the instruction says so. Handing the work item on means the person looked at what the last
+	 * run left, so `outcome_unknown` and `readiness_failed` come off.
 	 */
 	@Transactional
 	fun delegate(workItemId: String, body: DelegateIn): WorkItemDetail {
@@ -155,16 +168,44 @@ class DelegationService(
 		if (executor !in EXECUTORS) throw BadRequestException("executor must be one of $EXECUTORS")
 		val deviceId = body.deviceId.trim()
 		val repoKey = body.repoKey.trim()
-		val baseBranch = body.baseBranch?.trim()?.ifEmpty { null }
-		if (baseBranch != null && !isBranchName(baseBranch)) throw BadRequestException("base_branch is not a usable branch name")
 		val tools = (body.allowedTools ?: DEFAULT_TOOLS).map { it.trim() }.distinct()
 		if (tools.isEmpty() || tools.any { it !in KNOWN_TOOLS }) throw BadRequestException("allowed_tools must be some of $KNOWN_TOOLS")
+		val note = body.note?.trim()?.ifEmpty { null }
+		if (note != null && note.length > WorkItemService.NOTE_MAX) {
+			throw BadRequestException("note must be at most ${WorkItemService.NOTE_MAX} characters")
+		}
+		val askedBranch = body.baseBranch?.trim()?.ifEmpty { null }
+		if (askedBranch != null && !isBranchName(askedBranch)) throw BadRequestException("base_branch is not a usable branch name")
 
 		val facts = workItems.lockFacts(workItemId, body.version)
-		Workflow.delegationRefusal(facts)?.let { throw ConflictException(it) }
+		val plan = Workflow.delegationPlan(facts)
+		val mode = plan.mode ?: throw ConflictException(plan.refusal ?: "맡길 수 없다")
+		val previous = if (mode == Workflow.DelegationMode.FIRST) null else workItems.previousRun(workItemId)
+		if (mode != Workflow.DelegationMode.FIRST && previous == null) throw ConflictException("이어 갈 이전 실행이 없다")
+		// A continuing run starts from the same base unless the person names another one.
+		val baseBranch = askedBranch ?: previous?.baseBranch
 		val registered = repositories(deviceId).any { it.repoKey == repoKey }
 		if (!registered) {
 			throw BadRequestException("the device $deviceId has no repository $repoKey; add it there with zm-baton repo add")
+		}
+		if (mode == Workflow.DelegationMode.REJECT_AND_RESUME) {
+			if (note == null) throw BadRequestException("결과를 돌려보내는 이유를 note에 쓴다")
+			workItems.transition(workItemId, TransitionIn("in_progress", body.version, note))
+		}
+		val continueReason = when {
+			previous == null -> null
+			mode == Workflow.DelegationMode.REJECT_AND_RESUME || previous.endReason == "submitted" -> "result_rejected"
+			else -> "resume_after_cut"
+		}
+		val continuation = if (previous != null && continueReason != null) {
+			val rejection = if (continueReason == "result_rejected" && mode == Workflow.DelegationMode.RESUME) {
+				lastRejectionNote(workItemId)
+			} else {
+				null // after a cut there is no reason; when sending back now, the note says it
+			}
+			Instructions.Continuation(continueReason, previous.runId, previous.endReason, rejection)
+		} else {
+			null
 		}
 
 		val dlg = Ids.delegation()
@@ -183,24 +224,38 @@ class DelegationService(
 		try {
 			jdbc.sql(
 				"""
-				insert into runs (id, work_item_id, state, executor, delegation_id, instruction)
-				values (:id, :wid, 'requested', :executor, :dlg, :instruction)
+				insert into runs (id, work_item_id, state, executor, delegation_id, instruction, resumed_from_run_id, continue_reason)
+				values (:id, :wid, 'requested', :executor, :dlg, :instruction, :from, :reason)
 				""".trimIndent(),
 			).param("id", run).param("wid", workItemId).param("executor", executor).param("dlg", dlg)
-				.param("instruction", instruction(workItemId)).update()
+				.param("instruction", instruction(workItemId, continuation, note))
+				.param("from", previous?.runId).param("reason", continueReason).update()
 		} catch (e: DuplicateKeyException) {
-			throw ConflictException("살아 있는 실행 시도가 있다. 끝나거나 거둔 뒤에 다시 맡긴다")
+			throw ConflictException("살아 있는 실행 시도가 있다. 끝나거나 취소한 뒤에 다시 맡긴다")
 		}
 		jdbc.sql(
 			"update work_items set executor_kind = 'manager', executor_id = :manager, version = version + 1, updated_at = now() where id = :id",
 		).param("manager", MANAGER).param("id", workItemId).update()
+		workItems.clearWaits(workItemId, CLEARED_BY_HANDOFF)
 		workItems.record(
 			workItemId, "work_item.delegated",
 			mapOf("delegation_id" to dlg, "run_id" to run, "executor" to executor, "device_id" to deviceId,
-				"repo_key" to repoKey, "base_branch" to baseBranch, "allowed_tools" to tools),
+				"repo_key" to repoKey, "base_branch" to baseBranch, "allowed_tools" to tools,
+				"continue_reason" to continueReason, "resumed_from_run_id" to previous?.runId, "note" to note),
 		)
 		return workItems.detail(workItemId)
 	}
+
+	/** The reason a person gave the last time a result went back (`result_review` → `in_progress`). */
+	private fun lastRejectionNote(workItemId: String): String? =
+		jdbc.sql(
+			"""
+			select details ->> 'note' from audit_log
+			 where target_kind = 'wrk' and target_id = :id and action = 'work_item.stage_changed'
+			   and details ->> 'from' = 'result_review' and details ->> 'to' = 'in_progress'
+			 order by at desc, id desc limit 1
+			""".trimIndent(),
+		).param("id", workItemId).query(String::class.java).optional().orElse(null)
 
 	/**
 	 * Takes back a delegation whose run no connector has claimed yet: the run ends `cancelled`
@@ -223,7 +278,7 @@ class DelegationService(
 			 where id = :id and state = 'requested'
 			""".trimIndent(),
 		).param("id", runId).update()
-		if (ended == 0) throw ConflictException("이미 연결 프로그램이 가져간 실행이다. 실행 중에 멈추는 기능은 아직 없다")
+		if (ended == 0) throw ConflictException("이미 연결 프로그램이 가져간 실행이다. 「실행 취소」로 멈춘다")
 		jdbc.sql("update delegations set revoked_at = now() where id = :id and revoked_at is null").param("id", delegationId).update()
 		jdbc.sql(
 			"update work_items set executor_kind = null, executor_id = null, version = version + 1, updated_at = now() where id = :id",
@@ -236,7 +291,7 @@ class DelegationService(
 	 * The instruction for the executor (contract "위임" 무엇을: the work item). What the work item
 	 * has, in the order a person reads it, then how to work in a run's own worktree.
 	 */
-	private fun instruction(workItemId: String): String =
+	private fun instruction(workItemId: String, continuation: Instructions.Continuation?, note: String?): String =
 		jdbc.sql(
 			"""
 			select w.id, w.title, w.external_ref, w.acceptance, w.next_action, w.source_ref, p.name
@@ -248,11 +303,17 @@ class DelegationService(
 					rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5),
 					rs.getString(6), rs.getString(7),
 				),
+				continuation = continuation,
+				note = note,
 			)
 		}.single()
 }
 
-/** Builds the run instruction from a work item. Pure, so its wording is tested on its own. */
+/**
+ * Builds the run instruction from a work item. Pure, so its wording is tested on its own. Every
+ * instruction ends with the agent norms (FN-0406, G38.2), whose only source is the resource file
+ * `executor/agent-norms.txt`.
+ */
 object Instructions {
 	data class Item(
 		val id: String,
@@ -264,22 +325,68 @@ object Instructions {
 		val project: String?,
 	)
 
-	fun build(item: Item): String = buildString {
-		appendLine("zm-baton이 작업 하나를 맡긴다.")
-		appendLine()
-		appendLine("작업: ${item.title}")
-		appendLine("작업 번호: ${item.id}${item.externalRef?.let { " ($it)" } ?: ""}")
-		item.project?.let { appendLine("프로젝트: $it") }
-		appendLine("수락 조건:")
-		appendLine(item.acceptance ?: "적혀 있지 않다. 제목과 다음 행동으로 판단한다.")
-		item.nextAction?.let { appendLine("다음 행동: $it") }
-		item.sourceRef?.let { appendLine("참조 문서: $it (저장소 뿌리 기준 경로)") }
-		appendLine()
-		appendLine("일하는 방법:")
-		appendLine("1. 지금 폴더는 이 실행만을 위해 만든 Git 작업 트리다. 이 폴더 안의 파일만 읽고 고친다.")
-		appendLine("2. 브랜치를 합치거나 push하지 않는다. 사람이 결과를 검토한 뒤 Git으로 직접 합친다.")
-		append("3. 끝나면 무엇을 바꿨는지, 수락 조건마다 어떻게 확인했는지, 확인하지 못한 것을 짧게 답한다.")
+	/** A run that continues an `in_progress` work item (contract "실행 권리 청구" 1-2). */
+	data class Continuation(
+		val reason: String,
+		val previousRunId: String,
+		val previousEnd: String,
+		/** Why a person sent the last result back, when that is why this run goes on. */
+		val rejection: String?,
+	)
+
+	const val NORMS_RESOURCE = "/executor/agent-norms.txt"
+
+	/** The numbered lines of the norms file, in order. */
+	val norms: List<String> by lazy {
+		val text = Instructions::class.java.getResourceAsStream(NORMS_RESOURCE)?.use { it.readBytes().toString(Charsets.UTF_8) }
+			?: error("$NORMS_RESOURCE is missing from the server")
+		parseNorms(text)
 	}
+
+	/** Lines that are neither empty nor a `#` comment. */
+	fun parseNorms(text: String): List<String> =
+		text.lines().map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
+
+	private val END_LABELS = mapOf(
+		"submitted" to "결과 제출", "failed" to "오류", "cancelled" to "사람이 취소함", "lost" to "연결 끊김",
+		"replaced" to "다른 실행으로 넘김",
+	)
+
+	private val CONTINUE_LABELS = mapOf(
+		"resume_after_cut" to "이전 실행이 결과를 내기 전에 끊기거나 멈췄다",
+		"result_rejected" to "사람이 이전 결과를 돌려보냈다",
+		"answer_arrived" to "질문의 답이 왔다",
+		"replacement" to "다른 계정이나 기기로 넘겼다",
+	)
+
+	fun build(item: Item, continuation: Continuation? = null, note: String? = null, rules: List<String> = norms): String =
+		buildString {
+			appendLine("zm-baton이 작업 하나를 맡긴다.")
+			appendLine()
+			appendLine("작업: ${item.title}")
+			appendLine("작업 번호: ${item.id}${item.externalRef?.let { " ($it)" } ?: ""}")
+			item.project?.let { appendLine("프로젝트: $it") }
+			appendLine("수락 조건:")
+			appendLine(item.acceptance ?: "적혀 있지 않다. 제목과 다음 행동으로 판단한다.")
+			item.nextAction?.let { appendLine("다음 행동: $it") }
+			item.sourceRef?.let { appendLine("참조 문서: $it (저장소 뿌리 기준 경로)") }
+			if (continuation != null) {
+				appendLine()
+				appendLine("이어서 하는 실행이다.")
+				appendLine("이어 가는 이유: ${CONTINUE_LABELS[continuation.reason] ?: continuation.reason}")
+				appendLine("이전 실행: ${continuation.previousRunId} (${END_LABELS[continuation.previousEnd] ?: continuation.previousEnd})")
+				continuation.rejection?.let { appendLine("돌려보낸 이유: $it") }
+				appendLine("먼저 이 작업 트리의 파일을 살펴 이전 실행이 어디까지 했는지 확인하고, 남은 것만 한다.")
+			}
+			if (note != null) {
+				appendLine()
+				appendLine("사람이 덧붙인 지시:")
+				appendLine(note)
+			}
+			appendLine()
+			appendLine("행동 규범:")
+			append(rules.joinToString("\n"))
+		}
 }
 
 @RestController

@@ -29,6 +29,9 @@ object Ids {
 
 	fun decision(): String = "dcs_" + uuidV7()
 
+	/** An instruction a person sends to a running executor. Beyond the contract's prefixes, like `aud_`. */
+	fun input(): String = "inp_" + uuidV7()
+
 	/** Audit rows have no contract prefix; `aud_` keeps them readable next to the others. */
 	fun audit(): String = "aud_" + uuidV7()
 

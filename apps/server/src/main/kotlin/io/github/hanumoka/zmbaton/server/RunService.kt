@@ -1,17 +1,23 @@
 package io.github.hanumoka.zmbaton.server
 
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
+import org.springframework.transaction.PlatformTransactionManager
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.transaction.support.TransactionTemplate
 import tools.jackson.core.type.TypeReference
 import tools.jackson.databind.ObjectMapper
+import java.time.OffsetDateTime
 
 /**
  * Claim and report handling from contract v1 ("실행 권리 청구", "세대 번호로 늦은 보고 거르기",
- * "보고 전달"). A delegated run (DelegationService) is claimable only by the device it names, and
- * its reports move its work item (WorkItemService.followRun). Lease renewal, device liveness and
- * request_id dedup are not built yet.
+ * "보고 전달", "실행이 끊겼을 때"). A delegated run (DelegationService) is claimable only by the
+ * device it names, and its reports move its work item (WorkItemService.followRun). The connector
+ * renews the claim's lease while it runs; its renewal also carries a person's stop request and
+ * instructions to the connector. A run whose lease lapsed longer than the reconnection grace ends
+ * `lost` ([sweepLost]). request_id dedup is not built yet.
  */
 @Service
 class RunService(
@@ -19,9 +25,13 @@ class RunService(
 	private val json: ObjectMapper,
 	private val workItems: WorkItemService,
 	private val sessions: SessionService,
+	transactions: PlatformTransactionManager,
+	/** Contract "실행 권리 청구" 6: how long a lapsed lease may stay silent before the run is lost. */
+	@Value("\${zm-baton.run-lost-grace-seconds:300}") private val lostGraceSeconds: Long,
 ) {
 
 	companion object {
+		/** Contract "실행 권리 청구" 5: a lease lasts 45 seconds; the connector renews it while it runs. */
 		const val LEASE_SECONDS = 45
 		/** Executor activity (contract "공통 활동 종류"). Only these count for 응답 없음 (`last_activity_at`). */
 		val ACTIVITY_KINDS = setOf("thought", "action", "action_result", "answer", "question", "error", "usage")
@@ -31,11 +41,18 @@ class RunService(
 		val KINDS_V2 = KINDS + "git_changes"
 		val PROTOCOL_VERSIONS = setOf(1, 2)
 		val END_REASONS = setOf("submitted", "failed", "cancelled", "replaced", "lost")
+		val LIVE_STATES = setOf("claimed", "running", "stopping")
+		/** How a run's worktree came to be: its own new one, the previous run's, or one from the previous run's branch. */
+		val WORKSPACE_ORIGINS = setOf("new", "reused", "previous_branch")
+		val INPUT_REPORTS = setOf("sent", "delivered", "undelivered")
 		const val MAX_CHANGED_FILES = 2000
 		private val COMMIT = Regex("^[0-9a-f]{40}([0-9a-f]{24})?$")
+		/** A drive, a backslash or a word starting with `/`: what an absolute path on a device looks like. */
+		private val DEVICE_PATH = Regex("""[A-Za-z]:[\\/]|\\|(^|\s)[/~]""")
 	}
 
 	private val mapType = object : TypeReference<Map<String, Any?>>() {}
+	private val tx = TransactionTemplate(transactions)
 
 	/** The compat test's work item: `ready`, no executor. */
 	fun createWorkItem(title: String, responsibleUserId: String): WorkItemCreated =
@@ -83,7 +100,8 @@ class RunService(
 	/**
 	 * One conditional update; locked rows are skipped, so concurrent claims get exactly one winner.
 	 * A delegated run goes only to the device its delegation names, while the delegation is neither
-	 * revoked nor expired (contract "위임").
+	 * revoked nor expired (contract "위임"). A continuing run also says which run it follows, and on
+	 * the same device which executor session and worktree that run left ("실행이 끊겼을 때" 2).
 	 */
 	@Transactional
 	fun claim(runId: String, deviceId: String): Claimed {
@@ -98,17 +116,19 @@ class RunService(
 			                and (r.delegation_id is null
 			                     or (d.device_id = :device and d.revoked_at is null and d.expires_at > now()))
 			                for update of r skip locked)
-			returning work_item_id, delegation_id, instruction
+			returning work_item_id, delegation_id, instruction, resumed_from_run_id, continue_reason
 			""".trimIndent(),
 		).param("device", deviceId).param("lease", LEASE_SECONDS).param("runId", runId)
-			.query { rs, _ -> Triple(rs.getString(1), rs.getString(2), rs.getString(3)) }.optional()
+			.query { rs, _ -> Won(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5)) }
+			.optional()
 			.orElseThrow { ConflictException("run $runId is not claimable") }
-		val (workItemId, delegationId, instruction) = won
+		val (workItemId, delegationId, instruction, resumedFrom, continueReason) = won
 		val generation = jdbc.sql(
 			"update work_items set generation = generation + 1, updated_at = now() where id = :wid returning generation",
 		).param("wid", workItemId).query(Long::class.javaObjectType).single()
 		jdbc.sql("update runs set generation = :gen where id = :runId")
 			.param("gen", generation).param("runId", runId).update()
+		jdbc.sql("update devices set last_seen_at = now() where id = :id").param("id", deviceId).update()
 		val delegation = delegationId?.let { id ->
 			val scope = jdbc.sql("select scope::text from delegations where id = :id").param("id", id)
 				.query(String::class.java).single().let { json.readValue(it, mapType) }
@@ -117,7 +137,94 @@ class RunService(
 				(scope["allowed_tools"] as List<*>).map { it as String },
 			)
 		}
-		return Claimed(runId, workItemId, generation, LEASE_SECONDS, delegation, instruction)
+		val resume = resumedFrom?.let { previousForClaim(it, deviceId, continueReason ?: "resume_after_cut") }
+		return Claimed(runId, workItemId, generation, LEASE_SECONDS, delegation, instruction, resume)
+	}
+
+	private data class Won(
+		val workItemId: String,
+		val delegationId: String?,
+		val instruction: String?,
+		val resumedFrom: String?,
+		val continueReason: String?,
+	)
+
+	/**
+	 * What a continuing run may reuse (contract "실행마다 별도 작업 트리" 6). Only on the device that
+	 * ran the previous run: there its executor session and branch exist. The connector still reuses
+	 * them only after it confirms that the previous executor and its child processes ended.
+	 */
+	private fun previousForClaim(previousId: String, deviceId: String, continueReason: String): ClaimedResume =
+		jdbc.sql("select device_id, executor_session_id, workspace::text from runs where id = :id").param("id", previousId)
+			.query { rs, _ ->
+				val sameDevice = rs.getString(1) == deviceId
+				ClaimedResume(
+					previousId, continueReason, sameDevice,
+					if (sameDevice) rs.getString(2) else null,
+					if (sameDevice) rs.getString(3)?.let { json.readValue(it, mapType) } else null,
+				)
+			}.single()
+
+	/**
+	 * The connector renews the lease of a run it holds (contract "실행 권리 청구" 5) and hears back
+	 * whether a person asked to stop it and which instructions wait for the executor. It also says
+	 * what became of the instructions it took. A run that ended, was claimed again or is held by
+	 * another device is refused: the connector must stop working on it.
+	 */
+	@Transactional
+	fun renew(runId: String, body: LeaseIn): LeaseOut {
+		val row = jdbc.sql(
+			"""
+			update runs set lease_expires_at = now() + make_interval(secs => :lease)
+			 where id = :id and device_id = :device and generation = :gen and state in ('claimed', 'running', 'stopping')
+			returning state, lease_expires_at
+			""".trimIndent(),
+		).param("lease", LEASE_SECONDS).param("id", runId).param("device", body.deviceId.trim()).param("gen", body.generation)
+			.query { rs, _ -> rs.getString(1) to rs.getObject(2, OffsetDateTime::class.java) }.optional()
+			.orElseThrow { ConflictException("run $runId is not held by this device with generation ${body.generation} any more") }
+		jdbc.sql("update devices set last_seen_at = now() where id = :id").param("id", body.deviceId.trim()).update()
+		for (ack in body.inputs) applyInputReport(runId, ack.id, ack.state)
+		val pending = jdbc.sql("select id, body from run_inputs where run_id = :id and state = 'pending' order by created_at, id")
+			.param("id", runId).query { rs, _ -> PendingInput(rs.getString(1), rs.getString(2)) }.list()
+		val (state, expires) = row
+		return LeaseOut(state, LEASE_SECONDS, expires, if (state == "stopping") "cancel" else null, pending)
+	}
+
+	/**
+	 * Contract "실행 권리 청구" 6 and "실행이 끊겼을 때" 1: a live run whose lease lapsed more than the
+	 * reconnection grace ago ends `lost`, and its work item gets `outcome_unknown` (the connector may
+	 * have been changing files). The run's own lease renewal is the liveness signal: the device's
+	 * other traffic (its directly opened sessions) says nothing about this connector. Each run is
+	 * judged in its own transaction under the same locks as a report, so a late report and the
+	 * judgement never interleave. Returns the runs it ended.
+	 */
+	fun sweepLost(): List<String> {
+		val candidates = jdbc.sql(
+			"""
+			select id from runs
+			 where state in ('claimed', 'running', 'stopping') and lease_expires_at < now() - make_interval(secs => :grace)
+			 order by lease_expires_at limit 100
+			""".trimIndent(),
+		).param("grace", lostGraceSeconds).query(String::class.java).list().filterNotNull()
+		return candidates.filter { id -> tx.execute { loseIfLapsed(id) } == true }
+	}
+
+	private fun loseIfLapsed(runId: String): Boolean {
+		val workItemId = jdbc.sql(
+			"""
+			select r.work_item_id from runs r join work_items w on w.id = r.work_item_id
+			 where r.id = :id and r.state in ('claimed', 'running', 'stopping')
+			   and r.lease_expires_at < now() - make_interval(secs => :grace)
+			   for update of r, w
+			""".trimIndent(),
+		).param("id", runId).param("grace", lostGraceSeconds).query(String::class.java).optional().orElse(null) ?: return false
+		jdbc.sql("update runs set state = 'ended', end_reason = 'lost', ended_at = now(), lease_expires_at = null where id = :id")
+			.param("id", runId).update()
+		addWait(workItemId, "outcome_unknown")
+		finishInputs(runId)
+		sessions.audit("system", runId, "run.lost", "wrk", workItemId,
+			mapOf("run_id" to runId, "reason" to "lease lapsed for more than $lostGraceSeconds seconds"))
+		return true
 	}
 
 	@Transactional
@@ -206,13 +313,16 @@ class RunService(
 	 * A lifecycle event must be `started`, or `ended` with a contract end reason; from
 	 * protocol_version 2 an end also says whether the executor started and whether its result
 	 * arrived. Never infer success. A Git change list holds only paths from the repository root.
+	 * The optional parts added with run control (an end's readiness check and instruction states, a
+	 * start's capabilities) must have their shape when present.
 	 */
 	private fun valid(event: EventIn, version: Int, target: ReportTarget): Boolean {
 		val p = event.payload
 		return when (event.kind) {
 			"lifecycle" -> validWorkspace(p["workspace"], target) && when (p["phase"]) {
-				"started" -> true
-				"ended" -> p["end_reason"] in END_REASONS && (version == 1 || validEnd(p))
+				"started" -> validCapabilities(p["capabilities"])
+				"ended" -> p["end_reason"] in END_REASONS && (version == 1 || validEnd(p)) &&
+					validReadiness(p["readiness"]) && validInputReports(p["inputs"])
 				else -> false
 			}
 			"git_changes" -> validChanges(p)
@@ -236,8 +346,39 @@ class RunService(
 		val commit = ws["base_commit"] as? String ?: return false
 		val branch = ws["branch"] as? String ?: return false
 		val baseRef = ws["base_ref"]
+		val origin = ws["origin"]
 		return COMMIT.matches(commit) && DelegationService.isBranchName(branch) &&
-			(baseRef == null || (baseRef is String && (baseRef == "HEAD" || DelegationService.isBranchName(baseRef))))
+			(baseRef == null || (baseRef is String && (baseRef == "HEAD" || DelegationService.isBranchName(baseRef)))) &&
+			(origin == null || origin in WORKSPACE_ORIGINS)
+	}
+
+	/** `{"live_input": true, "resume": true}`: what the adapter supports (contract "어댑터가 알려야 하는 능력"). */
+	private fun validCapabilities(raw: Any?): Boolean {
+		if (raw == null) return true
+		val caps = raw as? Map<*, *> ?: return false
+		return caps.size <= 20 && caps.all { (k, v) -> k is String && k.length <= 40 && v is Boolean }
+	}
+
+	/** `{"ok": false, "checks": [{"name", "ok", "detail"}]}`: what the connector checked before starting the executor. */
+	private fun validReadiness(raw: Any?): Boolean {
+		if (raw == null) return true
+		val r = raw as? Map<*, *> ?: return false
+		if (r["ok"] !is Boolean) return false
+		val checks = r["checks"] as? List<*> ?: return false
+		return checks.size <= 20 && checks.all { c ->
+			val m = c as? Map<*, *> ?: return@all false
+			val name = m["name"] as? String
+			val detail = m["detail"]
+			name != null && name.length <= 40 && m["ok"] is Boolean &&
+				(detail == null || (detail is String && detail.length <= 300 && !DEVICE_PATH.containsMatchIn(detail)))
+		}
+	}
+
+	/** `[{"id", "state"}]`: what became of the instructions the connector took for this run. */
+	private fun validInputReports(raw: Any?): Boolean {
+		if (raw == null) return true
+		val list = raw as? List<*> ?: return false
+		return list.size <= 100 && list.all { (it as? Map<*, *>)?.let { m -> m["id"] is String && m["state"] in INPUT_REPORTS } == true }
 	}
 
 	private fun validChanges(p: Map<String, Any?>): Boolean {
@@ -282,20 +423,50 @@ class RunService(
 					""".trimIndent(),
 				).param("reason", reason).param("workspace", workspace).param("runId", runId).update()
 				if (ended != 1) return
-				if (outcomeUnknown(reason, payload)) {
-					jdbc.sql(
-						"""
-						update work_items
-						   set wait_reasons = array_append(wait_reasons, 'outcome_unknown'), version = version + 1, updated_at = now()
-						 where id = :wid and not ('outcome_unknown' = any(wait_reasons)) and stage not in ('done', 'cancelled')
-						""".trimIndent(),
-					).param("wid", target.workItemId).update()
+				(payload["inputs"] as? List<*>).orEmpty().forEach { r ->
+					val m = r as Map<*, *> // checked by valid
+					applyInputReport(runId, m["id"] as String, m["state"] as String)
 				}
+				finishInputs(runId)
+				if (outcomeUnknown(reason, payload)) addWait(target.workItemId, "outcome_unknown")
+				if (readinessFailed(payload)) addWait(target.workItemId, "readiness_failed")
 				if (reason == "submitted" && target.delegationId != null) {
 					workItems.followRun(target.workItemId, runId, WorkItemService.RunStep.SUBMITTED)
 				}
 			}
 		}
+	}
+
+	/** A server-set wait reason (contract "대기 사유"); a closed work item gets none. */
+	private fun addWait(workItemId: String, reason: String) {
+		jdbc.sql(
+			"""
+			update work_items
+			   set wait_reasons = array_append(wait_reasons, :reason), version = version + 1, updated_at = now()
+			 where id = :wid and not (:reason = any(wait_reasons)) and stage not in ('done', 'cancelled')
+			""".trimIndent(),
+		).param("reason", reason).param("wid", workItemId).update()
+	}
+
+	/** Moves one instruction of this run forward: pending → sent → delivered, or to undelivered. Never back. */
+	private fun applyInputReport(runId: String, inputId: String, state: String) {
+		if (state !in INPUT_REPORTS) return
+		jdbc.sql(
+			"""
+			update run_inputs
+			   set state = :state,
+			       sent_at = case when :state in ('sent', 'delivered') then coalesce(sent_at, now()) else sent_at end,
+			       delivered_at = case when :state = 'delivered' then now() else delivered_at end
+			 where id = :id and run_id = :run
+			   and (state = 'pending' or (state = 'sent' and :state in ('delivered', 'undelivered')))
+			""".trimIndent(),
+		).param("state", state).param("id", inputId).param("run", runId).update()
+	}
+
+	/** Once a run ended, an instruction its executor did not take is undelivered; a person can resend it by resuming. */
+	private fun finishInputs(runId: String) {
+		jdbc.sql("update run_inputs set state = 'undelivered' where run_id = :run and state in ('pending', 'sent')")
+			.param("run", runId).update()
 	}
 
 	/**
@@ -307,4 +478,8 @@ class RunService(
 		val executorStarted = payload["executor_started"] as? Boolean ?: return reason == "lost"
 		return executorStarted && payload["result_seen"] != true
 	}
+
+	/** FN-0406, G38.3: the connector's check before starting the executor failed, so it never started. */
+	private fun readinessFailed(payload: Map<String, Any?>): Boolean =
+		payload["executor_started"] == false && (payload["readiness"] as? Map<*, *>)?.get("ok") == false
 }

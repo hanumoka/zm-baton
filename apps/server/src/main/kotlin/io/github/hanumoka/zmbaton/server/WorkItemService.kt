@@ -1,5 +1,6 @@
 package io.github.hanumoka.zmbaton.server
 
+import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonProperty
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
@@ -89,7 +90,30 @@ data class WorkItemDetail(
 )
 
 /** Whether a person can hand the work item to an AI now, and if not, why (contract "위임"). */
-data class DelegationAvailability(val allowed: Boolean, val reason: String?)
+data class DelegationAvailability(
+	val allowed: Boolean,
+	val reason: String?,
+	// Added with run control (stopping, resuming and steering a run).
+	/** `first`, `resume` (continue an `in_progress` work item) or `reject_and_resume`; null when not allowed. */
+	val mode: String? = null,
+	/** The request needs a note: why the result goes back. */
+	@JsonProperty("needs_note") val needsNote: Boolean = false,
+	/** The run a continuing run follows, so a screen can offer its repository and tools again. */
+	@JsonProperty("resume_from") val resumeFrom: PreviousRun? = null,
+)
+
+/** The newest delegated run of a work item that a connector claimed and that has ended. */
+data class PreviousRun(
+	@JsonProperty("run_id") val runId: String,
+	@JsonProperty("end_reason") val endReason: String,
+	@JsonProperty("device_id") val deviceId: String?,
+	@JsonProperty("repo_key") val repoKey: String,
+	@JsonProperty("base_branch") val baseBranch: String?,
+	@JsonProperty("allowed_tools") val allowedTools: List<String>,
+	/** Read by the server only: the executor session and worktree a resumed run may continue. */
+	@JsonIgnore val sessionId: String? = null,
+	@JsonIgnore val workspace: Map<String, Any?>? = null,
+)
 
 data class TransitionIn(val to: String, val version: Long, val note: String? = null)
 
@@ -269,6 +293,7 @@ class WorkItemService(
 		val row = load(id) ?: throw NotFoundException("no work item $id")
 		val view = jdbc.sql("$SELECT_VIEW where w.id = :id").param("id", id).query { rs, _ -> view(rs) }.single()
 		val facts = facts(row)
+		val plan = Workflow.delegationPlan(facts)
 		val history = jdbc.sql(
 			"""
 			select action, actor_kind, actor_id, details::text, at from audit_log
@@ -283,7 +308,10 @@ class WorkItemService(
 			facts.readOnlyReason,
 			Workflow.moves(facts).map { MoveView(it.target, it.path, it.allowed, it.reason, it.needsNote) },
 			history,
-			Workflow.delegationRefusal(facts).let { DelegationAvailability(it == null, it) },
+			DelegationAvailability(
+				plan.mode != null, plan.refusal, plan.mode?.name?.lowercase(), plan.needsNote,
+				if (plan.mode == Workflow.DelegationMode.FIRST) null else previousRun(id),
+			),
 		)
 	}
 
@@ -369,6 +397,39 @@ class WorkItemService(
 		sessions.audit("system", runId, "work_item.stage_changed", "wrk", id, mapOf("from" to from, "to" to stage, "path" to path, "run_id" to runId))
 	}
 
+	/**
+	 * The newest delegated run of the work item that a connector claimed and that has ended: the
+	 * run a continuing run follows (contract "실행 권리 청구" 1-2, `resumed_from_run_id`).
+	 */
+	fun previousRun(id: String): PreviousRun? =
+		jdbc.sql(
+			"""
+			select r.id, r.end_reason, r.device_id, d.scope::text, r.executor_session_id, r.workspace::text
+			  from runs r join delegations d on d.id = r.delegation_id
+			 where r.work_item_id = :id and r.state = 'ended' and r.claimed_at is not null
+			 order by r.created_at desc, r.id desc limit 1
+			""".trimIndent(),
+		).param("id", id).query { rs, _ ->
+			val scope = json.readValue(rs.getString(4), mapType)
+			PreviousRun(
+				rs.getString(1), rs.getString(2), rs.getString(3), scope["repo_key"] as String, scope["base_branch"] as String?,
+				(scope["allowed_tools"] as? List<*>).orEmpty().map { it.toString() }, rs.getString(5),
+				rs.getString(6)?.let { json.readValue(it, mapType) },
+			)
+		}.optional().orElse(null)
+
+	/** Takes off server-set wait reasons a person has dealt with by handing the work item on. */
+	fun clearWaits(id: String, reasons: Collection<String>) {
+		jdbc.sql(
+			"""
+			update work_items
+			   set wait_reasons = array(select r from unnest(wait_reasons) r where r <> all(array[:reasons]::text[])),
+			       version = version + 1, updated_at = now()
+			 where id = :id and wait_reasons && array[:reasons]::text[]
+			""".trimIndent(),
+		).param("reasons", reasons.toList()).param("id", id).update()
+	}
+
 	// ---------------------------------------------------------------- internals
 
 	internal data class Row(
@@ -384,6 +445,7 @@ class WorkItemService(
 		val sourceOfTruth: String,
 		val gitRef: Map<String, Any?>?,
 		val hasLiveRun: Boolean,
+		val lastRunEnd: String?,
 	)
 
 	private fun load(id: String, forUpdate: Boolean = false): Row? =
@@ -391,7 +453,10 @@ class WorkItemService(
 			"""
 			select w.id, w.stage, w.wait_reasons, w.version, w.responsible_user_id, w.executor_kind, w.executor_id,
 			       w.acceptance, w.source_ref, w.source_of_truth, w.git_ref::text,
-			       exists (select 1 from runs r where r.work_item_id = w.id and r.state <> 'ended') as live_run
+			       exists (select 1 from runs r where r.work_item_id = w.id and r.state <> 'ended') as live_run,
+			       (select r.end_reason from runs r
+			         where r.work_item_id = w.id and r.delegation_id is not null and r.state = 'ended' and r.claimed_at is not null
+			         order by r.created_at desc, r.id desc limit 1) as last_run_end
 			  from work_items w where w.id = :id
 			""".trimIndent() + if (forUpdate) " for update of w" else "",
 		).param("id", id).query { rs, _ ->
@@ -399,7 +464,7 @@ class WorkItemService(
 			Row(
 				rs.getString(1), rs.getString(2), (rs.getArray(3).array as Array<String>).toList(), rs.getLong(4),
 				rs.getString(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getString(9), rs.getString(10),
-				rs.getString(11)?.let { json.readValue(it, mapType) }, rs.getBoolean(12),
+				rs.getString(11)?.let { json.readValue(it, mapType) }, rs.getBoolean(12), rs.getString(13),
 			)
 		}.optional().orElse(null)
 
@@ -416,7 +481,8 @@ class WorkItemService(
 		return row
 	}
 
-	private fun facts(row: Row) = Workflow.Facts(row.stage, row.executorKind, row.hasLiveRun, skippedStages(), readOnlyReason(row))
+	private fun facts(row: Row) =
+		Workflow.Facts(row.stage, row.executorKind, row.hasLiveRun, skippedStages(), readOnlyReason(row), row.lastRunEnd)
 
 	private fun readOnlyReason(row: Row): String? =
 		if (row.sourceOfTruth == "git") {
