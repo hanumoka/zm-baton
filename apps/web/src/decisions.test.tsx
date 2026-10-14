@@ -26,19 +26,27 @@ import {
 import { DecisionMark } from './icons/DecisionMark';
 import type { Decision, DecisionDetail, Project, WorkItem } from './workApi';
 
-const decision = (over: Partial<Decision> = {}): Decision => ({
-  id: 'dcs_a',
-  external_ref: 'DEC-0106',
-  question: '1단계는 기능을 먼저 쓸 만하게 만든다',
-  status: 'accepted',
-  decided_on: '2026-10-12',
-  projects: [{ id: 'prj_a', external_ref: 'PRJ-009', name: 'zm-baton' }],
-  choice_preview: '2026-10-12 소유자가 정했다.',
-  supersedes: null,
-  superseded_by: null,
-  updated_at: '2026-10-13T00:00:00Z',
-  ...over,
-});
+const decision = (over: Partial<Decision> = {}): Decision => {
+  const d: Decision = {
+    id: 'dcs_a',
+    external_ref: 'DEC-0106',
+    question: '1단계는 기능을 먼저 쓸 만하게 만든다',
+    status: 'accepted',
+    decided_on: '2026-10-12',
+    projects: [{ id: 'prj_a', external_ref: 'PRJ-009', name: 'zm-baton' }],
+    choice_preview: '2026-10-12 소유자가 정했다.',
+    supersedes: null,
+    superseded_by: null,
+    updated_at: '2026-10-13T00:00:00Z',
+    number: null,
+    ref: null,
+    source_of_truth: 'git',
+    version: 0,
+    ...over,
+  };
+  // A copy from zm-docs is called by its zm-docs number unless the fixture says otherwise.
+  return { ...d, ref: 'ref' in over ? (over.ref ?? null) : d.external_ref };
+};
 
 const work = (over: Partial<WorkItem> = {}): WorkItem => ({
   id: 'wrk_a',
@@ -70,20 +78,36 @@ const old = decision({
   question: 'AI 계정 자동 전환에 한도 도달을 포함한다',
   status: 'superseded',
   decided_on: '2026-10-04',
-  superseded_by: { id: 'dcs_new', external_ref: 'DEC-0077', question: '한도 도달 때 같은 공급자의 개인 구독으로 넘기지 않는다' },
+  superseded_by: { id: 'dcs_new', external_ref: 'DEC-0077', question: '한도 도달 때 같은 공급자의 개인 구독으로 넘기지 않는다', ref: 'DEC-0077' },
 });
 const replacing = decision({
   id: 'dcs_new',
   external_ref: 'DEC-0077',
   question: '한도 도달 때 같은 공급자의 개인 구독으로 넘기지 않는다',
   decided_on: '2026-10-05',
-  supersedes: { id: 'dcs_old', external_ref: 'DEC-0047', question: 'AI 계정 자동 전환에 한도 도달을 포함한다' },
+  supersedes: { id: 'dcs_old', external_ref: 'DEC-0047', question: 'AI 계정 자동 전환에 한도 도달을 포함한다', ref: 'DEC-0047' },
 });
 const proposed = decision({ id: 'dcs_p', external_ref: 'DEC-0110', question: '정할 것', status: 'proposed', decided_on: null, choice_preview: null });
 const rejected = decision({ id: 'dcs_r', external_ref: 'DEC-0090', question: '기각된 것', status: 'rejected', decided_on: '2026-10-08' });
 const all = [decision(), old, replacing, proposed, rejected, decision({ id: 'dcs_b', external_ref: 'DEC-0105', decided_on: '2026-10-10' })];
 
 const view = (over: Partial<DecisionsView> = {}): DecisionsView => ({ ...NO_FILTERS, selected: null, ...over });
+
+/** The fields a Git copy's detail has empty, as the server sends them. */
+const NOT_MADE_HERE = {
+  context: null,
+  options: [],
+  chosen_option: null,
+  rationale: null,
+  review_conditions: null,
+  roles: { driver: null, approver: null, contributors: [], informed: [] },
+  approver: 'usr_owner',
+  work_items: [],
+  approvals: [],
+  read_only_reason: '정본이 Git 파일(docs/governance/decisions/DEC-0077-x.md)이다. 원본에서 고치고 다시 가져온다',
+  actions: [],
+  history: [],
+};
 
 function list(state: ListState, items: Decision[] = [], selected: string | null = null, showPast = false) {
   return renderToStaticMarkup(
@@ -98,6 +122,7 @@ function list(state: ListState, items: Decision[] = [], selected: string | null 
       onShowPast={() => {}}
       onClearFilters={() => {}}
       onReload={() => {}}
+      onNew={() => {}}
     />,
   );
 }
@@ -225,12 +250,14 @@ describe('empty states', () => {
     expect(listState({ ...base, items: [decision()], visible: 1, error: 'HTTP 503' })).toEqual({ kind: 'rows' });
   });
 
-  it('draws the three with the work screen parts: nothing imported, filtered to nothing, a failed read', () => {
+  it('draws the three with the work screen parts: nothing yet, filtered to nothing, a failed read', () => {
     const unused = list({ kind: 'unused' });
     expect(unused).toContain('empty-state is-unused');
-    expect(unused).toContain('아직 가져온 결정이 없다');
+    expect(unused).toContain('아직 결정이 없다');
+    // The one action that makes one, and where the Git copies come from.
+    expect(unused).toMatch(/<div class="es-act"><button type="button" class="btn btn-primary">.*새 결정 제안하기<\/button>/);
     expect(unused).toContain('<code>zm-baton import zm-docs --apply</code>');
-    expect(unused).toContain('정본이 Git 파일이라 여기서는 읽기만 하고');
+    expect(unused).toContain('정본이 Git 파일이라 여기서는 읽기만 한다');
 
     const filtered = list({ kind: 'filtered', conditions: ['상태 제안'] });
     expect(filtered).toContain('empty-state is-empty');
@@ -279,6 +306,7 @@ describe('supersession links', () => {
     ],
     source_of_truth: 'git',
     git_ref: { path: 'docs/governance/decisions/DEC-0077-x.md', commit: '29d648af389546fc' },
+    ...NOT_MADE_HERE,
   });
 
   it('shows both directions as buttons that name the other decision', () => {

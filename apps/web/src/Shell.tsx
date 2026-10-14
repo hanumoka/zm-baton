@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { App as RunTest } from './App';
 import { Decisions } from './decisions/Decisions';
+import { Documents } from './documents/Documents';
 import { BUCKETS, newImmediate } from './inboxModel';
 import { Inbox } from './inbox/Inbox';
 import { Kit } from './kit/Kit';
@@ -21,6 +22,7 @@ const currentHash = () => (typeof window === 'undefined' ? '' : window.location.
 export const FINDS: Partial<Record<ScreenId, Pick<Find, 'placeholder' | 'label'>>> = {
   work: { placeholder: '작업 찾기, 화면 이동은 > 로 시작', label: '작업 찾기(제목·번호·다음 행동) 또는 화면 이동' },
   decisions: { placeholder: '결정 찾기, 화면 이동은 > 로 시작', label: '결정 찾기(번호·질문·결정) 또는 화면 이동' },
+  documents: { placeholder: '문서 찾기, 화면 이동은 > 로 시작', label: '문서 찾기(제목·Git 경로) 또는 화면 이동' },
   sessions: { placeholder: '세션 찾기, 화면 이동은 > 로 시작', label: '세션 찾기(세션 번호·하는 일·브랜치) 또는 화면 이동' },
 };
 
@@ -61,6 +63,7 @@ export function Shell() {
       // A screen that is not shown is not read: its old failure says nothing now.
       if (next !== 'work') cleared('work');
       if (next !== 'decisions') cleared('decisions');
+      if (next !== 'documents') cleared('documents');
     };
     window.addEventListener('hashchange', onHash);
     const clock = setInterval(() => setNow(Date.now()), 15_000);
@@ -131,7 +134,7 @@ export function Shell() {
   }
 
   const counts = { inbox: items?.length ?? 0, sessions: (sessions ?? []).filter((s) => s.state === 'live').length };
-  // The work, decisions and session screens find through the command line; a leading > still opens a screen.
+  // The work, decisions, documents and session screens find through the command line; a leading > still opens a screen.
   const finds = FINDS[screen];
   const find: Find | undefined = finds && {
     value: findQ,
@@ -192,6 +195,15 @@ export function Shell() {
             <Decisions
               onError={failed('decisions')}
               onRead={() => cleared('decisions')}
+              chipHost={chipHost}
+              query={isCommand(findQ) ? '' : findQ}
+              onClearQuery={() => setFindQ('')}
+            />
+          )}
+          {screen === 'documents' && (
+            <Documents
+              onError={failed('documents')}
+              onRead={() => cleared('documents')}
               chipHost={chipHost}
               query={isCommand(findQ) ? '' : findQ}
               onClearQuery={() => setFindQ('')}

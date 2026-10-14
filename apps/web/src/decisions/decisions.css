@@ -64,3 +64,61 @@
 }
 .dc-note { margin: 0 0 var(--s-2); font-size: var(--fs-xs); line-height: var(--lh-row); color: var(--c-ink-2); }
 .dt-aside .dc-link { max-width: none; }
+
+/* A decision made here: the chosen option, the options with the chosen one marked, the roles */
+.dc-chosen { display: flex; align-items: baseline; gap: var(--s-2); margin: 0 0 var(--s-2); }
+.dc-chosen code,
+.dc-opt-t code { font-size: var(--fs-xs); color: var(--c-ink-2); }
+/* The options as a plain list: the key in the gutter, the chosen one bold and named so */
+.dc-opts { display: flex; flex-direction: column; gap: var(--s-3); max-width: var(--w-text); margin: 0; padding: 0; list-style: none; }
+.dc-opt-t { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-2); margin: 0; font-weight: var(--fw-medium); }
+.dc-opt-t code { min-width: var(--s-4); }
+.dc-opts li.is-chosen .dc-opt-t span { font-weight: var(--fw-bold); }
+.dc-opt-t small { padding: 0 var(--s-1); border: var(--rule) solid var(--c-ink-2); border-radius: var(--r-xs); font-size: var(--fs-xs); font-weight: var(--fw-semi); color: var(--c-ink); }
+.dc-opts .prose { margin-top: var(--s-1); padding-left: calc(var(--s-4) + var(--s-2)); font-size: var(--fs-sm); color: var(--c-ink-2); }
+.dc-roles { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s-1) var(--s-4); margin: 0; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.dc-roles div { display: contents; }
+.dc-roles dt { color: var(--c-ink-2); }
+.dc-roles dd { margin: 0; }
+
+/* What may happen next, and who approves */
+.dc-who { margin: var(--s-2) 0 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.dc-who code { color: var(--c-ink); }
+
+/* The aside of a decision made here: linked work, approvals and history, one under another */
+.dt-aside .dc-aside-h { margin-top: var(--s-5); }
+.dc-gap { margin-bottom: 0; }
+.wd-hist code { font-size: var(--fs-xs); }
+
+/* Decisions linked to a work item, at the top of the work detail's aside */
+.dc-linked { margin-bottom: var(--s-5); }
+
+/* The decision form (new, change, replace): the work screen's form parts and these */
+.dform-set { display: grid; gap: var(--s-2); min-width: 0; margin: 0; padding: 0; border: 0; }
+.dform-set legend { margin-bottom: var(--s-1); padding: 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.dform-none { margin: 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.dform-opts { display: flex; flex-direction: column; gap: var(--s-2); margin: 0; padding: 0; list-style: none; }
+.dform-opt { display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; align-items: start; gap: var(--s-2); }
+.dform-opt-fields { display: grid; gap: var(--s-1); min-width: 0; }
+/* work.css stacks a form's labels; a check keeps its box beside its words (and styles.css stretches inputs). */
+.dform label.check { flex-direction: row; align-items: center; gap: var(--s-2); color: var(--c-ink); }
+.dform .check input { flex: none; }
+.dform-pick { min-height: var(--h-ctl); padding-left: 0; }
+.dform-pick code { font-size: var(--fs-sm); color: var(--c-ink); }
+.dform-checks { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-2); }
+.dform-checks .check { padding-left: 0; }
+.dform-checks code { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.dform-fixed { display: flex; flex-direction: column; gap: var(--s-1); font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.dform-fixed p { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); min-height: var(--h-ctl); margin: 0; }
+.dform-fixed code { color: var(--c-ink); }
+.dform-fixed small { font-size: var(--fs-xs); }
+.dform-sup p { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin: 0; font-weight: var(--fw-medium); }
+.dform-work { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); }
+.dform-work .dc-link-l1 { min-width: 0; }
+.dform-work .dc-link-t { -webkit-line-clamp: 1; line-clamp: 1; }
+.dform .wd-refused { margin: 0; }
+
+@media (max-width: 760px) {
+  .dform-opt { grid-template-columns: max-content minmax(0, 1fr); }
+  .dform-opt > .btn { grid-column: 2; justify-self: start; }
+}
