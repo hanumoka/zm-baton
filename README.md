@@ -7,6 +7,8 @@
 - 1단계 설치·호환 시험을 마쳤다. 서버, 로컬 연결 프로그램, Web 화면, 데스크톱 껍데기가 이 PC에서 실제 Claude Code와 함께 돈다. 결과는 [docs/stage1/compat-test-results.md](docs/stage1/compat-test-results.md)에 있다.
 - 직접 돌려 보려면 [docs/stage1/run-locally.md](docs/stage1/run-locally.md)를 따른다. 인증이 아직 없어 서버는 이 PC 안(`127.0.0.1`)에서만 접속을 받는다.
 - 1단계 첫 묶음: 터미널에서 직접 연 Claude Code 세션이 서버에 등록되고, 웹의 「나를 기다리는 것」과 「세션 현황」에 세션마다 하는 일, 같은 파일 충돌, 입력을 기다리는 세션이 보인다. 쓰는 방법은 [docs/stage1/sessions.md](docs/stage1/sessions.md)에 있다.
+- 맡긴 AI 실행의 결과는 스냅샷 커밋으로 고정하고, 위험 경로에 걸린 것과 표본만 「나를 기다리는 것」으로 보내 사람이 승인·반려한다. 나머지는 「사람 미확인」으로 남는다. 쓰는 방법은 [docs/stage1/human-review.md](docs/stage1/human-review.md)에 있다.
+- 작업에 질문을 남기면 원문 책임자의 「나를 기다리는 것」으로 가고, 답이 올 때까지 작업에 「질문 답 대기」가 붙는다. AI 실행이 물은 것은 답을 다음 실행의 지시에 넣어 이어 간다. 쓰는 방법은 [docs/stage1/questions.md](docs/stage1/questions.md)에 있다.
 - 문서마다 정본 위치(제품 안 / Git)를 하나로 정하고, 제품 안 문서는 판을 쌓아 승인한다. 쓰는 방법은 [docs/stage1/documents.md](docs/stage1/documents.md)에 있다.
 - 데이터베이스는 매일 백업되고, 손으로 백업·복원하고 백업을 먼저 뜬 뒤 업데이트하는 스크립트가 있다([docs/stage1/backup-restore-update.md](docs/stage1/backup-restore-update.md)). 감사 기록·보존 규칙·내보내기는 [docs/stage1/audit-retention-export.md](docs/stage1/audit-retention-export.md)에 있다.
 - 변경은 PR로 들어온다. 모든 PR에 CI가 돈다. 검토 기준은 [docs/review-standard.md](docs/review-standard.md)에 있다.

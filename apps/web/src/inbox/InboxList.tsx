@@ -5,7 +5,7 @@ import { EmptyState } from '../ui/EmptyState';
 import { GroupHead, GroupSubHead, RowSkeleton } from '../ui/Group';
 import { ListPane, type ListHead } from '../ui/ListPane';
 import { tabStop } from '../ui/rowKeys';
-import { filePath, groupAside, itemSessions, kindOf, notifyLabel, rowOrder, rowTitle, type InboxGroup, type ListState } from './inboxView';
+import { filePath, groupAside, itemSessions, kindOf, notifyLabel, reviewFiles, rowOrder, rowTitle, type InboxGroup, type ListState } from './inboxView';
 import { RelayState } from './RelayDetail';
 import { isRelay, relayActive } from './relayView';
 
@@ -28,6 +28,8 @@ type Props = {
   /** Enter on a row: the detail takes the focus (wide) or opens as a sheet (narrow). */
   onOpen: (id: string) => void;
   onReload: () => void;
+  /** What the last verdict did, shown above the groups until the next one. */
+  done?: { text: string; href: string | null } | null;
 };
 
 /**
@@ -36,10 +38,23 @@ type Props = {
  * yet says so in its head, so an empty box never reads as 「nothing came」. The keys are the work
  * list's: the arrows, Home and End move the selection, Enter opens it.
  */
-export function InboxList({ state, groups, head, selected, sessions, now, focusOn = false, relayOn = null, onSelect, onPick, onOpen, onReload }: Props) {
+export function InboxList({ state, groups, head, selected, sessions, now, focusOn = false, relayOn = null, onSelect, onPick, onOpen, onReload, done = null }: Props) {
   const order = rowOrder(groups);
   return (
     <ListPane title="나를 기다리는 것 목록" head={head} by="급한 순서로 묶음" order={order} onSelect={onSelect} onOpen={onOpen}>
+      {done && (
+        <p className="ib-done" role="status">
+          <Icon name="done" />
+          <span>
+            {done.text}.{' '}
+            {done.href && (
+              <a href={done.href}>
+                작업 열기
+              </a>
+            )}
+          </span>
+        </p>
+      )}
       <ListBody
         state={state}
         groups={groups}
@@ -96,8 +111,8 @@ function ListBody({
             </a>
           }
         >
-          등록한 AI 세션이 권한을 묻거나 선택형 질문을 내거나 터미널에서 입력을 기다리면, 또는 두 세션이 같은 파일을 고치면 여기에 쌓인다. 위험 목록·표본
-          검토는 아직 서버가 만들지 않는다.
+          등록한 AI 세션이 권한을 묻거나 선택형 질문을 내거나 터미널에서 입력을 기다리면, 두 세션이 같은 파일을 고치면, 맡긴 AI 실행의 결과가 위험 경로에
+          걸리거나 표본으로 뽑히면 여기에 쌓인다.
         </EmptyState>
       );
     case 'rows':
@@ -160,6 +175,7 @@ export function InboxRow({
   onPick: (id: string) => void;
 }) {
   const kind = kindOf(item);
+  const files = reviewFiles(item);
   return (
     <button
       type="button"
@@ -181,6 +197,13 @@ export function InboxRow({
         {isRelay(item) && <RelayState item={item} now={now} />}
         {relayActive(item) && <span className={item.notify === 'immediate' ? 'ib-ntf is-now' : 'ib-ntf'}>{notifyLabel(item)}</span>}
         {item.repeat_count > 0 && <span className="ib-rep num">반복 {item.repeat_count}회</span>}
+        {item.promoted_at && <span className="ib-ntf is-now">오래 기다려 위로 올림</span>}
+        {files && (
+          <span className="ib-rv-file">
+            {files.first}
+            {files.more > 0 && ` 외 ${files.more}개`}
+          </span>
+        )}
         {itemSessions(item).map((s) => (
           <span key={s.id} className="ib-ses-ref">
             <code>{shortId(s.id)}</code>

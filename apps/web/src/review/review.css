@@ -1,0 +1,57 @@
+/*
+ * Review requests (FN-0411) on the first screen and the risk path list screen. The layout, the
+ * detail head and the buttons are shared (ui/panes.css, inbox/inbox.css); here are the matched
+ * patterns with their files, the pinned target, the rejection form and the list editor.
+ * Every value is a token.
+ */
+
+/* Why it came to me: each pattern, then the files it caught */
+.rv-matches { display: flex; flex-direction: column; gap: var(--s-3); max-width: var(--w-text); margin: var(--s-3) 0 0; padding: 0; list-style: none; }
+.rv-pat { display: flex; align-items: baseline; gap: var(--s-2); margin: 0 0 var(--s-1); font-size: var(--fs-sm); }
+.rv-pat-l { color: var(--c-ink-2); }
+.rv-pat code { font-weight: var(--fw-semi); color: var(--c-ink); }
+
+/* The verdict buttons carry what each does; long words wrap inside the button, never past the column */
+.rv-dt .ib-acts .btn { max-width: 100%; white-space: normal; text-align: left; }
+
+/* The result it is about: label over value, the pairs wrap on narrow screens */
+.rv-target { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-6); margin: 0 0 var(--s-3); font-size: var(--fs-sm); line-height: var(--lh-row); }
+.rv-target div { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
+.rv-target dt { color: var(--c-ink-2); }
+.rv-target dd { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-2); margin: 0; min-width: 0; }
+.rv-target code { overflow-wrap: anywhere; }
+.rv-unpinned { display: inline-flex; align-items: flex-start; gap: var(--s-1); color: var(--c-warn); }
+.rv-unpinned .ico { margin-top: var(--s-0); }
+
+/* Rejecting: the reason and, for a sample, a risk path candidate */
+.rv-reject { flex-direction: column; align-items: stretch; }
+.rv-reject label { flex-basis: auto; }
+.rv-reject textarea { resize: vertical; }
+.rv-mono { font-family: var(--font-mono); font-size: var(--fs-sm); }
+.rv-reject .ctl-why { margin-top: 0; }
+
+/* A review row's second line: the first caught or changed file */
+.ib-rv-file { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--c-ink-2); overflow-wrap: anywhere; }
+
+/* The run list's line: the person's review and the automatic check, apart */
+.hr-review { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-1) var(--s-3); margin: 0; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.hr-review strong { font-weight: var(--fw-semi); }
+.hr-review .is-wait { color: var(--c-warn); }
+.hr-review .is-none { color: var(--c-ink-2); }
+.hr-review a { color: var(--c-ink); text-underline-offset: var(--underline-gap); }
+
+/* Risk path list screen */
+.rk .lrow-sub > * { margin-right: var(--s-3); }
+.rk .lrow-sub > :last-child { margin-right: 0; }
+.rk-scope { display: flex; align-items: baseline; gap: var(--s-2); }
+.rk-src { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.rk-edit { display: flex; flex-direction: column; gap: var(--s-2); max-width: var(--w-text); margin: 0; }
+.rk-edit label { display: flex; flex-direction: column; gap: var(--s-1); font-size: var(--fs-sm); color: var(--c-ink-2); }
+.rk-edit textarea { width: 100%; min-height: calc(var(--h-ctl) * 8); resize: vertical; font-family: var(--font-mono); font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink); }
+.rk-nums { display: flex; flex-wrap: wrap; gap: var(--s-3); }
+.rk-nums label { flex: 0 1 var(--w-cell); }
+.rk-nums input { width: 100%; }
+.rk-props { display: flex; flex-direction: column; gap: var(--s-3); max-width: var(--w-text); margin: 0; padding: 0; list-style: none; }
+.rk-props li { display: flex; flex-direction: column; gap: var(--s-1); }
+.rk-props code { font-weight: var(--fw-semi); color: var(--c-ink); }
+.rk-props .wd-acts { margin-top: var(--s-1); }

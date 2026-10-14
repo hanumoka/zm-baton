@@ -122,7 +122,7 @@ describe('buckets', () => {
 
   it('says a bucket the server does not fill yet is not made, and a clear bucket that it is clear', () => {
     const notes = inboxGroups([]).map(groupNote);
-    expect(notes).toEqual(['권한 요청이 없다', '기다리는 세션이 없다', '겹친 파일이 없다', '서버가 아직 만들지 않는다', '서버가 아직 만들지 않는다']);
+    expect(notes).toEqual(['권한 요청이 없다', '기다리는 질문과 세션이 없다', '겹친 파일이 없다', '사람이 볼 위험 결과가 없다', '고른 표본과 알림이 없다']);
   });
 
   it('draws an empty bucket as one line in its head, not a box, and a full one with its rows', () => {
@@ -194,7 +194,7 @@ describe('empty states', () => {
     const empty = list({ kind: 'empty' });
     expect(empty).toContain('empty-state is-empty');
     expect(empty).toContain('지금 나를 기다리는 것이 없다');
-    expect(empty).toContain('권한을 묻거나 선택형 질문을 내거나 터미널에서 입력을 기다리면, 또는 두 세션이 같은 파일을 고치면 여기에 쌓인다');
+    expect(empty).toContain('권한을 묻거나 선택형 질문을 내거나 터미널에서 입력을 기다리면, 두 세션이 같은 파일을 고치면, 맡긴 AI 실행의 결과가 위험 경로에');
     expect(empty).toContain('href="#sessions"');
 
     const error = list({ kind: 'error', message: 'HTTP 503: database is not reachable' });

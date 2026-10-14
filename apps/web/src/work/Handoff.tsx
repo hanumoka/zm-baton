@@ -3,6 +3,7 @@ import { accountsApi, type Account } from '../accountsApi';
 import { bucketOf, causeLabel, firstAccount, KIND_LABELS, runLimitsLine, todayLine } from '../accounts/accountView';
 import { Icon } from '../icons/Icon';
 import type { RunEvent } from '../api';
+import type { AskBody } from '../questionsApi';
 import { usePoll } from '../usePoll';
 import { workApi, type HandoffChoice, type ItemRun, type Repository, type WorkItemDetail } from '../workApi';
 import { endLabel, RunRow } from './RunRow';
@@ -37,13 +38,15 @@ type Props = {
   onWithdraw: (runId: string) => Promise<void>;
   /** Stops a claimed or running run; the server says when it may not. */
   onCancel?: (runId: string) => Promise<void>;
+  /** Records a run's question (FN-0210); absent, runs offer none. */
+  onAsk?: (body: AskBody) => Promise<void>;
 };
 
 /**
  * The handoff block of a work item: the form (or why it is locked) and the run list. It reads the
  * repositories and runs itself, again after every change to the work item.
  */
-export function Handoff({ detail, onDelegate, onWithdraw, onCancel = async () => {} }: Props) {
+export function Handoff({ detail, onDelegate, onWithdraw, onCancel = async () => {}, onAsk }: Props) {
   const id = detail.item.id;
   const [repos, setRepos] = useState<Repository[] | null>(null);
   /** AI accounts; null while read, or from a server without them (the server then picks the account). */
@@ -114,6 +117,7 @@ export function Handoff({ detail, onDelegate, onWithdraw, onCancel = async () =>
         onWithdraw={onWithdraw}
         onCancel={onCancel}
         onSendInput={sendInput}
+        onAsk={onAsk && detail.question?.allowed ? onAsk : undefined}
       />
     </>
   );
@@ -198,7 +202,7 @@ export function HandoffForm({
           onClick={start}
         >
           <Icon name="ai" />
-          {availability.allowed ? text.button : 'AI에게 맡기기'}
+          {availability.allowed ? (mode === 'resume' && (availability.answers_ready ?? 0) > 0 ? '답을 넣어 이어서 맡기기' : text.button) : 'AI에게 맡기기'}
         </button>
         {!availability.allowed && (
           <p className="wd-why" id={whyId}>
@@ -240,6 +244,9 @@ export function HandoffForm({
         }}
       >
         <p className="wn-lead">{text.lead}</p>
+        {mode === 'resume' && (availability.answers_ready ?? 0) > 0 && (
+          <p className="hf-prev">답이 온 질문 {availability.answers_ready}개가 이 실행의 지시에 들어간다(이어 가는 이유: 질문의 답이 왔다).</p>
+        )}
         {previous && (
           <p className="hf-prev">
             이어 갈 실행 <code>{previous.run_id}</code>
@@ -344,6 +351,7 @@ export function RunList({
   onWithdraw,
   onCancel = async () => {},
   onSendInput = async () => {},
+  onAsk,
 }: {
   runs: ItemRun[] | null;
   /** Events of the newest run, for its status and recent activity. */
@@ -354,6 +362,8 @@ export function RunList({
   onWithdraw: (runId: string) => Promise<void>;
   onCancel?: (runId: string) => Promise<void>;
   onSendInput?: (runId: string, text: string) => Promise<void>;
+  /** Records a run's question; absent while the work item takes none. */
+  onAsk?: (body: AskBody) => Promise<void>;
 }) {
   return (
     <section className="dt-sec">
@@ -375,6 +385,7 @@ export function RunList({
               onWithdraw={onWithdraw}
               onCancel={onCancel}
               onSendInput={onSendInput}
+              onAsk={onAsk}
             />
           ))}
         </ol>

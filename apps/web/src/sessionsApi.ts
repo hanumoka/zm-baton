@@ -33,6 +33,8 @@ export type InboxItem = {
   repeat_count: number;
   waiting_since: string;
   notify: 'immediate' | 'digest';
+  /** A review that waited longer than the organisation's hours, raised to bucket 1; an older server leaves it out. */
+  promoted_at?: string | null;
   // A relayed permission request or question (contract 「권한 요청과 선택형 질문을 첫 화면으로 중계한다」).
   // An older server leaves these out; every other kind is always open.
   state?: RelayState;

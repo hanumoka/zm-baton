@@ -36,7 +36,10 @@ export const rowOrder = (groups: InboxGroup[]) => groups.flatMap((g) => g.items.
 export function groupNote(g: Pick<InboxGroup, 'bucket' | 'raised'>): string {
   if (!g.raised) return '서버가 아직 만들지 않는다';
   if (g.bucket === 1) return '권한 요청이 없다';
-  return g.bucket === 2 ? '기다리는 세션이 없다' : '겹친 파일이 없다';
+  if (g.bucket === 2) return '기다리는 질문과 세션이 없다';
+  if (g.bucket === 4) return '사람이 볼 위험 결과가 없다';
+  if (g.bucket === 5) return '고른 표본과 알림이 없다';
+  return '겹친 파일이 없다';
 }
 
 /**
@@ -107,6 +110,7 @@ export function kindOf(item: InboxItem): KindView {
   if (isContradiction(item)) return { mark: 'doc', label: '모순 후보' };
   if (item.kind === 'notice') return { mark: 'conflict', label: '충돌' };
   if (item.kind === 'session_waiting') return { mark: 'wait', label: (WAIT_LABELS[waitKind(item)] ?? WAIT_OTHER).short };
+  if (item.kind === 'run_question') return { mark: 'ai', label: item.detail?.from_run === true ? '실행의 질문' : '질문' };
   return OTHER_KINDS[item.kind] ?? { mark: MARKS[item.bucket] ?? 'inbox', label: '알림' };
 }
 
@@ -149,10 +153,21 @@ export function rowTitle(item: InboxItem, sessions: SessionView[] | null): strin
   if (isContradiction(item)) return contradictionTitle(item);
   if (item.kind === 'notice') return filePath(item) ?? item.summary;
   if (isRelay(item)) return relayTitle(item);
+  // A review request: the work item it is about; its file goes on the second line.
+  if (item.kind === 'risk_review' || item.kind === 'sample_review') return text(item.detail?.title) ?? item.summary;
+  // A question: what is asked; the work item it is about goes on the second line.
+  if (item.kind === 'run_question') return text(item.detail?.body) ?? item.summary;
   if (item.kind === 'session_waiting') {
     return waitMessage(item) ?? sharedWork(liveSession(sessions, item.source_id)) ?? (WAIT_LABELS[waitKind(item)] ?? WAIT_OTHER).long;
   }
   return item.summary;
+}
+
+/** A review request's first caught (or changed) file and how many more, for its second line. */
+export function reviewFiles(item: InboxItem): { first: string; more: number } | null {
+  const files = item.detail?.files;
+  if (!Array.isArray(files) || files.length === 0 || typeof files[0] !== 'string') return null;
+  return { first: files[0], more: files.length - 1 };
 }
 
 /** The detail's title: what waits for me, in one sentence. */
