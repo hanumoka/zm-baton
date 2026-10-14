@@ -100,6 +100,10 @@ func (h *Handoff) claimNext(ctx context.Context) (*api.Claim, Repo, error) {
 			continue
 		}
 		repo, ok := repos[run.RepoKey]
+		if run.Purpose == api.PurposeMaster {
+			// The master's run needs no repository (master.go).
+			repo, ok = Repo{}, true
+		}
 		if !ok {
 			if !h.skipped[run.ID] {
 				h.skipped[run.ID] = true
@@ -127,6 +131,9 @@ func (h *Handoff) claimNext(ctx context.Context) (*api.Claim, Repo, error) {
 // the worktree; any failure ends the run before the executor. A continuing run reuses the earlier
 // run's worktree and session only as contract v1 "실행마다 별도 작업 트리" 6 allows (workspaceFor).
 func (h *Handoff) Execute(ctx context.Context, c api.Claim, repo Repo) Result {
+	if c.Purpose == api.PurposeMaster {
+		return h.executeMaster(ctx, c)
+	}
 	return h.runner.ExecuteJob(ctx, c, func(ctx context.Context, log *slog.Logger) (Job, error) {
 		ready := &Readiness{}
 		job := Job{Readiness: ready}
@@ -142,34 +149,8 @@ func (h *Handoff) Execute(ctx context.Context, c api.Claim, repo Repo) Result {
 			return job, ready.Fail("scope", "위임의 도구를 실행기에 넘길 수 없다: "+err.Error(), err)
 		}
 		ready.Pass("scope", "도구 "+strings.Join(tools, ", ")+". 명령 실행 도구는 넘기지 않는다")
-
-		version, v, err := claudeVersion(ctx, h.runner.cfg.ClaudePath)
-		if err != nil {
-			return job, ready.Fail("executor", "Claude Code의 판을 읽지 못했다", err)
-		}
-		if !versionAtLeast(v, MinClaudeVersion) {
-			return job, ready.Fail("executor", fmt.Sprintf("Claude Code %s 이상이 필요하다. 이 PC는 %s다", versionString(MinClaudeVersion), version), nil)
-		}
-		ready.Pass("executor", "Claude Code "+version)
-
-		// The account's way of signing in, and only that one (auth.go). A run handed over before
-		// accounts, or by an older server, has none and keeps the environment as it is.
-		if acct := c.Account; acct != nil {
-			sign, present, err := signInFor(*acct, os.Environ(), h.runner.cfg.ExecutorDir)
-			if err != nil {
-				return job, ready.Fail("account", err.Error(), nil)
-			}
-			if err := ensureConfigDir(sign.ConfigDir); err != nil {
-				return job, ready.Fail("account", "이 계정 전용 설정 폴더를 만들 수 없다", err)
-			}
-			ready.Pass("account", sign.Detail(*acct, present))
-			job.SignIn = &sign
-			log.Info("executor sign-in", "account_id", acct.ID, "method", sign.Method, "removed_present", present,
-				"own_config_folder", sign.ConfigDir != "")
-		}
-		job.Timeout, job.TimeoutIsLimit = runTimeout(h.runner.cfg.RunTimeout, c.Limits)
-		if c.Limits != nil {
-			job.MaxTurns, job.MaxBudgetUSD = c.Limits.MaxTurns, c.Limits.MaxBudgetUSD
+		if err := h.prepareExecutor(ctx, c, &job, log); err != nil {
+			return job, err
 		}
 
 		// Neither the repository nor its worktrees may sit under a temp folder (contract "실행할 때 넘기는 것").
@@ -224,6 +205,41 @@ func (h *Handoff) Execute(ctx context.Context, c api.Claim, repo Repo) Result {
 		job.ResumeSession = session
 		return job, nil
 	})
+}
+
+// prepareExecutor checks the executor's version and arranges its sign-in and limits, for a delegated
+// run and the master's run alike. A failed check is returned as the error ExecuteJob reports.
+func (h *Handoff) prepareExecutor(ctx context.Context, c api.Claim, job *Job, log *slog.Logger) error {
+	ready := job.Readiness
+	version, v, err := claudeVersion(ctx, h.runner.cfg.ClaudePath)
+	if err != nil {
+		return ready.Fail("executor", "Claude Code의 판을 읽지 못했다", err)
+	}
+	if !versionAtLeast(v, MinClaudeVersion) {
+		return ready.Fail("executor", fmt.Sprintf("Claude Code %s 이상이 필요하다. 이 PC는 %s다", versionString(MinClaudeVersion), version), nil)
+	}
+	ready.Pass("executor", "Claude Code "+version)
+
+	// The account's way of signing in, and only that one (auth.go). A run handed over before
+	// accounts, or by an older server, has none and keeps the environment as it is.
+	if acct := c.Account; acct != nil {
+		sign, present, err := signInFor(*acct, os.Environ(), h.runner.cfg.ExecutorDir)
+		if err != nil {
+			return ready.Fail("account", err.Error(), nil)
+		}
+		if err := ensureConfigDir(sign.ConfigDir); err != nil {
+			return ready.Fail("account", "이 계정 전용 설정 폴더를 만들 수 없다", err)
+		}
+		ready.Pass("account", sign.Detail(*acct, present))
+		job.SignIn = &sign
+		log.Info("executor sign-in", "account_id", acct.ID, "method", sign.Method, "removed_present", present,
+			"own_config_folder", sign.ConfigDir != "")
+	}
+	job.Timeout, job.TimeoutIsLimit = runTimeout(h.runner.cfg.RunTimeout, c.Limits)
+	if c.Limits != nil {
+		job.MaxTurns, job.MaxBudgetUSD = c.Limits.MaxTurns, c.Limits.MaxBudgetUSD
+	}
+	return nil
 }
 
 // workspaceFor picks the run's worktree (contract v1 "실행마다 별도 작업 트리" 1, 6):

@@ -6,7 +6,7 @@ import type { IconName } from '../icons/Icon';
  * address (#inbox, #work, ...) so a reload stays on the same screen.
  */
 
-export type ScreenId = 'inbox' | 'sessions' | 'work' | 'decisions' | 'documents' | 'risk' | 'runs' | 'me' | 'org' | 'accounts' | 'kit';
+export type ScreenId = 'inbox' | 'sessions' | 'work' | 'decisions' | 'documents' | 'risk' | 'runs' | 'me' | 'org' | 'accounts' | 'audit' | 'kit';
 
 export type Screen = {
   id: ScreenId;
@@ -41,6 +41,8 @@ export const SCREENS: Screen[] = [
   { id: 'me', label: '나', short: '나', icon: 'person', aliases: ['내 기록', '매니저', 'me'], inNav: true },
   { id: 'org', label: '조직', short: '조직', icon: 'team', aliases: ['팀', '사람', '역할', '저장소', '환경', 'org'], inNav: true },
   { id: 'accounts', label: 'AI 계정', short: '계정', icon: 'key', aliases: ['계정', '설정', '상한', '사용량', 'accounts', 'settings'], inNav: true },
+  // The icon set is at its 30-icon limit (DESIGN.md 「정한 것 넷」 2), so the audit log borrows the settings mark of its place.
+  { id: 'audit', label: '감사 기록', short: '감사', icon: 'settings', aliases: ['감사', '보존', '내보내기', 'audit', 'export'], inNav: true },
   { id: 'kit', label: '디자인 키트', short: '키트', icon: 'doc', aliases: [], inNav: false },
 ];
 
@@ -54,11 +56,11 @@ export const NAV_GROUPS: { id: string; label: string; items: ScreenId[] }[] = [
 
 /**
  * The screens at the foot of the sidebar, in the settings place (DESIGN.md 「화면 배치」 1: 설정 last):
- * 「나」 (my manager record, FN-0402), 「조직」 (the organisation's structure and roles, FN-0101) and the
- * AI accounts, whose usage limits are organisation settings (G39.4). A settings screen will hold the
- * last two as its parts; on narrow screens all three are under 「더 보기」.
+ * 「나」 (my manager record, FN-0402), 「조직」 (the organisation's structure and roles, FN-0101), the AI
+ * accounts and the audit log. Usage limits and retention are organisation settings (G39.4, G13.1): a
+ * settings screen will hold the last three as its parts. On narrow screens all four are under 「더 보기」.
  */
-export const FOOT_ITEMS: ScreenId[] = ['me', 'org', 'accounts'];
+export const FOOT_ITEMS: ScreenId[] = ['me', 'org', 'accounts', 'audit'];
 
 /** The four screens in the bottom tab bar; the rest go under 「더 보기」. */
 export const TAB_ITEMS: ScreenId[] = ['inbox', 'sessions', 'work', 'decisions'];

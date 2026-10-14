@@ -51,6 +51,11 @@ services:
       # authentication yet, any program on this PC, an AI session with a shell included, can
       # answer a relayed permission request (docs/hardening-backlog.md H-21).
       ZM_BATON_RELAY: ${ZM_BATON_RELAY:-off}
+      # The master's API path for document contradiction candidates (docs/stage1/contradictions.md,
+      # DEC-0095 1). Empty (the default) keeps it off: the owner's local connector then runs the
+      # master with the owner's own Claude Code login. Put the key only in deploy/compose/.env
+      # (git-ignored), never in this file; the server reads it per request and stores it nowhere.
+      ZM_BATON_MASTER_API_KEY: ${ZM_BATON_MASTER_API_KEY:-}
     ports:
       - "127.0.0.1:${ZM_BATON_HTTP_PORT:-18081}:18081"
     depends_on:

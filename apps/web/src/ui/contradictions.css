@@ -1,0 +1,40 @@
+/* Document contradiction candidates (ui/OpenContradictions, inbox/ContradictionDetail): two quoted
+   sentences, each under the record it comes from. A quote sits in a quiet block, not a coloured bar. */
+.cx-list { display: flex; flex-direction: column; gap: var(--s-4); margin: 0; padding: 0; list-style: none; }
+.cx-item { max-width: var(--w-text); }
+.cx-reason { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-2); margin: 0 0 var(--s-2); line-height: var(--lh-row); }
+.cx-state {
+  display: inline-block;
+  padding: 0 var(--s-1);
+  border: var(--rule) solid var(--c-rule-strong);
+  border-radius: var(--r-xs);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semi);
+  line-height: var(--lh-row);
+  color: var(--c-ink-2);
+}
+.cx-state.is-open { border-color: var(--c-ink-2); color: var(--c-ink); }
+.cx-sides { display: flex; flex-direction: column; gap: var(--s-3); max-width: var(--w-text); margin: 0; padding: 0; list-style: none; }
+.cx-side-h { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); margin: 0 0 var(--s-1); font-size: var(--fs-sm); font-weight: var(--fw-medium); line-height: var(--lh-row); }
+.cx-side-h .ico { color: var(--c-ink-2); }
+.cx-side-h a { overflow-wrap: anywhere; }
+.cx-side-h a,
+.cx-check a,
+.cx-run a { color: var(--c-accent); text-underline-offset: var(--underline-gap); }
+.cx-side-h a:hover,
+.cx-check a:hover,
+.cx-run a:hover { color: var(--c-accent-hover); }
+.cx-quote {
+  margin: 0;
+  padding: var(--s-2) var(--s-3);
+  background: var(--c-canvas);
+  border: var(--rule) solid var(--c-rule-soft);
+  border-radius: var(--r-sm);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cx-acts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-3); margin: var(--s-2) 0 0; }
+.cx-when { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.cx-check { display: flex; align-items: flex-start; gap: var(--s-2); max-width: var(--w-text); margin: var(--s-3) 0 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.cx-check .ico { margin-top: var(--s-0); flex: none; }

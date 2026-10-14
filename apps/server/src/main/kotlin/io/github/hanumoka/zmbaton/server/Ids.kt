@@ -70,6 +70,9 @@ object Ids {
 
 	fun environment(): String = "env_" + uuidV7()
 
+	/** A master check (MasterChecks.kt) has no contract prefix; `mck_` keeps it readable. */
+	fun masterCheck(): String = "mck_" + uuidV7()
+
 	/** Audit rows have no contract prefix; `aud_` keeps them readable next to the others. */
 	fun audit(): String = "aud_" + uuidV7()
 

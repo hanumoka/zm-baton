@@ -36,6 +36,11 @@ data class PendingRun(
 	@JsonProperty("device_id") val deviceId: String? = null,
 	/** The repository the run works in, so a connector claims only runs for repositories it has. */
 	@JsonProperty("repo_key") val repoKey: String? = null,
+	/**
+	 * Added with contradiction checks: `master_check` for the master's run, which needs no repository
+	 * (MasterChecks.kt); null for a work item's own run.
+	 */
+	val purpose: String? = null,
 )
 
 data class ClaimRequest(@JsonProperty("device_id") val deviceId: String)
@@ -55,6 +60,8 @@ data class Claimed(
 	val account: ClaimedAccount? = null,
 	/** Added with AI accounts: the run's usage limits; an absent field has no limit. */
 	val limits: ClaimedLimits? = null,
+	/** Added with contradiction checks: `master_check` for the master's run (no repository, read-only tools). */
+	val purpose: String? = null,
 )
 
 /**
@@ -125,7 +132,8 @@ data class PendingInput(val id: String, val text: String)
 data class ClaimedDelegation(
 	val id: String,
 	val executor: String,
-	@JsonProperty("repo_key") val repoKey: String,
+	/** Null for the master's run, which works in no repository. */
+	@JsonProperty("repo_key") val repoKey: String?,
 	@JsonProperty("base_branch") val baseBranch: String?,
 	@JsonProperty("allowed_tools") val allowedTools: List<String>,
 )

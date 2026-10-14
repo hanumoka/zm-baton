@@ -215,6 +215,34 @@ func fakeClaude(mode string, args []string) int {
 			}
 		}
 		return 0
+	case "master":
+		// The master's contradiction check: restricted, the hooks off, read-only tools, an empty folder
+		// of its own and the instruction on stdin. It answers with the JSON in ZMB_FAKE_RESULT.
+		if os.Getenv("ZM_BATON_OFF") != "1" || !has("--restricted") || !has("--strict-mcp-config") || !stream {
+			fmt.Fprintln(os.Stderr, "fake claude: a master run must be restricted, with the hooks off and the prompt on stdin")
+			return 5
+		}
+		if tools, _ := flag("--allowedTools"); tools != "Read,Glob,Grep" {
+			fmt.Fprintln(os.Stderr, "fake claude: a master run gets read-only tools, not "+tools)
+			return 14
+		}
+		if entries, err := os.ReadDir("."); err != nil || len(entries) > 0 {
+			fmt.Fprintln(os.Stderr, "fake claude: a master run starts in an empty folder")
+			return 15
+		}
+		if !strings.Contains(prompt, "S1 시작") {
+			fmt.Fprintln(os.Stderr, "fake claude: the prompt does not carry the material")
+			return 16
+		}
+		answer := os.Getenv("ZMB_FAKE_RESULT")
+		emit(blocks("assistant", map[string]any{"type": "text", "text": answer}))
+		emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": answer, "num_turns": 1,
+			"total_cost_usd": 0.01, "usage": map[string]any{"output_tokens": 40}})
+		if stream {
+			for in.Scan() {
+			}
+		}
+		return 0
 	case "edit", "edit-resume", "resume-missing":
 		// A delegated run: it must run with zm-baton's own hooks off, restricted, then change files in its folder.
 		if os.Getenv("ZM_BATON_OFF") != "1" {

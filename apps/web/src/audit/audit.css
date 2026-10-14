@@ -1,0 +1,48 @@
+/*
+ * The audit screen's own parts. The list-and-detail layout, the row and the detail head are shared
+ * (ui/panes.css). Here are the row's ids, the 「더 보기」 line, the target-number chip, the details as a
+ * key-value table and the retention table. Every value is a token.
+ */
+.au .lrow-sub > * { margin-right: var(--s-3); }
+.au .lrow-sub > :last-child { margin-right: 0; }
+.au-id { font-size: var(--fs-xs); color: var(--c-ink-2); }
+.au-actor { color: var(--c-ink-3); }
+.au-more { margin: 0; padding: var(--s-3) var(--s-4); }
+.au-note { max-width: var(--w-text); margin: var(--s-2) 0 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.au-more.au-note { margin: 0; }
+.au-tid code { font-size: var(--fs-xs); }
+.au-tid .ico { color: var(--c-ink-2); }
+
+.au-who { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); }
+.au-who .ico { color: var(--c-ink-2); }
+.au-who code { font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.au-target { margin: 0; overflow-wrap: anywhere; }
+.au-target code { font-size: var(--fs-sm); color: var(--c-ink); }
+.au-acts { display: flex; flex-wrap: wrap; gap: var(--s-2); margin: var(--s-3) 0 0; }
+
+/* Details: the server's keys as written, the values as text; nested values as indented JSON */
+.au-kv { display: grid; grid-template-columns: minmax(0, max-content) minmax(0, 1fr); gap: var(--s-2) var(--s-4); max-width: var(--w-text); margin: 0; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.au-kv div { display: contents; }
+.au-kv dt { color: var(--c-ink-2); }
+.au-kv dt code { font-size: var(--fs-xs); color: var(--c-ink-2); overflow-wrap: anywhere; }
+.au-kv dd { min-width: 0; margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.au-json {
+  margin: 0;
+  padding: var(--s-2) var(--s-3);
+  overflow-x: auto;
+  background: var(--c-canvas);
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-row);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Retention: kinds, how long each is kept and the setting that says so */
+.au-keep { max-width: var(--w-text); font-size: var(--fs-sm); }
+.au-keep code { font-size: var(--fs-xs); overflow-wrap: anywhere; }
+@media (max-width: 759px) {
+  .au-kv { grid-template-columns: minmax(0, 1fr); gap: var(--s-0) 0; }
+  .au-kv dd { margin-bottom: var(--s-2); }
+}

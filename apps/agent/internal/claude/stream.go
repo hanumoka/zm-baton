@@ -16,6 +16,10 @@ const Executor = "claude_code"
 // MaxText is the longest text (in characters) copied into one payload field.
 const MaxText = 4000
 
+// MaxResult is the longest final answer (in characters) kept for a job that sends its answer back in
+// the end report (the master's run, contract v1 "문서 모순 후보").
+const MaxResult = 64000
+
 // Activity kinds (contract v1 "공통 활동 종류") plus lifecycle.
 const (
 	KindThought      = "thought"
@@ -121,6 +125,9 @@ type Mapper struct {
 	apiKeySource  string
 	initSeen      bool
 	resultSubtype string
+	// resultText is the successful result's final answer, cut to MaxResult; resultCut says it was cut.
+	resultText string
+	resultCut  bool
 }
 
 // NewMapper returns an empty mapper.
@@ -144,6 +151,10 @@ func (m *Mapper) APIKeySource() (source string, ok bool) { return m.apiKeySource
 
 // ResultSubtype is the last result's subtype, e.g. success, error_max_turns or error_max_budget_usd.
 func (m *Mapper) ResultSubtype() string { return m.resultSubtype }
+
+// ResultText is the final answer of a successful result, cut to MaxResult characters, and whether it
+// was cut. Empty when no successful result arrived.
+func (m *Mapper) ResultText() (string, bool) { return m.resultText, m.resultCut }
 
 // TakeReplays returns the user messages echoed back since the last call, oldest first.
 func (m *Mapper) TakeReplays() []string {
@@ -321,6 +332,11 @@ func (m *Mapper) mapResult(sl streamLine) []Activity {
 		m.numTurns = *sl.NumTurns
 	}
 	m.resultSubtype = truncate(sl.Subtype, 60)
+	m.resultText, m.resultCut = "", false
+	if !m.failed {
+		m.resultText = truncate(sl.Result, MaxResult)
+		m.resultCut = m.resultText != sl.Result
+	}
 	usage := map[string]any{"source": "result", "usage": scalars(sl.Usage), "subtype": m.resultSubtype}
 	if sl.TerminalReason != "" {
 		usage["terminal_reason"] = truncate(sl.TerminalReason, 60)
