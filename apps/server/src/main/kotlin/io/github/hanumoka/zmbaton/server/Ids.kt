@@ -50,6 +50,9 @@ object Ids {
 	/** A usage signal has no contract prefix; `usg_` keeps it readable. */
 	fun usageSignal(): String = "usg_" + uuidV7()
 
+	/** A master check (MasterChecks.kt) has no contract prefix; `mck_` keeps it readable. */
+	fun masterCheck(): String = "mck_" + uuidV7()
+
 	/** Audit rows have no contract prefix; `aud_` keeps them readable next to the others. */
 	fun audit(): String = "aud_" + uuidV7()
 

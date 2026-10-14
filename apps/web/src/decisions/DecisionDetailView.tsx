@@ -3,6 +3,7 @@ import { DecisionMark } from '../icons/DecisionMark';
 import { Icon } from '../icons/Icon';
 import { StageGlyph } from '../icons/StageGlyph';
 import { RowSkeleton } from '../ui/Group';
+import { OpenContradictions } from '../ui/OpenContradictions';
 import { Prose } from '../ui/Prose';
 import { ReadOnly } from '../ui/ReadOnly';
 import { isBlocked } from '../work/workView';
@@ -122,6 +123,7 @@ function Copied({
   return (
     <div className={work.length > 0 ? 'dt-grid' : 'dt-grid is-solo'}>
       <div className="dt-main">
+        <OpenContradictions about={it.id} />
         <section className="dt-sec">
           <h3>고른 안</h3>
           {d.choice ? <Prose text={d.choice} resolveDecision={resolveDecision} onJump={onJump} /> : <p className="dt-none">「결정」 절을 찾지 못했다. 정본 파일에서 본다.</p>}
@@ -161,6 +163,7 @@ function Made({ d, actions, error, onJump }: { d: DecisionDetail; actions?: Deci
           </p>
         )}
         {actions && <Actions d={d} actions={actions} />}
+        <OpenContradictions about={it.id} />
         <section className="dt-sec">
           <h3>고른 안</h3>
           {chosen === null && !d.choice ? (

@@ -257,10 +257,12 @@ func agentCmd(args []string, stderr io.Writer) int {
 		return out, nil
 	}
 	// Run records (agent/record.go) stay beside repos.json: they say whether an executor this device
-	// started ended with no child left, which a continuing run needs before it reuses a worktree.
+	// started ended with no child left, which a continuing run needs before it reuses a worktree. The
+	// master's contradiction checks run in an empty folder each under master/ (agent/master.go).
 	h, err := agent.NewHandoff(agent.Config{
 		Client: client, DeviceID: cfg.DeviceID, ClaudePath: claudePath, PollInterval: *pollInterval,
-		RunTimeout: *runTimeout, StateDir: filepath.Join(home, "runs"), ExecutorDir: filepath.Join(home, "executors"), Log: log,
+		RunTimeout: *runTimeout, StateDir: filepath.Join(home, "runs"), ExecutorDir: filepath.Join(home, "executors"),
+		MasterDir: filepath.Join(home, "master"), Log: log,
 	}, repos, tempDirs())
 	if err != nil {
 		return fail("bad flags", err)

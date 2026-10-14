@@ -439,7 +439,8 @@ class WorkItemService(
 		).param("id", id).query { rs, _ ->
 			val scope = json.readValue(rs.getString(4), mapType)
 			PreviousRun(
-				rs.getString(1), rs.getString(2), rs.getString(3), scope["repo_key"] as String, scope["base_branch"] as String?,
+				// The master's run (MasterChecks.kt) has no repository.
+				rs.getString(1), rs.getString(2), rs.getString(3), scope["repo_key"] as? String ?: "", scope["base_branch"] as String?,
 				(scope["allowed_tools"] as? List<*>).orEmpty().map { it.toString() }, rs.getString(5),
 				rs.getString(6)?.let { json.readValue(it, mapType) }, rs.getString(7),
 			)

@@ -30,7 +30,14 @@ type PendingRun struct {
 	DelegationID string `json:"delegation_id,omitempty"`
 	DeviceID     string `json:"device_id,omitempty"`
 	RepoKey      string `json:"repo_key,omitempty"`
+	// Purpose is PurposeMaster for the master's contradiction check, which needs no repository;
+	// empty for a work item's own run. An older server leaves it out.
+	Purpose string `json:"purpose,omitempty"`
 }
+
+// PurposeMaster marks the master's run (contract v1 "문서 모순 후보" 5): no repository, no worktree,
+// read-only tools, and the answer travels back in the end report.
+const PurposeMaster = "master_check"
 
 // Claim is the server's answer to a successful claim.
 type Claim struct {
@@ -48,6 +55,8 @@ type Claim struct {
 	Account *Account `json:"account,omitempty"`
 	// Limits are the run's usage limits; nil or a zero field means no limit.
 	Limits *Limits `json:"limits,omitempty"`
+	// Purpose is PurposeMaster for the master's run; empty otherwise.
+	Purpose string `json:"purpose,omitempty"`
 }
 
 // Account names the AI account a run goes on (contract "실행할 때 넘기는 것" 인증). It is a reference:

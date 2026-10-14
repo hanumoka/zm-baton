@@ -4,6 +4,7 @@ import { DecisionMark } from '../icons/DecisionMark';
 import { Icon } from '../icons/Icon';
 import { StageGlyph } from '../icons/StageGlyph';
 import { RowSkeleton } from '../ui/Group';
+import { OpenContradictions } from '../ui/OpenContradictions';
 import { Prose } from '../ui/Prose';
 import { isBlocked } from '../work/workView';
 import { at, decisionStatusLabel, stageLabel } from '../workModel';
@@ -126,6 +127,7 @@ function Body({ d, actions, error }: { d: DocDetail; actions?: DocActions; error
           </p>
         )}
         {actions && <Actions d={d} actions={actions} />}
+        <OpenContradictions about={doc.id} />
         <section className="dt-sec">
           <h3>
             {shown ? `판 ${shown.number} 본문` : '본문'}

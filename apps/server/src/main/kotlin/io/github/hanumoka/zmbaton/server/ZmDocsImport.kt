@@ -1,6 +1,7 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import org.springframework.context.ApplicationEventPublisher
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
@@ -61,6 +62,7 @@ class ZmDocsImportService(
 	private val json: ObjectMapper,
 	private val tx: TransactionTemplate,
 	private val sessions: SessionService,
+	private val events: ApplicationEventPublisher,
 ) {
 	companion object {
 		const val TASKS_PATH = "registry/tasks.json"
@@ -105,6 +107,12 @@ class ZmDocsImportService(
 				mapOf("repo_key" to repoKey, "commit" to commit, "projects" to run.projects, "work_items" to run.workItems, "decisions" to run.decisions),
 			)
 			if (!req.apply) status.setRollbackOnly()
+			// One contradiction check for the whole import, about the accepted decisions it created or
+			// whose text changed (MasterChecks.kt bundles a few and skips more). A dry run rolls back,
+			// so the check, which starts only after a commit, never starts for it.
+			if (req.apply && run.changedAccepted.isNotEmpty()) {
+				events.publishEvent(ContradictionTrigger("zm_docs_import", run.changedAccepted.map { CheckSubject("decision", it) }))
+			}
 			ZmDocsImportOut(req.apply, run.projects, run.workItems, run.decisions, run.changes, run.warnings)
 		}
 		return result
@@ -117,6 +125,8 @@ class ZmDocsImportService(
 		val decisions = ImportCount()
 		val changes = mutableListOf<ImportChange>()
 		val warnings = mutableListOf<String>()
+		/** Accepted decisions this import created or whose text changed: what a contradiction check looks at. */
+		val changedAccepted = mutableListOf<String>()
 
 		fun go(files: List<ImportFile>) {
 			val byPath = linkedMapOf<String, String>()
@@ -353,6 +363,7 @@ class ZmDocsImportService(
 					""".trimIndent(),
 				).params(params).update()
 				audit("decision.imported", "dcs", id, ref, emptyList())
+				if (status == "accepted") changedAccepted += id
 				decisions.created++
 				changes += ImportChange("decision", ref, "created")
 			} else {
@@ -366,6 +377,7 @@ class ZmDocsImportService(
 				).params(params - "org" - "ref").update()
 				jdbc.sql("delete from decision_projects where decision_id = :id").param("id", id).update()
 				val fields = if (existing.second == sha) listOf("projects") else listOf("content")
+				if (status == "accepted" && existing.second != sha) changedAccepted += id
 				audit("decision.synced", "dcs", id, ref, fields)
 				decisions.updated++
 				changes += ImportChange("decision", ref, "updated", fields)
