@@ -1,6 +1,7 @@
 // Server API for the first screen ("나를 기다리는 것") and the session list
 // (contract v1 "직접 연 AI 세션을 서버에 등록한다", "첫 화면"). Same origin as the page.
 
+import { apiFetch } from './http';
 import { ApiError } from './workApi';
 
 export type SessionView = {
@@ -68,7 +69,7 @@ export type MeView = {
 export type NoticeStatus = 'acknowledged' | 'not_a_conflict' | 'resolved';
 
 async function call<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method,
     signal,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },

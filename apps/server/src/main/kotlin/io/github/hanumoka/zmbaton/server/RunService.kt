@@ -71,13 +71,13 @@ class RunService(
 	 */
 	internal var startedAt: OffsetDateTime = OffsetDateTime.now()
 
-	/** The compat test's work item: `ready`, no executor. */
+	/** The compat test's work item: `ready`, no executor, made by the person responsible for it. */
 	fun createWorkItem(title: String, responsibleUserId: String): WorkItemCreated =
-		workItems.create(CreateWorkItem(title, responsibleUserId))
+		workItems.create(CreateWorkItem(title, responsibleUserId), responsibleUserId)
 
 	/** The compat test's run: no delegation, any connector may claim it. [actor] asked for it. */
 	@Transactional
-	fun createRun(workItemId: String, executor: String, actor: String = Requester.STAGE1_PERSON): RunCreated {
+	fun createRun(workItemId: String, executor: String, actor: String): RunCreated {
 		val id = Ids.run()
 		val inserted = try {
 			jdbc.sql(
@@ -92,6 +92,12 @@ class RunService(
 		if (inserted == 0) throw NotFoundException("no ready work item $workItemId")
 		sessions.audit("person", actor, "run.requested", "run", id, mapOf("work_item_id" to workItemId, "executor" to executor))
 		return RunCreated(id, workItemId, "requested")
+	}
+
+	/** A device that sent its device token reports only on a run it holds (docs/stage1/auth.md). */
+	fun requireHeldBy(runId: String, deviceId: String) {
+		val holder = jdbc.sql("select coalesce(device_id, '') from runs where id = :id").param("id", runId).query(String::class.java).optional()
+		if (holder.isPresent && holder.get() != deviceId) throw ForbiddenException("run $runId is not held by device $deviceId")
 	}
 
 	/**

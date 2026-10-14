@@ -21,7 +21,8 @@ import kotlin.test.assertTrue
  * turned on (ZM_BATON_RELAY=on; RelayOffTests covers the default, off).
  */
 @Import(TestcontainersConfiguration::class)
-@SpringBootTest(properties = ["zm-baton.relay=on"])
+// Relays need ZM_BATON_AUTH=required (H-21): with local mode on is ignored (RelaySwitchTests).
+@SpringBootTest(properties = ["zm-baton.relay=on", "zm-baton.auth.mode=required"])
 class RelayTests @Autowired constructor(
 	private val sessions: SessionService,
 	private val relays: RelayService,
@@ -35,12 +36,12 @@ class RelayTests @Autowired constructor(
 
 	@AfterEach
 	fun restore() {
-		relays.setFocus(false)
-		relays.setFirstScreen(false)
+		relays.setFocus(false, person = SessionService.OWNER)
+		relays.setFirstScreen(false, person = SessionService.OWNER)
 	}
 
 	private fun register(): Registered {
-		val device = sessions.registerDevice(RegisterDevice("relay-pc", "windows")).deviceId
+		val device = sessions.registerDevice(RegisterDevice("relay-pc", "windows"), person = SessionService.OWNER).deviceId
 		val r = sessions.register(
 			RegisterSession(2, device, "claude_code", null, UUID.randomUUID().toString(), RepositoryIn("git:" + UUID.randomUUID().toString().replace("-", ""), null, "", "main")),
 		)
@@ -98,15 +99,15 @@ class RelayTests @Autowired constructor(
 		assertEquals(1, (row(itemId)["bucket"] as Number).toInt())
 		assertEquals("immediate", row(itemId)["notify"])
 		assertContains(row(itemId)["summary"] as String, "Bash: rm -rf build && npm run build")
-		val listed = people.inbox().single { it.id == itemId }
+		val listed = people.inbox(person = SessionService.OWNER).single { it.id == itemId }
 		assertEquals("open", listed.state)
 		assertNotNull(listed.relayDeadline)
 		assertEquals("rm -rf build && npm run build", listed.detail!!["command"], "the whole command is shown")
 
 		assertEquals("waiting", take(s, rid).outcome, "nothing to take before a person answers")
-		relays.answer(itemId, RelayAnswerIn(decision = "allow"))
+		relays.answer(itemId, RelayAnswerIn(decision = "allow"), person = SessionService.OWNER)
 		assertEquals("answered", row(itemId)["state"])
-		assertEquals("answered", people.inbox().single { it.id == itemId }.state, "answered but not yet delivered stays visible")
+		assertEquals("answered", people.inbox(person = SessionService.OWNER).single { it.id == itemId }.state, "answered but not yet delivered stays visible")
 
 		assertEquals("mismatch", take(s, rid, otherFp).outcome, "another input's fingerprint takes nothing")
 		assertEquals("answered", row(itemId)["state"])
@@ -114,8 +115,8 @@ class RelayTests @Autowired constructor(
 		assertEquals("delivered", taken.outcome)
 		assertEquals(mapOf("decision" to "allow"), taken.answer)
 		assertEquals("over", take(s, rid).outcome, "an answer is taken once")
-		assertEquals("delivered", people.inbox().single { it.id == itemId }.state)
-		assertFailsWith<ConflictException> { relays.answer(itemId, RelayAnswerIn(decision = "deny")) }
+		assertEquals("delivered", people.inbox(person = SessionService.OWNER).single { it.id == itemId }.state)
+		assertFailsWith<ConflictException> { relays.answer(itemId, RelayAnswerIn(decision = "deny"), person = SessionService.OWNER) }
 
 		// A resume older than the relay arrives late: nothing closes. The next one closes it.
 		send(s, "resumed", seq = 1)
@@ -123,16 +124,16 @@ class RelayTests @Autowired constructor(
 		send(s, "resumed")
 		assertEquals("closed", row(itemId)["state"])
 		assertNotNull(row(itemId)["delivered_at"], "the item still says the answer was delivered")
-		assertEquals("closed", people.inbox().single { it.id == itemId }.state, "a closed relay shows for a while")
+		assertEquals("closed", people.inbox(person = SessionService.OWNER).single { it.id == itemId }.state, "a closed relay shows for a while")
 	}
 
 	@Test
 	fun `a deny carries its reason to the hook, and an allow takes no reason`() {
 		val s = register()
 		val (rid, started) = start(s)
-		assertFailsWith<BadRequestException> { relays.answer(started.item(), RelayAnswerIn(decision = "allow", reason = "x")) }
-		assertFailsWith<BadRequestException> { relays.answer(started.item(), RelayAnswerIn(decision = "maybe")) }
-		relays.answer(started.item(), RelayAnswerIn(decision = "deny", reason = "빌드 폴더는 지우지 않는다"))
+		assertFailsWith<BadRequestException> { relays.answer(started.item(), RelayAnswerIn(decision = "allow", reason = "x"), person = SessionService.OWNER) }
+		assertFailsWith<BadRequestException> { relays.answer(started.item(), RelayAnswerIn(decision = "maybe"), person = SessionService.OWNER) }
+		relays.answer(started.item(), RelayAnswerIn(decision = "deny", reason = "빌드 폴더는 지우지 않는다"), person = SessionService.OWNER)
 		assertEquals(mapOf("decision" to "deny", "reason" to "빌드 폴더는 지우지 않는다"), take(s, rid).answer)
 	}
 
@@ -140,7 +141,7 @@ class RelayTests @Autowired constructor(
 	fun `boundary 1 - an answer pressed before the deadline but taken after it is not delivered`() {
 		val s = register()
 		val (rid, started) = start(s)
-		relays.answer(started.item(), RelayAnswerIn(decision = "allow"))
+		relays.answer(started.item(), RelayAnswerIn(decision = "allow"), person = SessionService.OWNER)
 		expire(started.item())
 		val taken = take(s, rid)
 		assertEquals("over", taken.outcome)
@@ -154,7 +155,7 @@ class RelayTests @Autowired constructor(
 		val s = register()
 		val (rid, started) = start(s)
 		expire(started.item())
-		val refused = assertFailsWith<ConflictException> { relays.answer(started.item(), RelayAnswerIn(decision = "allow")) }
+		val refused = assertFailsWith<ConflictException> { relays.answer(started.item(), RelayAnswerIn(decision = "allow"), person = SessionService.OWNER) }
 		assertContains(refused.message!!, "이미 터미널로 넘어갔다")
 		assertEquals("open", row(started.item())["state"], "the refusal itself writes nothing")
 		assertEquals(1, relays.closeExpired())
@@ -167,7 +168,7 @@ class RelayTests @Autowired constructor(
 		val s = register()
 		val open = start(s).second.item()
 		val answered = start(s).second.item()
-		relays.answer(answered, RelayAnswerIn(decision = "allow"))
+		relays.answer(answered, RelayAnswerIn(decision = "allow"), person = SessionService.OWNER)
 		expire(open)
 		expire(answered)
 		relays.closeExpired()
@@ -180,20 +181,20 @@ class RelayTests @Autowired constructor(
 		val s = register()
 		val (rid, answered) = start(s)
 		val open = start(s).second.item()
-		relays.answer(answered.item(), RelayAnswerIn(decision = "allow"))
+		relays.answer(answered.item(), RelayAnswerIn(decision = "allow"), person = SessionService.OWNER)
 		send(s, "ended")
 		assertEquals("undelivered", row(answered.item())["state"])
 		assertEquals("closed", row(open)["state"])
 		assertEquals("session_ended", row(open)["relay_reason"])
 		assertFailsWith<UnauthorizedException> { take(s, rid) }
-		assertContains(assertFailsWith<ConflictException> { relays.answer(open, RelayAnswerIn(decision = "allow")) }.message!!, "닫혔다")
+		assertContains(assertFailsWith<ConflictException> { relays.answer(open, RelayAnswerIn(decision = "allow"), person = SessionService.OWNER) }.message!!, "닫혔다")
 	}
 
 	@Test
 	fun `boundary 2 - turning the session off closes its relays too`() {
 		val s = register()
 		val (_, answered) = start(s)
-		relays.answer(answered.item(), RelayAnswerIn(decision = "deny"))
+		relays.answer(answered.item(), RelayAnswerIn(decision = "deny"), person = SessionService.OWNER)
 		send(s, "deregistered")
 		assertEquals("undelivered", row(answered.item())["state"])
 	}
@@ -202,14 +203,14 @@ class RelayTests @Autowired constructor(
 	fun `boundary 3 - focus mode sends new permission requests to the terminal and leaves waiting ones until their deadline`() {
 		val s = register()
 		val (rid, waiting) = start(s)
-		relays.setFocus(true)
+		relays.setFocus(true, person = SessionService.OWNER)
 		val (_, turnedAway) = start(s)
 		assertFalse(turnedAway.relay)
 		assertEquals("focus_mode", turnedAway.reason)
 		assertNull(turnedAway.itemId, "the terminal asks, and its wait reaches the first screen through the notification hook")
-		relays.answer(waiting.item(), RelayAnswerIn(decision = "allow"))
+		relays.answer(waiting.item(), RelayAnswerIn(decision = "allow"), person = SessionService.OWNER)
 		assertEquals("delivered", take(s, rid).outcome)
-		relays.setFocus(false)
+		relays.setFocus(false, person = SessionService.OWNER)
 		assertTrue(start(s).second.relay)
 	}
 
@@ -224,7 +225,7 @@ class RelayTests @Autowired constructor(
 		assertFalse((r["summary"] as String).contains("SYNTHETIC"))
 		assertContains(r["summary"] as String, "비밀값이 섞여 터미널에서 확인")
 		assertEquals("open", r["state"])
-		assertContains(assertFailsWith<ConflictException> { relays.answer(started.item(), RelayAnswerIn(decision = "allow")) }.message!!, "중계하지 않은")
+		assertContains(assertFailsWith<ConflictException> { relays.answer(started.item(), RelayAnswerIn(decision = "allow"), person = SessionService.OWNER) }.message!!, "중계하지 않은")
 		send(s, "resumed")
 		assertEquals("closed", row(started.item())["state"], "it leaves the first screen when the session moves on")
 	}
@@ -239,39 +240,39 @@ class RelayTests @Autowired constructor(
 		assertEquals(2, (left["bucket"] as Number).toInt())
 		assertContains(left["summary"] as String, "Which color?", message = "the first screen says which session asks what")
 		assertContains(assertFailsWith<ConflictException> {
-			relays.answer(hidden.item(), RelayAnswerIn(answers = mapOf("Which color?" to listOf("Red"), "Which sizes?" to listOf("S"))))
+			relays.answer(hidden.item(), RelayAnswerIn(answers = mapOf("Which color?" to listOf("Red"), "Which sizes?" to listOf("S"))), person = SessionService.OWNER)
 		}.message!!, "중계하지 않은")
 
-		relays.setFirstScreen(true)
-		assertTrue(relays.me().firstScreenVisible)
+		relays.setFirstScreen(true, person = SessionService.OWNER)
+		assertTrue(relays.me(person = SessionService.OWNER).firstScreenVisible)
 		val (rid, shown) = start(s, kind = "session_question", detail = question)
 		assertTrue(shown.relay)
 		val item = shown.item()
-		assertFailsWith<BadRequestException> { relays.answer(item, RelayAnswerIn(answers = mapOf("Which color?" to listOf("Red")))) }
+		assertFailsWith<BadRequestException> { relays.answer(item, RelayAnswerIn(answers = mapOf("Which color?" to listOf("Red"))), person = SessionService.OWNER) }
 		assertFailsWith<BadRequestException> {
-			relays.answer(item, RelayAnswerIn(answers = mapOf("Which color?" to listOf("Red", "Blue"), "Which sizes?" to listOf("S"))))
+			relays.answer(item, RelayAnswerIn(answers = mapOf("Which color?" to listOf("Red", "Blue"), "Which sizes?" to listOf("S"))), person = SessionService.OWNER)
 		}
 		assertFailsWith<BadRequestException> {
-			relays.answer(item, RelayAnswerIn(answers = mapOf("Which color?" to listOf("Green"), "Which sizes?" to listOf("S"))))
+			relays.answer(item, RelayAnswerIn(answers = mapOf("Which color?" to listOf("Green"), "Which sizes?" to listOf("S"))), person = SessionService.OWNER)
 		}
-		assertFailsWith<BadRequestException> { relays.answer(item, RelayAnswerIn(decision = "allow")) }
-		relays.answer(item, RelayAnswerIn(answers = mapOf("Which color?" to listOf("Blue"), "Which sizes?" to listOf("L", "S"))))
+		assertFailsWith<BadRequestException> { relays.answer(item, RelayAnswerIn(decision = "allow"), person = SessionService.OWNER) }
+		relays.answer(item, RelayAnswerIn(answers = mapOf("Which color?" to listOf("Blue"), "Which sizes?" to listOf("L", "S"))), person = SessionService.OWNER)
 		val taken = take(s, rid)
 		assertEquals("delivered", taken.outcome)
 		assertEquals(mapOf("answers" to mapOf("Which color?" to listOf("Blue"), "Which sizes?" to listOf("S", "L"))), taken.answer)
 
-		relays.setFirstScreen(false)
-		assertFalse(relays.me().firstScreenVisible)
-		relays.setFocus(true)
-		relays.setFirstScreen(true)
+		relays.setFirstScreen(false, person = SessionService.OWNER)
+		assertFalse(relays.me(person = SessionService.OWNER).firstScreenVisible)
+		relays.setFocus(true, person = SessionService.OWNER)
+		relays.setFirstScreen(true, person = SessionService.OWNER)
 		assertEquals("focus_mode", start(s, kind = "session_question", detail = question).second.reason)
 	}
 
 	@Test
 	fun `a visibility signal lasts thirty seconds`() {
-		relays.setFirstScreen(true)
+		relays.setFirstScreen(true, person = SessionService.OWNER)
 		jdbc.sql("update users set first_screen_visible_until = now() - interval '1 second' where id = 'usr_owner'").update()
-		assertFalse(relays.me().firstScreenVisible)
+		assertFalse(relays.me(person = SessionService.OWNER).firstScreenVisible)
 	}
 
 	@Test
@@ -283,7 +284,7 @@ class RelayTests @Autowired constructor(
 		val (rid, started) = start(s)
 		send(s, "resumed") // the tool ran after a terminal answer: a waiting relay keeps its deadline
 		assertEquals("open", row(started.item())["state"])
-		relays.answer(started.item(), RelayAnswerIn(decision = "allow"))
+		relays.answer(started.item(), RelayAnswerIn(decision = "allow"), person = SessionService.OWNER)
 		assertEquals("delivered", take(s, rid).outcome)
 		assertEquals("delivered", row(started.item())["state"])
 		send(s, "resumed")
@@ -294,11 +295,11 @@ class RelayTests @Autowired constructor(
 	fun `a person can send a waiting relay to the terminal, and the hook then stops without a decision`() {
 		val s = register()
 		val (rid, started) = start(s)
-		relays.toTerminal(started.item())
+		relays.toTerminal(started.item(), person = SessionService.OWNER)
 		assertEquals("moved_to_terminal", row(started.item())["state"])
 		assertEquals("person", row(started.item())["relay_reason"])
 		assertEquals("over", take(s, rid).outcome)
-		assertFailsWith<ConflictException> { relays.toTerminal(started.item()) }
+		assertFailsWith<ConflictException> { relays.toTerminal(started.item(), person = SessionService.OWNER) }
 	}
 
 	@Test
@@ -340,13 +341,13 @@ class RelayTests @Autowired constructor(
 
 	@Test
 	fun `focus mode is the person's setting and is audited when it changes`() {
-		relays.setFocus(true)
-		assertTrue(relays.me().focusOn)
-		relays.setFocus(true)
+		relays.setFocus(true, person = SessionService.OWNER)
+		assertTrue(relays.me(person = SessionService.OWNER).focusOn)
+		relays.setFocus(true, person = SessionService.OWNER)
 		val changes = jdbc.sql("select count(*) from audit_log where action = 'focus.changed' and at > now() - interval '1 minute'")
 			.query(Long::class.javaObjectType).single()
-		relays.setFocus(false)
-		assertFalse(relays.me().focusOn)
+		relays.setFocus(false, person = SessionService.OWNER)
+		assertFalse(relays.me(person = SessionService.OWNER).focusOn)
 		assertTrue(changes >= 1)
 	}
 }

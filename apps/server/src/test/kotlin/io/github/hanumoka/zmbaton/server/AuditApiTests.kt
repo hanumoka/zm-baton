@@ -86,7 +86,8 @@ class AuditApiTests @Autowired constructor(
 	@Test
 	fun `device and session registration, sharing, conflicts and their judgement, and session ends are audited`() {
 		val dev = device()
-		assertEquals(listOf("device.registered"), actions(auditOf("dev", dev)))
+		// Registering gives the device its token (docs/stage1/auth.md); both are written down, newest first.
+		assertEquals(listOf("device.token_issued", "device.registered"), actions(auditOf("dev", dev)))
 		val repo = repoKey()
 		val a = register(dev, repo)
 		val b = register(dev, repo)
@@ -220,7 +221,7 @@ class AuditApiTests @Autowired constructor(
 		assertEquals(200, call("POST", "/api/runs/$delegatedRun/withdraw", """{"version":${version()}}""").first)
 		assertEquals(200, call("DELETE", "/api/devices/$dev/repositories?repo_key=${q(repo)}").first)
 		assertEquals(listOf("work_item.delegation_withdrawn", "work_item.delegated", "work_item.created"), actions(auditOf("wrk", ready)))
-		assertEquals(listOf("device.repository_removed", "device.repository_added", "device.registered"), actions(auditOf("dev", dev)))
+		assertEquals(listOf("device.repository_removed", "device.repository_added", "device.token_issued", "device.registered"), actions(auditOf("dev", dev)))
 	}
 
 	@Test

@@ -77,7 +77,7 @@ class SessionService(
 
 	/** `zm-baton login`: a device of [person], in their organisation. */
 	@Transactional
-	fun registerDevice(body: RegisterDevice, person: String = Requester.STAGE1_PERSON): DeviceRegistered {
+	fun registerDevice(body: RegisterDevice, person: String): DeviceRegistered {
 		val name = body.name.trim()
 		if (name.isEmpty() || name.length > 100) throw BadRequestException("name must be 1-100 characters")
 		val os = body.os?.trim()?.take(50)
@@ -260,6 +260,26 @@ class SessionService(
 		for (id in ended) {
 			closeWaits(id!!)
 			audit("system", SYSTEM_ACTOR, "session.expired", "ses", id, emptyMap())
+		}
+		return ended.size
+	}
+
+	/**
+	 * Ends the live registrations of a revoked device and closes their waits and relays, like a session
+	 * that ended (docs/stage1/auth.md "기기 폐기"). Their tokens stop with them.
+	 */
+	@Transactional
+	fun endForDevice(deviceId: String): Int {
+		val ended = jdbc.sql(
+			"""
+			update agent_sessions set ended_at = now()
+			 where device_id = :device and ended_at is null and deregistered_at is null
+			returning id
+			""".trimIndent(),
+		).param("device", deviceId).query(String::class.java).list()
+		for (id in ended) {
+			closeWaits(id!!)
+			audit("system", SYSTEM_ACTOR, "session.ended", "ses", id, mapOf("reason" to "device_revoked", "device_id" to deviceId))
 		}
 		return ended.size
 	}

@@ -209,7 +209,7 @@ class AccountService(
 	 * runs do only that person's work (DEC-0076); an organisation's account has no owner.
 	 */
 	@Transactional
-	fun register(body: Map<String, Any?>, actor: String = Requester.STAGE1_PERSON): AccountDetail {
+	fun register(body: Map<String, Any?>, actor: String): AccountDetail {
 		val unknown = body.keys - (setOf("name", "auth_kind", "affiliation", "purpose", "data_terms", "auth_source", "device_id") + LIMIT_KEYS)
 		if (unknown.isNotEmpty()) throw BadRequestException("unknown fields $unknown")
 		val texts = texts(body)
@@ -243,7 +243,7 @@ class AccountService(
 	 * account and where its sign-in lives do not change: that is another account, registered anew.
 	 */
 	@Transactional
-	fun update(id: String, patch: Map<String, Any?>, actor: String = Requester.STAGE1_PERSON): AccountDetail {
+	fun update(id: String, patch: Map<String, Any?>, actor: String): AccountDetail {
 		val version = (patch["version"] as? Number)?.toLong() ?: throw BadRequestException("version is required")
 		val unknown = patch.keys - (setOf("version", "name", "purpose", "data_terms", "affiliation", "device_id") + LIMIT_KEYS)
 		if (unknown.isNotEmpty()) throw BadRequestException("unknown fields $unknown. 계정 종류와 자격 위치는 바꾸지 않는다. 새 계정으로 등록한다")
@@ -275,7 +275,7 @@ class AccountService(
 
 	/** Disabling keeps the account and its history; no new run is handed to it. Runs already going on go on. */
 	@Transactional
-	fun disable(id: String, version: Long, actor: String = Requester.STAGE1_PERSON): AccountDetail {
+	fun disable(id: String, version: Long, actor: String): AccountDetail {
 		val current = lock(id, version)
 		if (current.status == "disabled") throw ConflictException("이미 비활성화한 계정이다")
 		jdbc.sql("update ai_accounts set status = 'disabled', version = version + 1, updated_at = now() where id = :id").param("id", id).update()
@@ -284,7 +284,7 @@ class AccountService(
 	}
 
 	@Transactional
-	fun enable(id: String, version: Long, actor: String = Requester.STAGE1_PERSON): AccountDetail {
+	fun enable(id: String, version: Long, actor: String): AccountDetail {
 		val current = lock(id, version)
 		if (current.status != "disabled") throw ConflictException("비활성화한 계정이 아니다")
 		jdbc.sql("update ai_accounts set status = 'ready', limit_resets_at = null, version = version + 1, updated_at = now() where id = :id")
@@ -299,7 +299,7 @@ class AccountService(
 	 * each is handed on again.
 	 */
 	@Transactional
-	fun resumeBilling(id: String, version: Long, actor: String = Requester.STAGE1_PERSON): AccountDetail {
+	fun resumeBilling(id: String, version: Long, actor: String): AccountDetail {
 		lock(id, version)
 		val cleared = jdbc.sql(
 			"update ai_accounts set billing_stopped_at = null, version = version + 1, updated_at = now() where id = :id and billing_stopped_at is not null",

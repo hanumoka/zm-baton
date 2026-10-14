@@ -103,7 +103,7 @@ func repoAdd(args []string, stdout io.Writer) error {
 		Key: info.Key, Name: filepath.Base(root), Root: root, Worktrees: trees, Remote: info.Remote,
 		AddedAt: time.Now().UTC(),
 	}
-	client, err := session.NewClient(cfg.Server, 10*time.Second)
+	client, err := session.ClientFor(cfg, 10*time.Second)
 	if err != nil {
 		return err
 	}
@@ -172,7 +172,7 @@ func repoRemove(args []string, stdout io.Writer) error {
 		}
 		key = info.Key
 	}
-	client, err := session.NewClient(cfg.Server, 10*time.Second)
+	client, err := session.ClientFor(cfg, 10*time.Second)
 	if err != nil {
 		return err
 	}
@@ -241,6 +241,8 @@ func agentCmd(args []string, stderr io.Writer) int {
 	if err != nil {
 		return fail("bad server in config.json", err)
 	}
+	// Every poll, claim, report and lease renewal carries this device's token (docs/stage1/auth.md).
+	client = client.WithToken(cfg.DeviceToken)
 	claudePath, err := agent.ResolveExecutable(*claudeBin)
 	if err != nil {
 		return fail("bad --claude", err)

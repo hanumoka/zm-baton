@@ -170,7 +170,7 @@ class WorkItemService(
 	 * (data model constraint 1: always a person).
 	 */
 	@Transactional
-	fun create(body: CreateWorkItem, actor: String = Requester.STAGE1_PERSON): WorkItemCreated {
+	fun create(body: CreateWorkItem, actor: String): WorkItemCreated {
 		val owner = body.responsibleUserId.trim()
 		if (owner.isEmpty()) throw BadRequestException("responsible_user_id is required")
 		val org = facts.orgOf(actor)
@@ -204,7 +204,7 @@ class WorkItemService(
 	 * cannot be cleared. `version` must be the version the caller saw.
 	 */
 	@Transactional
-	fun update(id: String, patch: Map<String, Any?>, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
+	fun update(id: String, patch: Map<String, Any?>, actor: String): WorkItemDetail {
 		val version = (patch["version"] as? Number)?.toLong() ?: throw BadRequestException("version is required")
 		val known = setOf("version", "title", "acceptance", "next_action", "due_on", "project_id", "visibility")
 		val unknown = patch.keys - known
@@ -233,7 +233,7 @@ class WorkItemService(
 	// ---------------------------------------------------------------- stages and wait reasons
 
 	@Transactional
-	fun transition(id: String, body: TransitionIn, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
+	fun transition(id: String, body: TransitionIn, actor: String): WorkItemDetail {
 		val row = lockEditable(id, body.version, checkSource = false)
 		val note = body.note?.trim()?.take(NOTE_MAX)?.ifEmpty { null }
 		val target = body.to.trim()
@@ -280,7 +280,7 @@ class WorkItemService(
 	}
 
 	@Transactional
-	fun addWait(id: String, body: WaitReasonIn, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
+	fun addWait(id: String, body: WaitReasonIn, actor: String): WorkItemDetail {
 		val reason = body.reason.trim()
 		if (reason !in Workflow.PERSON_WAITS) throw BadRequestException("a person can set only ${Workflow.PERSON_WAITS}")
 		val row = lockEditable(id, body.version)
@@ -301,7 +301,7 @@ class WorkItemService(
 	}
 
 	@Transactional
-	fun removeWait(id: String, reason: String, version: Long, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
+	fun removeWait(id: String, reason: String, version: Long, actor: String): WorkItemDetail {
 		if (reason !in Workflow.PERSON_WAITS) throw BadRequestException("a person can clear only ${Workflow.PERSON_WAITS}")
 		val row = lockEditable(id, version)
 		if (reason !in row.waitReasons) throw ConflictException("the work item is not $reason")
@@ -400,7 +400,7 @@ class WorkItemService(
 
 	/** Changes the skipped stages of [actor]'s organisation. */
 	@Transactional
-	fun setWorkflow(body: WorkflowSettings, actor: String = Requester.STAGE1_PERSON): WorkflowSettings {
+	fun setWorkflow(body: WorkflowSettings, actor: String): WorkflowSettings {
 		val skipped = body.skippedStages.map { it.trim() }.toSet()
 		val bad = skipped - Workflow.SKIPPABLE
 		if (bad.isNotEmpty()) throw BadRequestException("only ${Workflow.SKIPPABLE} can be skipped, not $bad")
@@ -430,7 +430,7 @@ class WorkItemService(
 	fun lockFacts(id: String, version: Long): Workflow.Facts = facts(lockEditable(id, version, checkSource = false))
 
 	/** Writes one line of the work item's history, acted by [actor]. */
-	fun record(id: String, action: String, details: Map<String, Any?>, actor: String = Requester.STAGE1_PERSON) =
+	fun record(id: String, action: String, details: Map<String, Any?>, actor: String) =
 		history(id, action, details, actor)
 
 	/**
@@ -519,7 +519,7 @@ class WorkItemService(
 	 * 작업이 어떻게 되나" 4: skipping applies when no risk request is open). Written as the person's
 	 * move, since their approval let it go. Returns whether it moved. The caller holds the lock.
 	 */
-	fun releaseHeldResult(id: String, actor: String = Requester.STAGE1_PERSON): Boolean {
+	fun releaseHeldResult(id: String, actor: String): Boolean {
 		val row = load(id, forUpdate = true) ?: return false
 		if (row.stage != "result_review" || row.sourceOfTruth != "product" || "result_review" !in skippedStages(row.orgId)) return false
 		val move = Workflow.move(facts(row), "done")

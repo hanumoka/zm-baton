@@ -27,7 +27,7 @@ class RunServiceConcurrencyTests @Autowired constructor(
 	@Test
 	fun `a claim skips a run row locked by another transaction instead of waiting`() {
 		val work = service.createWorkItem("locked", "usr_owner")
-		val run = service.createRun(work.id, "claude_code")
+		val run = service.createRun(work.id, "claude_code", actor = SessionService.OWNER)
 		val locked = CountDownLatch(1)
 		val release = CountDownLatch(1)
 		val pool = Executors.newFixedThreadPool(2)
@@ -57,7 +57,7 @@ class RunServiceConcurrencyTests @Autowired constructor(
 	@Test
 	fun `a report waits for a concurrent generation bump and is then judged late`() {
 		val work = service.createWorkItem("race", "usr_owner")
-		val run = service.createRun(work.id, "claude_code")
+		val run = service.createRun(work.id, "claude_code", actor = SessionService.OWNER)
 		val generation = service.claim(run.id, "dev_1").generation
 		val locked = CountDownLatch(1)
 		val release = CountDownLatch(1)
@@ -98,10 +98,10 @@ class RunServiceConcurrencyTests @Autowired constructor(
 		try {
 			repeat(20) { round ->
 				val work = service.createWorkItem("handover $round", "usr_owner")
-				val runA = service.createRun(work.id, "claude_code").id
+				val runA = service.createRun(work.id, "claude_code", actor = SessionService.OWNER).id
 				val genA = service.claim(runA, "dev_1").generation
 				service.ingest(runA, EventBatch(1, listOf(EventIn("evt_end_$round", genA, 1, "lifecycle", mapOf("phase" to "ended", "end_reason" to "replaced")))))
-				val runB = service.createRun(work.id, "codex").id
+				val runB = service.createRun(work.id, "codex", actor = SessionService.OWNER).id
 
 				val start = CountDownLatch(1)
 				val report = pool.submit<EventResult> {

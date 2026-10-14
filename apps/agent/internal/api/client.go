@@ -156,6 +156,10 @@ type EventResult struct {
 // ErrConflict means another device already claimed the run (HTTP 409).
 var ErrConflict = errors.New("run is not claimable")
 
+// ErrUnauthorized means the server refused this device's token or wants one (HTTP 401): the device
+// was revoked, or the server requires device tokens and this device has none (docs/stage1/auth.md).
+var ErrUnauthorized = errors.New("the server refused this device: run zm-baton login to get a device token again")
+
 // StatusError is a non-2xx answer other than a claim conflict.
 type StatusError struct {
 	Op     string
@@ -163,7 +167,18 @@ type StatusError struct {
 }
 
 func (e *StatusError) Error() string {
+	if e.Status == http.StatusUnauthorized {
+		return fmt.Sprintf("%s: server answered HTTP %d: %v", e.Op, e.Status, ErrUnauthorized)
+	}
 	return fmt.Sprintf("%s: server answered HTTP %d", e.Op, e.Status)
+}
+
+// Unwrap makes a 401 answer match ErrUnauthorized.
+func (e *StatusError) Unwrap() error {
+	if e.Status == http.StatusUnauthorized {
+		return ErrUnauthorized
+	}
+	return nil
 }
 
 // Permanent reports whether sending the same request again cannot succeed.
@@ -176,6 +191,17 @@ func (e *StatusError) Permanent() bool {
 type Client struct {
 	base string
 	http *http.Client
+	// token is this device's device token, sent as `Authorization: Bearer` on every call. Empty for a
+	// device registered before tokens, which a server in local mode still takes.
+	token string
+}
+
+// WithToken returns a client that sends the device token on every call. The token goes to this
+// client's server only and is never logged.
+func (c *Client) WithToken(token string) *Client {
+	cp := *c
+	cp.token = token
+	return &cp
 }
 
 // NewClient checks the base URL. Credentials in the URL are refused so they never reach logs.
@@ -291,6 +317,9 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) (int,
 	req.Header.Set("Accept", "application/json")
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

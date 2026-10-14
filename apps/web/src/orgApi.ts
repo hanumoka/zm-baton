@@ -2,6 +2,7 @@
 // structure is small in stage 1, so it is read in one call and every change returns it whole. Same
 // origin as the page; the server's refusals carry a reason in `message`, shown as it is.
 
+import { apiFetch } from './http';
 import { call, type WorkItem } from './workApi';
 
 export type RoleId = 'requester' | 'assignee' | 'reviewer' | 'approver' | 'operator' | 'master_admin';
@@ -114,7 +115,7 @@ export const orgApi = {
 
 /** A delete answers 204 with no body, which `call` cannot read. */
 async function noContent(path: string): Promise<void> {
-  const res = await fetch(path, { method: 'DELETE' });
+  const res = await apiFetch(path, { method: 'DELETE' });
   if (res.status === 204 || res.ok) return;
   let reason = '';
   try {

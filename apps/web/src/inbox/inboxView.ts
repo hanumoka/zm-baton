@@ -46,7 +46,7 @@ export function groupNote(g: Pick<InboxGroup, 'bucket' | 'raised'>): string {
  * Relays are off by default until person authentication exists: any program on this PC could answer
  * one (hardening backlog H-21). Turning them on is a server setting (ZM_BATON_RELAY=on), never a button here.
  */
-export const RELAY_OFF_NOTE = '꺼져 있다(사람 인증이 생기기 전에는 기본 꺼짐)';
+export const RELAY_OFF_NOTE = '꺼져 있다(로그인을 요구하는 서버에서만 켤 수 있다)';
 
 /** What a bucket's head says beside its name: relays off, focus mode, or why it is empty. */
 export function groupAside(g: Pick<InboxGroup, 'bucket' | 'raised'>, waiting: number, focusOn: boolean, relayOn: boolean | null): string | undefined {

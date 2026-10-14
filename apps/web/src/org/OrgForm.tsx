@@ -14,7 +14,7 @@ type Props = {
 const KINDS: NewDraft['kind'][] = ['person', 'team', 'product', 'project', 'repository', 'environment'];
 
 const LEADS: Record<NewDraft['kind'], string> = {
-  person: '사람을 더하면 그 사람의 매니저 기록도 함께 생긴다. 사람 인증은 다음 단계에 붙는다. 그 전에는 이 서버의 요청이 모두 조직 소유자의 것이다.',
+  person: '사람을 더하면 그 사람의 매니저 기록도 함께 생긴다. 서버가 local 모드면 이 서버의 요청은 모두 조직 소유자의 것이다. 그 사람이 로그인하려면 서버를 required로 띄우고 설정 토큰으로 첫 비밀번호를 정한다(docs/stage1/auth.md).',
   team: '팀은 프로젝트를 맡는다. 팀 공유 범위의 기록은 그 프로젝트를 맡은 팀의 사람이 본다.',
   product: '제품은 프로젝트 여럿으로 이뤄진다.',
   project: '여기서 만든 프로젝트다. zm-docs에서 가져온 프로젝트는 가져오기가 만든다.',

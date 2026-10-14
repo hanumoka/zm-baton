@@ -174,7 +174,8 @@ func (h *Hooks) register(ctx context.Context, in HookInput) (reg Registered, reg
 			repoInfo = &RepositoryInfo{RepoKey: r.Key, Remote: r.Remote, Prefix: r.Prefix, Branch: r.Branch}
 		}
 	}
-	client, err := NewClient(cfg.Server, 3*time.Second)
+	// The device token goes with the registration; a server in required mode refuses it without one.
+	client, err := ClientFor(cfg, 3*time.Second)
 	if err != nil {
 		return reg, false, err
 	}

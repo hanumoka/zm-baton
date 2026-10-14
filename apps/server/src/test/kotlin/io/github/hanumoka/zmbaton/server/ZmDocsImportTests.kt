@@ -57,7 +57,7 @@ class ZmDocsImportTests @Autowired constructor(
 	)
 
 	private fun run(repo: String, apply: Boolean, vararg files: Pair<String, String>, commit: String? = null) =
-		imports.import(ZmDocsImportIn(repo, files.map { ImportFile(it.first, it.second) }, apply, commit))
+		imports.import(ZmDocsImportIn(repo, files.map { ImportFile(it.first, it.second) }, apply, commit), actor = SessionService.OWNER)
 
 	private fun byRef(ref: String): WorkItemDetail {
 		val id = jdbc.sql("select id from work_items where external_ref = :ref").param("ref", ref).query(String::class.java).single()
@@ -140,10 +140,10 @@ class ZmDocsImportTests @Autowired constructor(
 		assertNotNull(after.readOnlyReason)
 		assertTrue(after.moves.none { it.allowed })
 		val stale = assertFailsWith<ConflictException> {
-			workItems.update(after.item.id, mapOf("version" to after.item.version, "title" to "고치기"))
+			workItems.update(after.item.id, mapOf("version" to after.item.version, "title" to "고치기"), actor = SessionService.OWNER)
 		}
 		assertContains(stale.message!!, "정본이 Git")
-		assertFailsWith<ConflictException> { workItems.transition(after.item.id, TransitionIn("cancelled", after.item.version)) }
+		assertFailsWith<ConflictException> { workItems.transition(after.item.id, TransitionIn("cancelled", after.item.version), actor = SessionService.OWNER) }
 	}
 
 	@Test
@@ -174,7 +174,7 @@ class ZmDocsImportTests @Autowired constructor(
 		assertTrue(result.warnings.any { "PRJ-000000" in it })
 
 		val newId = jdbc.sql("select id from decisions where external_ref = :ref").param("ref", new).query(String::class.java).single()
-		val d = decisions.detail(newId)
+		val d = decisions.detail(newId, actor = SessionService.OWNER)
 		assertEquals("새 결정: 콜론이 있는 제목", d.decision.question)
 		assertEquals("accepted", d.decision.status)
 		assertEquals("2026-10-12", d.decision.decidedOn.toString())
@@ -216,7 +216,7 @@ class ZmDocsImportTests @Autowired constructor(
 			"registry/tasks.json" to tasksJson(task(ref, "doing", nextAction = "카드에 보일 다음 행동", title = "카드에 보일 작업")),
 			"docs/governance/decisions/$dec-card.md" to decision(dec, "카드에 보일 결정", "[]"),
 		)
-		val device = sessions.registerDevice(RegisterDevice("card-pc", "windows")).deviceId
+		val device = sessions.registerDevice(RegisterDevice("card-pc", "windows"), person = SessionService.OWNER).deviceId
 		val registered = sessions.register(
 			RegisterSession(2, device, "claude_code", null, UUID.randomUUID().toString(), RepositoryIn(repo, null, "", "main")),
 		)

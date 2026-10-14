@@ -130,7 +130,8 @@ class ExportTests @Autowired constructor(
 		assertFalse(response.body().contains(f.token), "the token")
 		assertFalse(response.body().contains(SessionTokens.hash(f.token)), "the token hash")
 		val secretName = Regex("(?i)(token|secret|password|passwd|credential|private_key|api_key)")
-		val allowed = setOf("token_expires_at")
+		// When a token was made or ends: times, not secrets. The device token itself is withheld (V14).
+		val allowed = setOf("token_expires_at", "token_issued_at")
 		val collections = bundle["collections"] as Map<*, *>
 		for ((name, value) in collections) {
 			for (record in (value as Map<*, *>)["records"] as List<*>) {

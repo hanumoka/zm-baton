@@ -146,7 +146,7 @@ export function RetentionPane({ view, error, titleRef, inSheet = false }: { view
         <div className="dt-main">
           <section className="dt-sec">
             <h3>내보내기</h3>
-            <p className="dt-text">서버의 모든 기록을 JSON 파일 하나로 받는다. 기록마다 어디서 왔는지(정본 위치)를 함께 적고, 세션 토큰의 해시만 뺀다. 받은 일도 감사 기록에 남는다.</p>
+            <p className="dt-text">서버의 모든 기록을 JSON 파일 하나로 받는다. 기록마다 어디서 왔는지(정본 위치)를 함께 적고, 세션·기기 토큰의 해시와 로그인 기록은 뺀다. 받은 일도 감사 기록에 남는다.</p>
             <p className="au-acts">
               <a className="btn btn-primary" href={EXPORT_HREF} download>
                 내보내기 파일 받기
@@ -199,7 +199,7 @@ export function RetentionPane({ view, error, titleRef, inSheet = false }: { view
                 <p className="ib-term">
                   <Icon name="lock" />
                   <span>
-                    바꾸기는 서버 설정(환경 변수)으로만 한다. 사람 인증이 생기기 전에는 화면에서 바꾸지 않는다. 방법은 <code>docs/stage1/audit-retention-export.md</code>에 있다.
+                    바꾸기는 서버 설정(환경 변수)으로만 한다. 화면에서 바꾸지 않는다. 방법은 <code>docs/stage1/audit-retention-export.md</code>에 있다.
                   </span>
                 </p>
               </>

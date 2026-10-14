@@ -25,7 +25,7 @@ class RunServiceTests @Autowired constructor(
 
 	private fun newRun(): Pair<String, String> {
 		val work = service.createWorkItem("compat", "usr_owner")
-		val run = service.createRun(work.id, "claude_code")
+		val run = service.createRun(work.id, "claude_code", actor = SessionService.OWNER)
 		return work.id to run.id
 	}
 
@@ -77,12 +77,12 @@ class RunServiceTests @Autowired constructor(
 	@Test
 	fun `a work item has at most one live run`() {
 		val (workId, runId) = newRun()
-		assertFailsWith<ConflictException> { service.createRun(workId, "claude_code") }
+		assertFailsWith<ConflictException> { service.createRun(workId, "claude_code", actor = SessionService.OWNER) }
 
 		val claimed = service.claim(runId, "dev_1")
 		service.ingest(runId, EventBatch(1, listOf(event(claimed.generation, 1, "lifecycle", mapOf("phase" to "ended", "end_reason" to "replaced")))))
 		assertEquals("ended", runRow(runId)["state"])
-		service.createRun(workId, "claude_code") // allowed once the first run ended
+		service.createRun(workId, "claude_code", actor = SessionService.OWNER) // allowed once the first run ended
 	}
 
 	@Test
@@ -92,7 +92,7 @@ class RunServiceTests @Autowired constructor(
 		service.ingest(runA, EventBatch(1, listOf(event(genA, 1, "lifecycle", mapOf("phase" to "started")))))
 		service.ingest(runA, EventBatch(1, listOf(event(genA, 2, "lifecycle", mapOf("phase" to "ended", "end_reason" to "replaced")))))
 
-		val runB = service.createRun(workId, "codex").id
+		val runB = service.createRun(workId, "codex", actor = SessionService.OWNER).id
 		val genB = service.claim(runB, "dev_2").generation
 		assertEquals(genA + 1, genB)
 
@@ -149,7 +149,7 @@ class RunServiceTests @Autowired constructor(
 		val (workId, runA) = newRun()
 		val genA = service.claim(runA, "dev_1").generation
 		service.ingest(runA, EventBatch(1, listOf(event(genA, 1, "lifecycle", mapOf("phase" to "ended", "end_reason" to "replaced")))))
-		val runB = service.createRun(workId, "codex").id
+		val runB = service.createRun(workId, "codex", actor = SessionService.OWNER).id
 
 		// B is not claimed yet: even the work item's current generation is not B's to use.
 		assertEquals(EventResult(0, 0, 0, 1), service.ingest(runB, EventBatch(1, listOf(event(genA, 1)))))

@@ -153,7 +153,7 @@ class DecisionService(
 	}
 
 	/** One decision with everything its screen shows; [actor] is the person asking, for what they may do. */
-	fun detail(id: String, actor: String = Requester.STAGE1_PERSON): DecisionDetail {
+	fun detail(id: String, actor: String): DecisionDetail {
 		val view = withProjects(listOf(load(id) ?: throw NotFoundException("no decision $id"))).single()
 		return jdbc.sql(
 			"""

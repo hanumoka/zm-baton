@@ -1,5 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { AuthGate } from './auth/AuthGate';
 import { Shell } from './Shell';
 import './tokens.css';
 import './base.css';
@@ -20,10 +21,11 @@ import './accounts/accounts.css';
 import './org/org.css';
 import './me/me.css';
 import './audit/audit.css';
+import './auth/auth.css';
 import './kit/kit.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Shell />
+    <AuthGate>{(auth, reread) => <Shell auth={auth} onAuthChanged={reread} />}</AuthGate>
   </StrictMode>,
 );

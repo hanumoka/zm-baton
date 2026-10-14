@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hanumoka/zm-baton/apps/agent/internal/session"
@@ -37,16 +38,25 @@ func exportCmd(args []string, stdout io.Writer) error {
 	if *out == "" || fs.NArg() > 0 {
 		return errors.New("use: zm-baton export --out FILE")
 	}
-	url := *server
-	if url == "" {
-		url = "http://127.0.0.1:18081"
-		if dir, err := session.Dir(); err == nil {
-			if cfg, err := session.LoadConfig(dir); err == nil {
-				url = cfg.Server
-			}
+	saved := session.Config{}
+	if dir, err := session.Dir(); err == nil {
+		if cfg, err := session.LoadConfig(dir); err == nil {
+			saved = cfg
 		}
 	}
-	client, err := session.NewClient(url, exportTimeout)
+	url := strings.TrimRight(*server, "/")
+	if url == "" {
+		url = "http://127.0.0.1:18081"
+		if saved.Server != "" {
+			url = saved.Server
+		}
+	}
+	// The device token goes to the saved server only, never to one named on the command line.
+	token := ""
+	if url == strings.TrimRight(saved.Server, "/") {
+		token = saved.DeviceToken
+	}
+	client, err := session.ClientFor(session.Config{Server: url, DeviceToken: token}, exportTimeout)
 	if err != nil {
 		return err
 	}

@@ -1,10 +1,14 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Access
+import io.github.hanumoka.zmbaton.server.auth.AccessKind
+import io.github.hanumoka.zmbaton.server.auth.AuthSettings
 import io.github.hanumoka.zmbaton.server.auth.Requester
 import io.github.hanumoka.zmbaton.server.permission.Act
 import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
 import io.github.hanumoka.zmbaton.server.permission.Permissions
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -97,12 +101,23 @@ data class FocusIn(val on: Boolean)
 
 /**
  * Whether relays are on: the server setting `zm-baton.relay` (environment ZM_BATON_RELAY), `on`
- * or anything else for off. Off by default until person authentication exists (H-21). It is read
- * at start only, so no request can turn it on.
+ * or anything else for off, and only while people sign in (`ZM_BATON_AUTH=required`). Without sign-in
+ * any program on this PC could answer a relay (H-21), so in `local` mode `on` is ignored with a warning
+ * and relays stay off. It is read at start only, so no request can turn it on.
  */
 @Component
-class RelaySwitch(@Value("\${zm-baton.relay:off}") setting: String) {
-	val enabled: Boolean = setting.trim().equals("on", ignoreCase = true)
+class RelaySwitch(@Value("\${zm-baton.relay:off}") setting: String, auth: AuthSettings) {
+	private val asked: Boolean = setting.trim().equals("on", ignoreCase = true)
+	val enabled: Boolean = asked && auth.required
+
+	init {
+		if (asked && !auth.required) {
+			LoggerFactory.getLogger(RelaySwitch::class.java).warn(
+				"ZM_BATON_RELAY=on is ignored: relays need ZM_BATON_AUTH=required, so that only a signed-in person answers them " +
+					"(docs/hardening-backlog.md H-21). Relays stay off.",
+			)
+		}
+	}
 }
 
 data class FirstScreenIn(val visible: Boolean)
@@ -263,7 +278,7 @@ class RelayService(
 	 * deadline and while the session lives. A late answer is refused with what happened instead.
 	 */
 	@Transactional
-	fun answer(itemId: String, body: RelayAnswerIn, person: String = Requester.STAGE1_PERSON): RelayAnswered {
+	fun answer(itemId: String, body: RelayAnswerIn, person: String): RelayAnswered {
 		val (kind, detailText) = jdbc.sql("select kind, detail::text from inbox_items where id = :id and user_id = :user")
 			.param("id", itemId).param("user", person).query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional()
 			.orElseThrow { NotFoundException("no first-screen item $itemId") }
@@ -288,7 +303,7 @@ class RelayService(
 
 	/** A person sends an open relay to the terminal: the hook stops waiting and gives no decision. */
 	@Transactional
-	fun toTerminal(itemId: String, person: String = Requester.STAGE1_PERSON): RelayAnswered {
+	fun toTerminal(itemId: String, person: String): RelayAnswered {
 		val updated = jdbc.sql(
 			"""
 			update inbox_items set state = 'moved_to_terminal', relay_reason = 'person', closed_at = now()
@@ -323,7 +338,7 @@ class RelayService(
 		}
 	}
 
-	fun me(person: String = Requester.STAGE1_PERSON): MeView =
+	fun me(person: String): MeView =
 		jdbc.sql("select focus_on, focus_changed_at, coalesce(first_screen_visible_until > now(), false) from users where id = :user")
 			.param("user", person).query { rs, _ ->
 				MeView(
@@ -334,7 +349,7 @@ class RelayService(
 
 	/** Turns focus mode on or off. Relays already waiting keep their deadline (relay 7). */
 	@Transactional
-	fun setFocus(on: Boolean, person: String = Requester.STAGE1_PERSON): MeView {
+	fun setFocus(on: Boolean, person: String): MeView {
 		val changed = jdbc.sql("update users set focus_on = :on, focus_changed_at = now() where id = :user and focus_on <> :on")
 			.param("on", on).param("user", person).update()
 		if (changed == 1) sessions.audit("person", person, "focus.changed", "usr", person, mapOf("on" to on))
@@ -343,7 +358,7 @@ class RelayService(
 
 	/** The first screen says whether its tab is visible (relay 12); the signal lasts [VISIBLE_SECONDS]. */
 	@Transactional
-	fun setFirstScreen(visible: Boolean, person: String = Requester.STAGE1_PERSON): MeView {
+	fun setFirstScreen(visible: Boolean, person: String): MeView {
 		jdbc.sql(
 			"""
 			update users set first_screen_visible_until = case when :visible then now() + make_interval(secs => :secs) end
@@ -492,6 +507,7 @@ class RelayService(
 class RelayController(private val relays: RelayService, private val permissions: Permissions) {
 
 	/** The PermissionRequest or PreToolUse hook of a directly opened session asks to relay. */
+	@Access(AccessKind.SESSION)
 	@PostMapping("/sessions/{id}/relays")
 	fun start(
 		@PathVariable id: String,
@@ -500,6 +516,7 @@ class RelayController(private val relays: RelayService, private val permissions:
 	): RelayStarted = relays.start(id, token(authorization), body)
 
 	/** The hook takes the answer, or learns that it waits on or that the terminal decides. */
+	@Access(AccessKind.SESSION)
 	@PostMapping("/sessions/{id}/relays/{relayId}/take")
 	fun take(
 		@PathVariable id: String,

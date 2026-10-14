@@ -1,6 +1,9 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Access
+import io.github.hanumoka.zmbaton.server.auth.AccessKind
+import io.github.hanumoka.zmbaton.server.auth.Requester
 import io.github.hanumoka.zmbaton.server.permission.Act
 import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
@@ -165,7 +168,7 @@ class BadRequestException(message: String) : RuntimeException(message)
 
 @RestController
 @RequestMapping("/api")
-class ApiController(private val service: RunService, private val permissions: Permissions) {
+class ApiController(private val service: RunService, private val permissions: Permissions, private val requester: Requester) {
 
 	/** The compat test's run: a person asks for it on a work item they may hand over. */
 	@PostMapping("/work-items/{id}/runs")
@@ -184,6 +187,7 @@ class ApiController(private val service: RunService, private val permissions: Pe
 	 * Work poll (contract v1 "전송 경로" 2): runs waiting to be claimed. With `device_id`, only the
 	 * delegated runs that device may claim.
 	 */
+	@Access(AccessKind.DEVICE)
 	@GetMapping("/runs")
 	fun pendingRuns(
 		@RequestParam(defaultValue = "requested") state: String,
@@ -191,19 +195,31 @@ class ApiController(private val service: RunService, private val permissions: Pe
 		@RequestParam(name = "device_id", required = false) deviceId: String?,
 	): List<PendingRun> {
 		if (state != "requested") throw BadRequestException("only state=requested can be polled")
+		requester.device(deviceId)
 		return service.pendingRuns(limit.coerceIn(1, 100), deviceId?.trim()?.ifEmpty { null })
 	}
 
+	/** With a device token, only the device of that token may claim (docs/stage1/auth.md). */
+	@Access(AccessKind.DEVICE)
 	@PostMapping("/runs/{id}/claim")
-	fun claim(@PathVariable id: String, @RequestBody body: ClaimRequest): Claimed =
-		service.claim(id, body.deviceId)
+	fun claim(@PathVariable id: String, @RequestBody body: ClaimRequest): Claimed {
+		requester.device(body.deviceId)
+		return service.claim(id, body.deviceId)
+	}
 
+	/** With a device token, a device reports only on a run it holds. */
+	@Access(AccessKind.DEVICE)
 	@PostMapping("/runs/{id}/events")
-	fun events(@PathVariable id: String, @RequestBody body: EventBatch): EventResult =
-		service.ingest(id, body)
+	fun events(@PathVariable id: String, @RequestBody body: EventBatch): EventResult {
+		requester.device(null)?.let { service.requireHeldBy(id, it) }
+		return service.ingest(id, body)
+	}
 
 	/** The connector renews the lease of a run it holds and hears whether to stop and what to pass on. */
+	@Access(AccessKind.DEVICE)
 	@PostMapping("/runs/{id}/lease")
-	fun renew(@PathVariable id: String, @RequestBody body: LeaseIn): LeaseOut =
-		service.renew(id, body)
+	fun renew(@PathVariable id: String, @RequestBody body: LeaseIn): LeaseOut {
+		requester.device(body.deviceId)
+		return service.renew(id, body)
+	}
 }

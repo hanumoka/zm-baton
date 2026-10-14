@@ -52,6 +52,18 @@ export const targetLabel = (kind: string | null) => (kind === null ? TARGET_LABE
 /** Actions in words. An action the screen does not know shows as the server names it. */
 const ACTIONS: Record<string, string> = {
   'device.registered': '기기 등록',
+  'device.token_issued': '기기 토큰 발급',
+  'device.revoked': '기기 폐기',
+  'device_login.approved': '기기 로그인 허락',
+  'device_login.denied': '기기 로그인 거절',
+  'auth.login': '로그인',
+  'auth.logout': '로그아웃',
+  'auth.login_failed': '로그인 실패',
+  'auth.password_set': '설정 토큰으로 비밀번호 정함',
+  'auth.password_changed': '비밀번호 바꿈',
+  'auth.password_change_refused': '비밀번호 바꾸기 거절(지금 비밀번호가 틀림)',
+  'auth.setup_token_issued': '설정 토큰 발급',
+  'auth.setup_refused': '설정 토큰 거절',
   'device.repository_added': '기기에 저장소 등록',
   'device.repository_removed': '기기에서 저장소 뺌',
   'session.registered': '세션 등록',

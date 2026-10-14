@@ -17,6 +17,9 @@ func (c *Client) Export(ctx context.Context, w io.Writer) (int64, error) {
 		return 0, err
 	}
 	req.Header.Set("Accept", "application/json")
+	if c.deviceToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.deviceToken)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return 0, err

@@ -1,8 +1,11 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Access
+import io.github.hanumoka.zmbaton.server.auth.AccessKind
 import io.github.hanumoka.zmbaton.server.auth.Requester
 import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Actor
 import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
 import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.dao.DuplicateKeyException
@@ -112,7 +115,7 @@ class DelegationService(
 	 * repository becomes one of the device's organisation's too, when it is not yet.
 	 */
 	@Transactional
-	fun addRepository(deviceId: String, body: RepositoryUpsert, actor: String = Requester.STAGE1_PERSON): DeviceRepositoryView {
+	fun addRepository(deviceId: String, body: RepositoryUpsert, actor: String): DeviceRepositoryView {
 		requireDevice(deviceId)
 		val repoKey = body.repoKey.trim()
 		if (!SessionService.isRepoKey(repoKey)) throw BadRequestException("repo_key is not a repository key")
@@ -137,7 +140,7 @@ class DelegationService(
 
 	/** `zm-baton repo remove`. The row stays for the record; new delegations cannot name it. */
 	@Transactional
-	fun removeRepository(deviceId: String, repoKey: String, actor: String = Requester.STAGE1_PERSON): Boolean {
+	fun removeRepository(deviceId: String, repoKey: String, actor: String): Boolean {
 		requireDevice(deviceId)
 		val removed = jdbc.sql(
 			"update device_repositories set removed_at = now(), updated_at = now() where device_id = :device and repo_key = :key and removed_at is null",
@@ -185,7 +188,7 @@ class DelegationService(
 	 * run left, so `outcome_unknown` and `readiness_failed` come off.
 	 */
 	@Transactional
-	fun delegate(workItemId: String, body: DelegateIn, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
+	fun delegate(workItemId: String, body: DelegateIn, actor: String): WorkItemDetail {
 		val executor = body.executor.trim()
 		if (executor !in EXECUTORS) throw BadRequestException("executor must be one of $EXECUTORS")
 		val deviceId = body.deviceId.trim()
@@ -296,7 +299,7 @@ class DelegationService(
 	 * taken back here; stopping a running executor comes later.
 	 */
 	@Transactional
-	fun withdraw(runId: String, version: Long, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
+	fun withdraw(runId: String, version: Long, actor: String): WorkItemDetail {
 		// The run first, then the work item: the same lock order as a report (RunService.ingest).
 		val run = jdbc.sql("select work_item_id, delegation_id from runs where id = :id for update")
 			.param("id", runId).query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional()
@@ -467,25 +470,34 @@ class DelegationController(private val delegations: DelegationService, private v
 		return delegations.repositories(orgId = me.orgId)
 	}
 
+	/** `zm-baton repo add`: a person, or the device itself with its device token. */
+	@Access(AccessKind.PERSON_OR_DEVICE)
 	@PostMapping("/devices/{id}/repositories")
 	fun addRepository(
 		@PathVariable id: String,
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: RepositoryUpsert,
 	): DeviceRepositoryView {
-		val me = permissions.person(authorization, "add a repository to a device")
-		permissions.require(me, Act.DEVICE, permissions.device(id))
+		val me = deviceOwner(authorization, id, "add a repository to a device")
 		return delegations.addRepository(id, body, me.person!!)
 	}
 
+	@Access(AccessKind.PERSON_OR_DEVICE)
 	@DeleteMapping("/devices/{id}/repositories")
 	fun removeRepository(
 		@PathVariable id: String,
 		@RequestParam("repo_key") repoKey: String,
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 	): Map<String, Boolean> {
-		val me = permissions.person(authorization, "remove a repository from a device")
-		permissions.require(me, Act.DEVICE, permissions.device(id))
+		val me = deviceOwner(authorization, id, "remove a repository from a device")
 		return mapOf("removed" to delegations.removeRepository(id, repoKey, me.person!!))
+	}
+
+	/** Who may change a device's repositories: its person (or an operator), and a device only its own. */
+	private fun deviceOwner(authorization: String?, deviceId: String, action: String): Actor {
+		val (me, viaDevice) = permissions.personOrDevice(authorization, action)
+		if (viaDevice != null && viaDevice != deviceId.trim()) throw ForbiddenException("이 기기 토큰으로는 다른 기기의 저장소를 바꿀 수 없다")
+		permissions.require(me, Act.DEVICE, permissions.device(deviceId))
+		return me
 	}
 }
