@@ -1,6 +1,10 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Requester
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -123,9 +127,9 @@ class AccountService(
 	private val json: ObjectMapper,
 	private val usage: UsageService,
 	private val sessions: SessionService,
+	private val access: PermissionFacts,
 ) {
 	companion object {
-		const val ORG = "org_owner"
 		val AUTH_KINDS = setOf("personal_subscription", "org_account", "api_key")
 		val AUTH_SOURCES = setOf("device_login", "env:ANTHROPIC_API_KEY")
 		val AFFILIATIONS = setOf("personal", "organization")
@@ -144,10 +148,13 @@ class AccountService(
 
 	// ---------------------------------------------------------------- reads
 
-	fun list(includeDisabled: Boolean): List<AccountView> {
+	/** The accounts of [orgId] (every account without one). */
+	fun list(includeDisabled: Boolean, orgId: String? = null): List<AccountView> {
 		val now = usage.now()
-		return jdbc.sql("$SELECT where (cast(:all as boolean) or a.status <> 'disabled') order by (a.status = 'disabled'), a.created_at, a.id")
-			.param("all", includeDisabled).query { rs, _ -> view(rs, now) }.list()
+		return jdbc.sql(
+			"$SELECT where (cast(:all as boolean) or a.status <> 'disabled') and (cast(:org as text) is null or a.org_id = :org) " +
+				"order by (a.status = 'disabled'), a.created_at, a.id",
+		).param("all", includeDisabled).param("org", orgId).query { rs, _ -> view(rs, now) }.list()
 	}
 
 	fun get(id: String): AccountView =
@@ -197,12 +204,12 @@ class AccountService(
 	// ---------------------------------------------------------------- writes
 
 	/**
-	 * Registers an account. Absent limits start at [DEFAULT_LIMITS]; a limit sent as null means none.
-	 * A personal subscription belongs to the one person (stage 1) and its runs do only that person's
-	 * work (DEC-0076); an organisation's account has no owner.
+	 * Registers an account in [actor]'s organisation. Absent limits start at [DEFAULT_LIMITS]; a limit
+	 * sent as null means none. A personal subscription belongs to the person who registers it and its
+	 * runs do only that person's work (DEC-0076); an organisation's account has no owner.
 	 */
 	@Transactional
-	fun register(body: Map<String, Any?>): AccountDetail {
+	fun register(body: Map<String, Any?>, actor: String = Requester.STAGE1_PERSON): AccountDetail {
 		val unknown = body.keys - (setOf("name", "auth_kind", "affiliation", "purpose", "data_terms", "auth_source", "device_id") + LIMIT_KEYS)
 		if (unknown.isNotEmpty()) throw BadRequestException("unknown fields $unknown")
 		val texts = texts(body)
@@ -221,13 +228,13 @@ class AccountService(
 			values (:id, :org, :owner, 'anthropic', :kind, :name, :purpose, :affiliation, :terms, :source, :device,
 			        :turns, :runCost, :minutes, :daily)
 			""".trimIndent(),
-		).param("id", id).param("org", ORG).param("owner", if (affiliation == "personal") SessionService.OWNER else null)
+		).param("id", id).param("org", access.orgOf(actor)).param("owner", if (affiliation == "personal") actor else null)
 			.param("kind", kind).param("name", name).param("purpose", texts["purpose"]).param("affiliation", affiliation)
 			.param("terms", texts["data_terms"]).param("source", source).param("device", device)
 			.param("turns", limits.runTurnLimit).param("runCost", limits.runCostLimitUsd).param("minutes", limits.runMinuteLimit)
 			.param("daily", limits.dailyCostLimitUsd).update()
 		audit(id, "account.registered", mapOf("name" to name, "auth_kind" to kind, "affiliation" to affiliation, "auth_source" to source,
-			"device_id" to device, "limits" to limits))
+			"device_id" to device, "limits" to limits), actor)
 		return detail(id)
 	}
 
@@ -236,7 +243,7 @@ class AccountService(
 	 * account and where its sign-in lives do not change: that is another account, registered anew.
 	 */
 	@Transactional
-	fun update(id: String, patch: Map<String, Any?>): AccountDetail {
+	fun update(id: String, patch: Map<String, Any?>, actor: String = Requester.STAGE1_PERSON): AccountDetail {
 		val version = (patch["version"] as? Number)?.toLong() ?: throw BadRequestException("version is required")
 		val unknown = patch.keys - (setOf("version", "name", "purpose", "data_terms", "affiliation", "device_id") + LIMIT_KEYS)
 		if (unknown.isNotEmpty()) throw BadRequestException("unknown fields $unknown. 계정 종류와 자격 위치는 바꾸지 않는다. 새 계정으로 등록한다")
@@ -248,7 +255,7 @@ class AccountService(
 		if ("affiliation" in patch) {
 			val affiliation = affiliationFor(current.authKind, patch["affiliation"] as? String)
 			changes["affiliation"] = affiliation
-			changes["owner_user_id"] = if (affiliation == "personal") SessionService.OWNER else null
+			changes["owner_user_id"] = if (affiliation == "personal") actor else null
 		}
 		if ("device_id" in patch) changes["device_id"] = device(patch["device_id"])
 		val limits = limits(patch, AccountLimits(null, null, null, null))
@@ -262,27 +269,27 @@ class AccountService(
 			.param("id", id)
 		changes.forEach { (k, v) -> stmt.param(k, v) }
 		stmt.update()
-		audit(id, "account.updated", changes.mapValues { it.value?.toString() })
+		audit(id, "account.updated", changes.mapValues { it.value?.toString() }, actor)
 		return detail(id)
 	}
 
 	/** Disabling keeps the account and its history; no new run is handed to it. Runs already going on go on. */
 	@Transactional
-	fun disable(id: String, version: Long): AccountDetail {
+	fun disable(id: String, version: Long, actor: String = Requester.STAGE1_PERSON): AccountDetail {
 		val current = lock(id, version)
 		if (current.status == "disabled") throw ConflictException("이미 비활성화한 계정이다")
 		jdbc.sql("update ai_accounts set status = 'disabled', version = version + 1, updated_at = now() where id = :id").param("id", id).update()
-		audit(id, "account.disabled", mapOf("from" to current.status))
+		audit(id, "account.disabled", mapOf("from" to current.status), actor)
 		return detail(id)
 	}
 
 	@Transactional
-	fun enable(id: String, version: Long): AccountDetail {
+	fun enable(id: String, version: Long, actor: String = Requester.STAGE1_PERSON): AccountDetail {
 		val current = lock(id, version)
 		if (current.status != "disabled") throw ConflictException("비활성화한 계정이 아니다")
 		jdbc.sql("update ai_accounts set status = 'ready', limit_resets_at = null, version = version + 1, updated_at = now() where id = :id")
 			.param("id", id).update()
-		audit(id, "account.enabled", emptyMap())
+		audit(id, "account.enabled", emptyMap(), actor)
 		return detail(id)
 	}
 
@@ -292,13 +299,13 @@ class AccountService(
 	 * each is handed on again.
 	 */
 	@Transactional
-	fun resumeBilling(id: String, version: Long): AccountDetail {
+	fun resumeBilling(id: String, version: Long, actor: String = Requester.STAGE1_PERSON): AccountDetail {
 		lock(id, version)
 		val cleared = jdbc.sql(
 			"update ai_accounts set billing_stopped_at = null, version = version + 1, updated_at = now() where id = :id and billing_stopped_at is not null",
 		).param("id", id).update()
 		if (cleared == 0) throw ConflictException("추가 과금 신호로 멈춘 계정이 아니다")
-		audit(id, "account.billing_resumed", emptyMap())
+		audit(id, "account.billing_resumed", emptyMap(), actor)
 		return detail(id)
 	}
 
@@ -312,11 +319,18 @@ class AccountService(
 		val acc = if (accountId != null) {
 			usage.account(accountId.trim()) ?: throw BadRequestException("no AI account $accountId")
 		} else {
-			jdbc.sql("select id from ai_accounts where status <> 'disabled' and auth_kind <> 'api_key' order by created_at, id")
-				.query(String::class.java).list().filterNotNull().mapNotNull { usage.account(it) }
+			jdbc.sql(
+				"""
+				select id from ai_accounts where status <> 'disabled' and auth_kind <> 'api_key'
+				   and org_id = (select org_id from devices where id = :device) order by created_at, id
+				""".trimIndent(),
+			).param("device", deviceId).query(String::class.java).list().filterNotNull().mapNotNull { usage.account(it) }
 				.firstOrNull { usage.block(it) == null && (it.deviceId == null || it.deviceId == deviceId) }
 				?: throw ConflictException("account_id: 지금 쓸 수 있는 구독 로그인 계정이 없다. AI 계정 화면에서 계정을 고르거나 등록한다")
 		}
+		val sameOrg = jdbc.sql("select count(*) from ai_accounts a join devices d on d.org_id = a.org_id where a.id = :acc and d.id = :device")
+			.param("acc", acc.id).param("device", deviceId).query(Long::class.javaObjectType).single() > 0
+		if (!sameOrg) throw ConflictException("다른 조직의 AI 계정이다. 이 조직의 계정을 고른다")
 		if (acc.deviceId != null && acc.deviceId != deviceId) {
 			throw ConflictException("이 AI 계정의 자격은 다른 PC에 있다. 그 PC의 저장소를 고르거나 다른 계정을 고른다")
 		}
@@ -406,8 +420,8 @@ class AccountService(
 		)
 	}
 
-	private fun audit(id: String, action: String, details: Map<String, Any?>) =
-		sessions.audit("person", SessionService.OWNER, action, "acc", id, details)
+	private fun audit(id: String, action: String, details: Map<String, Any?>, actor: String) =
+		sessions.audit("person", actor, action, "acc", id, details)
 
 	private val SELECT = """
 		select a.id, a.name, a.provider, a.auth_kind, a.affiliation, a.purpose, a.data_terms, a.auth_source, a.device_id, d.name as device_name,
@@ -435,20 +449,21 @@ class AccountService(
 
 @RestController
 @RequestMapping("/api")
-class AccountController(private val accounts: AccountService, private val usage: UsageService, private val people: PersonService) {
+class AccountController(private val accounts: AccountService, private val usage: UsageService, private val permissions: Permissions) {
 
 	@GetMapping("/ai-accounts")
 	fun list(
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestParam(name = "include_disabled", defaultValue = "true") includeDisabled: Boolean,
 	): List<AccountView> {
-		people.refuseSessionToken(authorization, "list AI accounts")
-		return accounts.list(includeDisabled)
+		val me = permissions.person(authorization, "list AI accounts", Act.READ)
+		return accounts.list(includeDisabled, me.orgId)
 	}
 
 	@GetMapping("/ai-accounts/{id}")
 	fun detail(@PathVariable id: String, @RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): AccountDetail {
-		people.refuseSessionToken(authorization, "read an AI account")
+		val me = permissions.person(authorization, "read an AI account")
+		permissions.see(me, permissions.account(id))
 		return accounts.detail(id)
 	}
 
@@ -458,8 +473,8 @@ class AccountController(private val accounts: AccountService, private val usage:
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: Map<String, Any?>,
 	): AccountDetail {
-		people.refuseSessionToken(authorization, "register an AI account")
-		return accounts.register(body)
+		val me = permissions.person(authorization, "register an AI account", Act.ACCOUNTS)
+		return accounts.register(body, me.person!!)
 	}
 
 	@PatchMapping("/ai-accounts/{id}")
@@ -468,8 +483,9 @@ class AccountController(private val accounts: AccountService, private val usage:
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: Map<String, Any?>,
 	): AccountDetail {
-		people.refuseSessionToken(authorization, "change an AI account")
-		return accounts.update(id, body)
+		val me = permissions.person(authorization, "change an AI account")
+		permissions.require(me, Act.ACCOUNTS, permissions.account(id))
+		return accounts.update(id, body, me.person!!)
 	}
 
 	@PostMapping("/ai-accounts/{id}/disable")
@@ -478,8 +494,9 @@ class AccountController(private val accounts: AccountService, private val usage:
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: AccountVersionIn,
 	): AccountDetail {
-		people.refuseSessionToken(authorization, "disable an AI account")
-		return accounts.disable(id, body.version)
+		val me = permissions.person(authorization, "disable an AI account")
+		permissions.require(me, Act.ACCOUNTS, permissions.account(id))
+		return accounts.disable(id, body.version, me.person!!)
 	}
 
 	@PostMapping("/ai-accounts/{id}/enable")
@@ -488,8 +505,9 @@ class AccountController(private val accounts: AccountService, private val usage:
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: AccountVersionIn,
 	): AccountDetail {
-		people.refuseSessionToken(authorization, "enable an AI account")
-		return accounts.enable(id, body.version)
+		val me = permissions.person(authorization, "enable an AI account")
+		permissions.require(me, Act.ACCOUNTS, permissions.account(id))
+		return accounts.enable(id, body.version, me.person!!)
 	}
 
 	@PostMapping("/ai-accounts/{id}/resume-billing")
@@ -498,8 +516,9 @@ class AccountController(private val accounts: AccountService, private val usage:
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: AccountVersionIn,
 	): AccountDetail {
-		people.refuseSessionToken(authorization, "let an AI account run again after an extra-billing signal")
-		return accounts.resumeBilling(id, body.version)
+		val me = permissions.person(authorization, "let an AI account run again after an extra-billing signal")
+		permissions.require(me, Act.ACCOUNTS, permissions.account(id))
+		return accounts.resumeBilling(id, body.version, me.person!!)
 	}
 
 	/** What each account used per day (FN-0409: 계정별·일별), newest first. */
@@ -508,7 +527,7 @@ class AccountController(private val accounts: AccountService, private val usage:
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestParam(defaultValue = "7") days: Int,
 	): List<DailyUsage> {
-		people.refuseSessionToken(authorization, "read usage")
+		permissions.person(authorization, "read usage", Act.READ)
 		return usage.daily(null, days.coerceIn(1, 90))
 	}
 }

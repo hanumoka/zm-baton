@@ -1,11 +1,14 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
+import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
@@ -230,16 +233,28 @@ class ReadService(
 
 @RestController
 @RequestMapping("/api")
-class ReadController(private val reads: ReadService) {
+class ReadController(private val reads: ReadService, private val permissions: Permissions) {
 
+	/** A work item's runs, for a person who may see the work item. */
 	@GetMapping("/work-items/{id}/runs")
-	fun runs(@PathVariable id: String, @RequestParam(defaultValue = "50") limit: Int): List<RunView> =
-		reads.runs(id, limit.coerceIn(1, 100))
+	fun runs(
+		@PathVariable id: String,
+		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
+		@RequestParam(defaultValue = "50") limit: Int,
+	): List<RunView> {
+		permissions.see(permissions.person(authorization, "read a work item's runs"), permissions.workItem(id))
+		return reads.runs(id, limit.coerceIn(1, 100))
+	}
 
+	/** A run's events, for a person who may see its work item. */
 	@GetMapping("/runs/{id}/events")
 	fun events(
 		@PathVariable id: String,
+		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestParam(name = "after_seq", defaultValue = "0") afterSeq: Long,
 		@RequestParam(defaultValue = "200") limit: Int,
-	): List<EventView> = reads.events(id, afterSeq, limit.coerceIn(1, 500))
+	): List<EventView> {
+		permissions.see(permissions.person(authorization, "read a run's events"), permissions.run(id))
+		return reads.events(id, afterSeq, limit.coerceIn(1, 500))
+	}
 }

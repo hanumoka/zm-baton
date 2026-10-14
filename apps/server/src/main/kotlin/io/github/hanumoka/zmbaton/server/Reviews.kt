@@ -1,6 +1,11 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.ActorKind
+import io.github.hanumoka.zmbaton.server.permission.Actor
+import io.github.hanumoka.zmbaton.server.permission.PermissionRules
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.scheduling.annotation.Scheduled
@@ -146,6 +151,7 @@ class ReviewService(
 		val responsible: String,
 		val waitReasons: List<String>,
 		val repoKey: String?,
+		val orgId: String,
 	)
 
 	private data class NewRequest(val reason: String, val raisedBy: String, val evidence: Map<String, Any?>)
@@ -168,14 +174,14 @@ class ReviewService(
 	fun fixResult(runId: String) {
 		val run = jdbc.sql(
 			"""
-			select w.id, w.title, w.project_id, w.responsible_user_id, w.wait_reasons, d.scope ->> 'repo_key'
+			select w.id, w.title, w.project_id, w.responsible_user_id, w.wait_reasons, d.scope ->> 'repo_key', w.org_id
 			  from runs r join work_items w on w.id = r.work_item_id left join delegations d on d.id = r.delegation_id
 			 where r.id = :id
 			""".trimIndent(),
 		).param("id", runId).query { rs, _ ->
 			@Suppress("UNCHECKED_CAST")
 			RunFacts(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4),
-				(rs.getArray(5).array as Array<String>).toList(), rs.getString(6))
+				(rs.getArray(5).array as Array<String>).toList(), rs.getString(6), rs.getString(7))
 		}.single()
 		val changes = newestChanges(runId)
 		val snapshot = (changes?.get("snapshot") as? String)?.takeIf { COMMIT.matches(it) }
@@ -183,7 +189,7 @@ class ReviewService(
 		val targetKind = if (snapshot != null) "run_snapshot" else "unpinned"
 		val targetRef = snapshot ?: sha256(runId + "\n" + files.joinToString("\n"))
 
-		val rules = settings.effective(run.projectId, run.repoKey)
+		val rules = settings.effective(run.projectId, run.repoKey, run.orgId)
 		val matches = RiskPaths.match(rules.patterns, files)
 		val requests = mutableListOf<NewRequest>()
 		if (matches.isNotEmpty()) {
@@ -200,8 +206,8 @@ class ReviewService(
 			requests.isNotEmpty() -> sample["skipped"] = "risk"
 			targetKind == "unpinned" -> sample["skipped"] = "unpinned"
 			else -> {
-				val rate = settings.sampleRate()
-				val cap = settings.sampleDailyCap()
+				val rate = settings.sampleRate(run.orgId)
+				val cap = settings.sampleDailyCap(run.orgId)
 				val draw = Sampler.draw(runId)
 				sample += mapOf("draw" to draw, "rate" to rate, "daily_cap" to cap)
 				if (Sampler.picked(draw, rate)) {
@@ -266,7 +272,7 @@ class ReviewService(
 			                          source_key, reason, raised_by, evidence)
 			values (:id, :org, :project, :wid, :run, :user, :tkind, :tref, :run, :reason, :by, cast(:evidence as jsonb))
 			""".trimIndent(),
-		).param("id", id).param("org", WorkItemService.ORG).param("project", run.projectId).param("wid", run.workItemId)
+		).param("id", id).param("org", run.orgId).param("project", run.projectId).param("wid", run.workItemId)
 			.param("run", runId).param("user", run.responsible).param("tkind", targetKind).param("tref", targetRef)
 			.param("reason", req.reason).param("by", req.raisedBy).param("evidence", json.writeValueAsString(req.evidence)).update()
 		@Suppress("UNCHECKED_CAST")
@@ -331,7 +337,8 @@ class ReviewService(
 
 	/**
 	 * A person approves or rejects a request on the target they saw. Anyone but a person is refused
-	 * and the refusal audited (data model constraint 6: AI never closes a request a rule raised).
+	 * and the refusal audited (data model constraint 6: AI never closes a request a rule raised); the
+	 * judge (PermissionRules, Act REVIEW_DECIDE) says so and in what words.
 	 * The run, the work item and the request are locked in a report's order (run, work item), so a
 	 * report and a verdict never interleave. A rejection does what the contract's "반려하면 작업이
 	 * 어떻게 되나" says ([ReviewRules.rejectEffect]); an approval that frees a result held in review
@@ -339,11 +346,18 @@ class ReviewService(
 	 */
 	fun decide(reviewId: String, body: ReviewDecisionIn, actorKind: String, actorId: String): ReviewDecisionOut {
 		if (actorKind != "person") {
+			val kind = when (actorKind) {
+				"session" -> ActorKind.SESSION
+				"run" -> ActorKind.RUN
+				"manager" -> ActorKind.MANAGER
+				else -> ActorKind.SYSTEM
+			}
+			val verdict = PermissionRules.check(Actor(kind, actorId, null, null, null, false, emptySet()), Act.REVIEW_DECIDE)
 			// Outside a transaction on purpose: the refusal's audit row must survive the refusal. The audit
 			// log knows sessions and the server; any other AI actor is written as the server, with its kind.
-			val kind = if (actorKind == "session") "session" else "system"
-			sessions.audit(kind, actorId, "review.close_refused", "rvw", reviewId, mapOf("decision" to body.decision, "actor_kind" to actorKind))
-			throw ForbiddenException("사람 검토 요청은 사람만 승인하거나 반려한다. AI는 닫을 수 없다")
+			val auditKind = if (actorKind == "session") "session" else "system"
+			sessions.audit(auditKind, actorId, "review.close_refused", "rvw", reviewId, mapOf("decision" to body.decision, "actor_kind" to actorKind))
+			throw ForbiddenException(verdict.reason ?: Act.REVIEW_DECIDE.notPerson!!)
 		}
 		return tx.execute { decideByPerson(reviewId, body, actorId) }!!
 	}
@@ -374,7 +388,7 @@ class ReviewService(
 		val effect = if (verdict == "rejected") rejectEffect(workItemId, runId, reason) else null
 		if (effect == ReviewRules.RejectEffect.RETURN) {
 			val version = body.workVersion ?: throw BadRequestException("결과를 돌려보내는 반려에는 작업의 work_version이 필요하다")
-			workItems.transition(workItemId!!, TransitionIn("in_progress", version, note))
+			workItems.transition(workItemId!!, TransitionIn("in_progress", version, note), actorId)
 		}
 		jdbc.sql(
 			"""
@@ -389,10 +403,10 @@ class ReviewService(
 
 		var fixId: String? = null
 		val outcome = when (effect) {
-			null -> if (workItemId != null && workItems.releaseHeldResult(workItemId)) "released" else "approved"
+			null -> if (workItemId != null && workItems.releaseHeldResult(workItemId, actorId)) "released" else "approved"
 			ReviewRules.RejectEffect.RETURN -> "returned"
 			ReviewRules.RejectEffect.FIX_ITEM -> {
-				fixId = createFix(workItemId!!, note!!, reviewId)
+				fixId = createFix(workItemId!!, note!!, reviewId, actorId)
 				"fix_created"
 			}
 			ReviewRules.RejectEffect.RECORD -> "recorded"
@@ -400,7 +414,7 @@ class ReviewService(
 		val details = mapOf("review_id" to reviewId, "reason" to reason, "target_kind" to targetKind, "target_ref" to targetRef,
 			"approval" to approval, "note" to note, "effect" to outcome, "fix_work_item_id" to fixId, "propose_risk_path" to proposal)
 		sessions.audit("person", actorId, "review.$verdict", "rvw", reviewId, details)
-		workItemId?.let { workItems.record(it, "review.$verdict", details) }
+		workItemId?.let { workItems.record(it, "review.$verdict", details, actorId) }
 		return ReviewDecisionOut(detail(reviewId), outcome, fixId)
 	}
 
@@ -415,16 +429,17 @@ class ReviewService(
 			.query(String::class.java).optional().orElse(null)
 
 	/** A work item that fixes a done one whose sample was rejected; the reason is its acceptance draft (contract "반려하면" 3). */
-	private fun createFix(workItemId: String, note: String, reviewId: String): String {
+	private fun createFix(workItemId: String, note: String, reviewId: String, actorId: String): String {
 		val (title, projectId, responsible) = jdbc.sql("select title, project_id, responsible_user_id from work_items where id = :id")
 			.param("id", workItemId).query { rs, _ -> Triple(rs.getString(1), rs.getString(2), rs.getString(3)) }.single()
 		val created = workItems.create(
 			CreateWorkItem(("고침: $title").take(WorkItemService.TITLE_MAX), responsible, projectId,
 				acceptance = note.take(WorkItemService.TEXT_MAX), initialStage = "draft", executorKind = "human"),
+			actorId,
 		)
 		jdbc.sql("insert into work_item_links (from_id, to_id, kind, source) values (:from, :to, 'fixes', 'system')")
 			.param("from", created.id).param("to", workItemId).update()
-		workItems.record(created.id, "work_item.fixes", mapOf("work_item_id" to workItemId, "review_id" to reviewId))
+		workItems.record(created.id, "work_item.fixes", mapOf("work_item_id" to workItemId, "review_id" to reviewId), actorId)
 		return created.id
 	}
 
@@ -492,7 +507,7 @@ class ReviewService(
 			ReviewRules.RejectEffect.RECORD -> "작업 단계는 그대로 두고 반려만 기록한다"
 		}
 		val held = work?.stage == "result_review" && d.reason != "sample"
-		val approve = if (held && workItems.skipsResultReview()) {
+		val approve = if (held && work != null && workItems.skipsResultReview(work.id)) {
 			"다른 열린 위험 검토가 없으면 작업이 완료로 넘어간다(결과 검토를 쓰지 않는 조직). 합치기는 사람이 Git으로 한다"
 		} else {
 			"승인을 기록한다. 합치기는 사람이 Git으로 한다"
@@ -514,16 +529,22 @@ class ReviewService(
 				rs.getObject(6, OffsetDateTime::class.java), rs.getString(7), rs.getString(8), rs.getString(9))
 		}.list().groupBy({ it.first }, { it.second })
 
-	/** Reviews open longer than the organisation's hours are raised to bucket 1 (contract "항목과 순서" 2). */
+	/**
+	 * Reviews open longer than their organisation's hours are raised to bucket 1 (contract "항목과 순서"
+	 * 2). Each organisation by its own setting; a review belongs to its recipient's organisation.
+	 */
 	@Transactional
 	fun promoteWaiting(): Int =
-		jdbc.sql(
-			"""
-			update inbox_items set promoted_at = now()
-			 where state = 'open' and kind in ('risk_review', 'sample_review') and promoted_at is null
-			   and waiting_since < now() - make_interval(hours => :hours)
-			""".trimIndent(),
-		).param("hours", settings.promoteAfterHours()).update()
+		jdbc.sql("select id from organizations order by created_at, id").query(String::class.java).list().sumOf { org ->
+			jdbc.sql(
+				"""
+				update inbox_items set promoted_at = now()
+				 where state = 'open' and kind in ('risk_review', 'sample_review') and promoted_at is null
+				   and waiting_since < now() - make_interval(hours => :hours)
+				   and user_id in (select user_id from memberships where org_id = :org)
+				""".trimIndent(),
+			).param("hours", settings.promoteAfterHours(org!!)).param("org", org).update()
+		}
 
 	private fun sha256(s: String): String =
 		MessageDigest.getInstance("SHA-256").digest(s.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
@@ -531,11 +552,12 @@ class ReviewService(
 
 @RestController
 @RequestMapping("/api")
-class ReviewController(private val reviews: ReviewService, private val people: PersonService) {
+class ReviewController(private val reviews: ReviewService, private val permissions: Permissions) {
 
 	@GetMapping("/reviews/{id}")
 	fun detail(@PathVariable id: String, @RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): ReviewDetail {
-		people.refuseSessionToken(authorization, "read a review request")
+		val me = permissions.person(authorization, "read a review request")
+		permissions.see(me, permissions.review(id))
 		return reviews.detail(id)
 	}
 
@@ -546,8 +568,9 @@ class ReviewController(private val reviews: ReviewService, private val people: P
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: ReviewDecisionIn,
 	): ReviewDecisionOut {
-		people.refuseSessionToken(authorization, "approve or reject a review request")
-		return reviews.decide(id, body, "person", Requester.person())
+		val me = permissions.person(authorization, "approve or reject a review request")
+		permissions.require(me, Act.REVIEW_DECIDE, permissions.review(id))
+		return reviews.decide(id, body, "person", me.person!!)
 	}
 }
 

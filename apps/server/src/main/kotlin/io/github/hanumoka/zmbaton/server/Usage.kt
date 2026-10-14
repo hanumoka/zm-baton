@@ -493,20 +493,24 @@ class UsageService(
 	/**
 	 * A usage notice on the first screen: bucket 5 「표본 검토와 나머지 알림」, immediate when work stopped
 	 * (DEC-0092 5: it waits for my decision to go on), digest for a warning. The same evidence again
-	 * counts up and opens a judged notice again, because each stop is new work for the person.
+	 * counts up and opens a judged notice again, because each stop is new work for the person. It goes
+	 * to the person responsible for the stopped work item.
 	 */
 	fun raise(dedupeKey: String, evidence: Map<String, Any?>, summary: String, immediate: Boolean) {
 		val evidenceJson = json.writeValueAsString(evidence)
+		val person = jdbc.sql("select responsible_user_id from work_items where id = :id").param("id", evidence["work_item_id"] as String?)
+			.query(String::class.java).optional().orElse(null)
+			?: jdbc.sql("select owner_user_id from organizations order by created_at, id limit 1").query(String::class.java).single()
 		val id = jdbc.sql(
 			"""
 			insert into notices (id, kind, evidence, dedupe_key, recipients)
-			values (:id, 'usage_alert', cast(:e as jsonb), :key, array[:owner])
+			values (:id, 'usage_alert', cast(:e as jsonb), :key, array[:person])
 			on conflict (dedupe_key) do update
 			   set repeat_count = notices.repeat_count + 1, last_seen_at = now(), evidence = excluded.evidence,
 			       status = 'open', status_by = null, status_at = null, status_note = null
 			returning id
 			""".trimIndent(),
-		).param("id", Ids.notice()).param("e", evidenceJson).param("key", dedupeKey).param("owner", SessionService.OWNER)
+		).param("id", Ids.notice()).param("e", evidenceJson).param("key", dedupeKey).param("person", person)
 			.query(String::class.java).single()
 		sessions.audit("system", SessionService.SYSTEM_ACTOR, "notice.raised", "ntc", id, mapOf("kind" to "usage_alert", "cause" to evidence["cause"]))
 		jdbc.sql(
@@ -515,7 +519,7 @@ class UsageService(
 			values (:id, :user, 5, 'notice', 'ntc', :notice, :summary, cast(:detail as jsonb), :notify)
 			on conflict (source_id) where state = 'open' and kind = 'notice' do nothing
 			""".trimIndent(),
-		).param("id", Ids.inbox()).param("user", SessionService.OWNER).param("notice", id).param("summary", summary.take(300))
+		).param("id", Ids.inbox()).param("user", person).param("notice", id).param("summary", summary.take(300))
 			.param("detail", evidenceJson).param("notify", if (immediate) "immediate" else "digest").update()
 	}
 

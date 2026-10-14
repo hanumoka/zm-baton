@@ -1,6 +1,9 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Requester
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -87,7 +90,7 @@ class RunControlService(
 	 * branch stay. The work item keeps its stage; the end report decides `outcome_unknown`.
 	 */
 	@Transactional
-	fun cancel(runId: String, version: Long): WorkItemDetail {
+	fun cancel(runId: String, version: Long, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
 		// The run first, then the work item: the same lock order as a report (RunService.ingest).
 		val (workItemId, delegationId, state) = jdbc.sql("select work_item_id, delegation_id, state from runs where id = :id for update")
 			.param("id", runId).query { rs, _ -> Triple(rs.getString(1), rs.getString(2), rs.getString(3)) }.optional()
@@ -102,7 +105,7 @@ class RunControlService(
 			jdbc.sql("update delegations set revoked_at = now() where id = :id and revoked_at is null").param("id", delegationId).update()
 		}
 		jdbc.sql("update work_items set version = version + 1, updated_at = now() where id = :id").param("id", workItemId).update()
-		workItems.record(workItemId, "work_item.run_cancel_requested", mapOf("run_id" to runId, "state" to state))
+		workItems.record(workItemId, "work_item.run_cancel_requested", mapOf("run_id" to runId, "state" to state), actor)
 		return workItems.detail(workItemId)
 	}
 
@@ -112,7 +115,7 @@ class RunControlService(
 	 * connector's next renewal; whether the executor took it shows as its state.
 	 */
 	@Transactional
-	fun sendInput(runId: String, body: RunInputIn): RunInputView {
+	fun sendInput(runId: String, body: RunInputIn, actor: String = Requester.STAGE1_PERSON): RunInputView {
 		val text = body.text.trim()
 		if (text.isEmpty() || text.length > RunActionRules.INPUT_MAX) {
 			throw BadRequestException("text must be 1-${RunActionRules.INPUT_MAX} characters")
@@ -132,8 +135,8 @@ class RunControlService(
 		if (!actions.sendInput.allowed) throw ConflictException(actions.sendInput.reason ?: "지시를 보낼 수 없다")
 		val id = Ids.input()
 		jdbc.sql("insert into run_inputs (id, run_id, body, created_by) values (:id, :run, :body, :by)")
-			.param("id", id).param("run", runId).param("body", text).param("by", SessionService.OWNER).update()
-		sessions.audit("person", SessionService.OWNER, "run.input_sent", "wrk", workItemId,
+			.param("id", id).param("run", runId).param("body", text).param("by", actor).update()
+		sessions.audit("person", actor, "run.input_sent", "wrk", workItemId,
 			mapOf("run_id" to runId, "input_id" to id, "text" to text.take(200)))
 		return jdbc.sql("select id, body, state, created_at, sent_at, delivered_at from run_inputs where id = :id").param("id", id)
 			.query { rs, _ -> inputView(rs) }.single()
@@ -152,7 +155,7 @@ class RunControlService(
 
 @RestController
 @RequestMapping("/api")
-class RunControlController(private val control: RunControlService, private val people: PersonService) {
+class RunControlController(private val control: RunControlService, private val permissions: Permissions) {
 
 	@PostMapping("/runs/{id}/cancel")
 	fun cancel(
@@ -160,8 +163,9 @@ class RunControlController(private val control: RunControlService, private val p
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: CancelRunIn,
 	): WorkItemDetail {
-		people.refuseSessionToken(authorization, "cancel a run")
-		return control.cancel(id, body.version)
+		val me = permissions.person(authorization, "cancel a run")
+		permissions.require(me, Act.WORK_HANDOFF, permissions.run(id))
+		return control.cancel(id, body.version, me.person!!)
 	}
 
 	@PostMapping("/runs/{id}/inputs")
@@ -171,8 +175,9 @@ class RunControlController(private val control: RunControlService, private val p
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: RunInputIn,
 	): RunInputView {
-		people.refuseSessionToken(authorization, "send an instruction to a run")
-		return control.sendInput(id, body)
+		val me = permissions.person(authorization, "send an instruction to a run")
+		permissions.require(me, Act.WORK_HANDOFF, permissions.run(id))
+		return control.sendInput(id, body, me.person!!)
 	}
 }
 

@@ -1,6 +1,10 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.Permissions
+import io.github.hanumoka.zmbaton.server.permission.Visibility
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -43,6 +47,7 @@ class DocumentWriteService(
 	private val documents: DocumentService,
 	private val approvals: ApprovalService,
 	private val sessions: SessionService,
+	private val access: PermissionFacts,
 ) {
 	companion object {
 		const val TITLE_MAX = 300
@@ -52,8 +57,8 @@ class DocumentWriteService(
 		const val PATH_MAX = 500
 		const val BRANCH_MAX = 200
 		const val LINKS_MAX = 50
-		val CREATE_FIELDS = setOf("title", "source_of_truth", "project_id", "body_markdown", "note", "git", "work_item_ids", "decision_ids")
-		val UPDATE_FIELDS = setOf("title", "project_id", "git", "work_item_ids", "decision_ids")
+		val CREATE_FIELDS = setOf("title", "source_of_truth", "project_id", "body_markdown", "note", "git", "work_item_ids", "decision_ids", "visibility")
+		val UPDATE_FIELDS = setOf("title", "project_id", "git", "work_item_ids", "decision_ids", "visibility")
 		private val COMMIT = Regex("^[0-9a-f]{7,64}$")
 		private val CREDENTIALS = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://[^/]*@")
 		private val DRIVE = Regex("^[A-Za-z]:")
@@ -75,13 +80,15 @@ class DocumentWriteService(
 		val git = if (source == "git") gitRef(body["git"] ?: throw BadRequestException("a Git document needs git.repo and git.path")) else null
 		if (source == "product" && body["git"] != null) throw BadRequestException("a product document has no Git location")
 		val projectId = project(body["project_id"])
+		val visibility = visibility(body["visibility"]) ?: Visibility.ORG
 		val id = Ids.document()
 		jdbc.sql(
 			"""
-			insert into documents (id, org_id, project_id, title, source_of_truth, git_ref, owner_user_id)
-			values (:id, :org, :project, :title, :source, cast(:git as jsonb), :owner)
+			insert into documents (id, org_id, project_id, title, source_of_truth, git_ref, owner_user_id, visibility)
+			values (:id, :org, :project, :title, :source, cast(:git as jsonb), :owner, :visibility)
 			""".trimIndent(),
-		).param("id", id).param("org", WorkItemService.ORG).param("project", projectId).param("title", title).param("source", source)
+		).param("id", id).param("org", access.orgOf(actor)).param("project", projectId).param("title", title).param("source", source)
+			.param("visibility", visibility.wire)
 			.param("git", git?.first?.let { json.writeValueAsString(it) }).param("owner", actor).update()
 		links(id, body, replace = false)
 		audit(actor, "document.registered", id, mapOf("title" to title, "source_of_truth" to source, "path" to git?.first?.get("path")))
@@ -111,6 +118,10 @@ class DocumentWriteService(
 		if ("project_id" in patch) {
 			val p = project(patch["project_id"])
 			if (p != doc.project?.id) changed += "project_id".also { set(id, "project_id = :v", p) }
+		}
+		if ("visibility" in patch) {
+			val v = visibility(patch["visibility"]) ?: throw BadRequestException("visibility cannot be cleared")
+			if (v.wire != doc.visibility) changed += "visibility".also { set(id, "visibility = :v", v.wire) }
 		}
 		if ("git" in patch) {
 			if (doc.sourceOfTruth != "git") throw BadRequestException("a product document has no Git location")
@@ -162,7 +173,7 @@ class DocumentWriteService(
 		val row = jdbc.sql("select id, approved_by from document_versions where doc_id = :id and number = :n for update")
 			.param("id", id).param("n", number).query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional().orElse(null)
 			?: throw NotFoundException("document $id has no version $number")
-		val approver = ApprovalPolicy.approverFor(documents.orgOf(id), "document_version")
+		val approver = access.approverFor(documents.orgOf(id), "document_version")
 		val action = DocumentRules.approve(DocumentRules.state(row.second), approver, actor)
 		if (!action.allowed) throw ConflictException(action.reason ?: "not allowed")
 		val note = note(input.note)
@@ -288,11 +299,17 @@ class DocumentWriteService(
 
 	private fun audit(actor: String, action: String, id: String, details: Map<String, Any?>) =
 		sessions.audit("person", actor, action, "doc", id, details)
+
+	/** A sharing scope from input; null when absent. */
+	private fun visibility(raw: Any?): Visibility? {
+		val t = text(raw, "visibility", 20) ?: return null
+		return Visibility.parse(t) ?: throw BadRequestException("visibility must be one of ${Visibility.entries.map { it.wire }}")
+	}
 }
 
 @RestController
 @RequestMapping("/api")
-class DocumentWriteController(private val writes: DocumentWriteService, private val people: PersonService) {
+class DocumentWriteController(private val writes: DocumentWriteService, private val permissions: Permissions) {
 
 	@PostMapping("/documents")
 	@ResponseStatus(HttpStatus.CREATED)
@@ -300,8 +317,8 @@ class DocumentWriteController(private val writes: DocumentWriteService, private 
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: Map<String, Any?>,
 	): DocumentDetail {
-		people.refuseSessionToken(authorization, "register a document")
-		return writes.register(body, Requester.person())
+		val me = permissions.person(authorization, "register a document", Act.DOCUMENT_WRITE)
+		return writes.register(body, me.person!!)
 	}
 
 	/** Changes only the document's own fields present in the body; `version` is required. */
@@ -311,8 +328,11 @@ class DocumentWriteController(private val writes: DocumentWriteService, private 
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody patch: Map<String, Any?>,
 	): DocumentDetail {
-		people.refuseSessionToken(authorization, "change a document")
-		return writes.update(id, patch, Requester.person())
+		val me = permissions.person(authorization, "change a document")
+		val target = permissions.document(id)
+		permissions.require(me, Act.DOCUMENT_EDIT, target)
+		if ("visibility" in patch) permissions.require(me, Act.SHARE, target)
+		return writes.update(id, patch, me.person!!)
 	}
 
 	@PostMapping("/documents/{id}/versions")
@@ -322,8 +342,9 @@ class DocumentWriteController(private val writes: DocumentWriteService, private 
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: DocumentVersionIn,
 	): DocumentDetail {
-		people.refuseSessionToken(authorization, "add a document version")
-		return writes.addVersion(id, body, Requester.person())
+		val me = permissions.person(authorization, "add a document version")
+		permissions.require(me, Act.DOCUMENT_WRITE, permissions.document(id))
+		return writes.addVersion(id, body, me.person!!)
 	}
 
 	@PostMapping("/documents/{id}/versions/{number}/approvals")
@@ -333,7 +354,8 @@ class DocumentWriteController(private val writes: DocumentWriteService, private 
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: DocumentApprovalIn,
 	): DocumentDetail {
-		people.refuseSessionToken(authorization, "approve a document version")
-		return writes.approve(id, number, body, Requester.person())
+		val me = permissions.person(authorization, "approve a document version")
+		permissions.require(me, Act.DOCUMENT_APPROVE, permissions.document(id))
+		return writes.approve(id, number, body, me.person!!)
 	}
 }

@@ -1,6 +1,10 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Requester
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
@@ -61,6 +65,8 @@ class ZmDocsImportService(
 	private val json: ObjectMapper,
 	private val tx: TransactionTemplate,
 	private val sessions: SessionService,
+	private val access: PermissionFacts,
+	private val org: OrgService,
 ) {
 	companion object {
 		const val TASKS_PATH = "registry/tasks.json"
@@ -88,20 +94,21 @@ class ZmDocsImportService(
 	/** A decision this import saw, with the numbers its supersession fields name. */
 	private data class Imported(val id: String, val ref: String, val supersedes: String?, val supersededBy: String?)
 
-	fun import(req: ZmDocsImportIn): ZmDocsImportOut {
+	/** Imports into [actor]'s organisation; the copies are theirs (responsible person, decision owner). */
+	fun import(req: ZmDocsImportIn, actor: String = Requester.STAGE1_PERSON): ZmDocsImportOut {
 		val repoKey = req.repoKey.trim()
 		if (!SessionService.isRepoKey(repoKey)) throw BadRequestException("repo_key is missing or not a key")
 		if (req.files.size > MAX_FILES) throw BadRequestException("at most $MAX_FILES files")
 		val commit = req.commit?.trim()?.lowercase()?.ifEmpty { null }
 		if (commit != null && !COMMIT.matches(commit)) throw BadRequestException("commit must be a hex commit id")
-		val run = Run(repoKey, commit)
+		val run = Run(repoKey, commit, actor, access.orgOf(actor))
 		for (file in req.files) {
 			if (file.content.length > MAX_FILE_CHARS) throw BadRequestException("${file.path} is larger than $MAX_FILE_CHARS characters")
 		}
 		val result = tx.execute { status ->
 			run.go(req.files)
 			sessions.audit(
-				"person", SessionService.OWNER, if (req.apply) "import.zm_docs.applied" else "import.zm_docs.dry_run", null, null,
+				"person", actor, if (req.apply) "import.zm_docs.applied" else "import.zm_docs.dry_run", null, null,
 				mapOf("repo_key" to repoKey, "commit" to commit, "projects" to run.projects, "work_items" to run.workItems, "decisions" to run.decisions),
 			)
 			if (!req.apply) status.setRollbackOnly()
@@ -111,7 +118,7 @@ class ZmDocsImportService(
 	}
 
 	/** One import: counts, changes and warnings collected while it runs. */
-	private inner class Run(val repoKey: String, val commit: String?) {
+	private inner class Run(val repoKey: String, val commit: String?, val person: String, val orgId: String) {
 		val projects = ImportCount()
 		val workItems = ImportCount()
 		val decisions = ImportCount()
@@ -127,6 +134,8 @@ class ZmDocsImportService(
 					else -> warnings += "$path: zm-docs 가져오기 대상이 아니어서 건너뛴다"
 				}
 			}
+			// The repository the copies come from is one of the organisation's (V13 named it `zm-docs`).
+			org.ensureRepository(orgId, repoKey, "zm-docs", null)
 			byPath[PROJECTS_PATH]?.let { importProjects(it) }
 			byPath[TASKS_PATH]?.let { importTasks(it) }
 			val decisionFiles = byPath.filterKeys { DECISION_PATH.matches(it) }
@@ -156,7 +165,7 @@ class ZmDocsImportService(
 					existing == null -> {
 						val id = Ids.project()
 						jdbc.sql("insert into projects (id, org_id, external_ref, name) values (:id, :org, :ref, :name)")
-							.param("id", id).param("org", WorkItemService.ORG).param("ref", ref).param("name", name)
+							.param("id", id).param("org", orgId).param("ref", ref).param("name", name)
 							.update()
 						audit("project.imported", "prj", id, ref, emptyList())
 						projects.created++
@@ -247,16 +256,16 @@ class ZmDocsImportService(
 				val id = Ids.workItem()
 				jdbc.sql(
 					"""
-					insert into work_items (id, title, stage, wait_reasons, wait_note, responsible_user_id, executor_kind, executor_id,
+					insert into work_items (id, org_id, title, stage, wait_reasons, wait_note, responsible_user_id, executor_kind, executor_id,
 					                        project_id, next_action, source_ref, opened_on, due_on, closed_at,
 					                        external_ref, source_of_truth, git_ref)
-					values (:id, :title, :stage, cast(:waits as text[]), :wait_note, :owner, 'human', :owner,
+					values (:id, :org, :title, :stage, cast(:waits as text[]), :wait_note, :owner, 'human', :owner,
 					        :project_id, :next_action, :source_ref, :opened_on, :due_on, :closed_at,
 					        :ref, 'git', cast(:git as jsonb))
 					""".trimIndent(),
-				).param("id", id).param("owner", SessionService.OWNER).param("ref", ref).param("git", gitRef)
+				).param("id", id).param("org", orgId).param("owner", person).param("ref", ref).param("git", gitRef)
 					.also { stmt -> bindTask(stmt, fields) }.update()
-				sessions.audit("person", SessionService.OWNER, "work_item.imported", "wrk", id, mapOf("ref" to ref, "repo_key" to repoKey))
+				sessions.audit("person", person, "work_item.imported", "wrk", id, mapOf("ref" to ref, "repo_key" to repoKey))
 				workItems.created++
 				changes += ImportChange("work_item", ref, "created")
 				return
@@ -287,7 +296,7 @@ class ZmDocsImportService(
 				 where id = :id
 				""".trimIndent(),
 			).param("id", id).param("git", gitRef).also { stmt -> bindTask(stmt, fields) }.update()
-			sessions.audit("person", SessionService.OWNER, "work_item.synced", "wrk", id, mapOf("ref" to ref, "fields" to changed))
+			sessions.audit("person", person, "work_item.synced", "wrk", id, mapOf("ref" to ref, "fields" to changed))
 			workItems.updated++
 			changes += ImportChange("work_item", ref, "updated", changed)
 		}
@@ -340,7 +349,7 @@ class ZmDocsImportService(
 			}
 			val id = existing?.first ?: Ids.decision()
 			val params = mapOf(
-				"id" to id, "org" to WorkItemService.ORG, "ref" to ref, "question" to question.take(1000), "status" to status,
+				"id" to id, "org" to orgId, "owner" to person, "ref" to ref, "question" to question.take(1000), "status" to status,
 				"decided_on" to date(doc.front["date"], ref, "date"), "choice" to doc.choice(),
 				"sections" to json.writeValueAsString(doc.sections), "git" to json.writeValueAsString(gitRef(path)),
 				"sha" to sha,
@@ -348,8 +357,8 @@ class ZmDocsImportService(
 			if (existing == null) {
 				jdbc.sql(
 					"""
-					insert into decisions (id, org_id, external_ref, question, status, decided_on, choice, sections, git_ref, body_sha256)
-					values (:id, :org, :ref, :question, :status, :decided_on, :choice, cast(:sections as jsonb), cast(:git as jsonb), :sha)
+					insert into decisions (id, org_id, owner_user_id, external_ref, question, status, decided_on, choice, sections, git_ref, body_sha256)
+					values (:id, :org, :owner, :ref, :question, :status, :decided_on, :choice, cast(:sections as jsonb), cast(:git as jsonb), :sha)
 					""".trimIndent(),
 				).params(params).update()
 				audit("decision.imported", "dcs", id, ref, emptyList())
@@ -363,7 +372,7 @@ class ZmDocsImportService(
 					       sections = cast(:sections as jsonb), git_ref = cast(:git as jsonb), body_sha256 = :sha, updated_at = now()
 					 where id = :id
 					""".trimIndent(),
-				).params(params - "org" - "ref").update()
+				).params(params - "org" - "owner" - "ref").update()
 				jdbc.sql("delete from decision_projects where decision_id = :id").param("id", id).update()
 				val fields = if (existing.second == sha) listOf("projects") else listOf("content")
 				audit("decision.synced", "dcs", id, ref, fields)
@@ -399,7 +408,7 @@ class ZmDocsImportService(
 		/** One audit row per project or decision copy this import creates or changes (a dry run rolls it back). */
 		private fun audit(action: String, targetKind: String, id: String, ref: String, fields: List<String>) =
 			sessions.audit(
-				"person", SessionService.OWNER, action, targetKind, id,
+				"person", person, action, targetKind, id,
 				mapOf("ref" to ref, "repo_key" to repoKey, "commit" to commit, "fields" to fields),
 			)
 
@@ -506,7 +515,7 @@ data class DecisionDocument(val front: Map<String, String>, val sections: List<D
 
 @RestController
 @RequestMapping("/api")
-class ZmDocsImportController(private val imports: ZmDocsImportService, private val people: PersonService) {
+class ZmDocsImportController(private val imports: ZmDocsImportService, private val permissions: Permissions) {
 
 	/** `zm-baton import zm-docs`: a dry run unless `apply` is true. */
 	@PostMapping("/imports/zm-docs")
@@ -514,7 +523,7 @@ class ZmDocsImportController(private val imports: ZmDocsImportService, private v
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: ZmDocsImportIn,
 	): ZmDocsImportOut {
-		people.refuseSessionToken(authorization, "import zm-docs")
-		return imports.import(body)
+		val me = permissions.person(authorization, "import zm-docs", Act.IMPORT)
+		return imports.import(body, me.person!!)
 	}
 }

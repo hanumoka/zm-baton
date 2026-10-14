@@ -1,6 +1,10 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Requester
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -109,6 +113,7 @@ class RelayService(
 	private val json: ObjectMapper,
 	private val sessions: SessionService,
 	private val relaySwitch: RelaySwitch,
+	private val facts: PermissionFacts,
 ) {
 	companion object {
 		val KINDS = setOf("permission_request", "session_question")
@@ -164,8 +169,9 @@ class RelayService(
 			return RelayStarted(earlier.deadline != null && earlier.state == "open", earlier.id, earlier.reason, earlier.deadline, null)
 		}
 
+		// The relay waits for the session's person: their focus mode and first screen decide.
 		val focus = jdbc.sql("select focus_on, coalesce(first_screen_visible_until > now(), false) from users where id = :user")
-			.param("user", SessionService.OWNER).query { rs, _ -> rs.getBoolean(1) to rs.getBoolean(2) }.single()
+			.param("user", session.userId).query { rs, _ -> rs.getBoolean(1) to rs.getBoolean(2) }.single()
 		val (focusOn, visible) = focus
 		val label = sessions.sessionLabel(session)
 		val notRelayed = when {
@@ -182,7 +188,7 @@ class RelayService(
 			audit(session.id, "relay.not_relayed", null, mapOf("relay_id" to relayId, "kind" to req.kind, "reason" to notRelayed))
 			return RelayStarted(false, null, notRelayed, null, null)
 		}
-		val wait = waitSeconds()
+		val wait = waitSeconds(jdbc.sql("select org_id from agent_sessions where id = :id").param("id", session.id).query(String::class.java).single())
 		val itemId = Ids.inbox()
 		val summary = (listOf(label) + summaryOf(req.kind, detail, notRelayed)).joinToString(" · ").take(300)
 		val deadline = jdbc.sql(
@@ -193,7 +199,7 @@ class RelayService(
 			        :rid, :fp, case when :relayed then now() + make_interval(secs => :wait) end, :seq, :reason)
 			returning relay_deadline
 			""".trimIndent(),
-		).param("id", itemId).param("user", SessionService.OWNER).param("bucket", if (req.kind == "permission_request") 1 else 2)
+		).param("id", itemId).param("user", session.userId).param("bucket", if (req.kind == "permission_request") 1 else 2)
 			.param("kind", req.kind).param("session", session.id).param("summary", summary)
 			.param("detail", detail?.let { json.writeValueAsString(it) }).param("rid", relayId).param("fp", req.inputFingerprint)
 			.param("relayed", notRelayed == null).param("wait", wait).param("seq", req.localSeq).param("reason", notRelayed)
@@ -257,9 +263,9 @@ class RelayService(
 	 * deadline and while the session lives. A late answer is refused with what happened instead.
 	 */
 	@Transactional
-	fun answer(itemId: String, body: RelayAnswerIn): RelayAnswered {
+	fun answer(itemId: String, body: RelayAnswerIn, person: String = Requester.STAGE1_PERSON): RelayAnswered {
 		val (kind, detailText) = jdbc.sql("select kind, detail::text from inbox_items where id = :id and user_id = :user")
-			.param("id", itemId).param("user", SessionService.OWNER).query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional()
+			.param("id", itemId).param("user", person).query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional()
 			.orElseThrow { NotFoundException("no first-screen item $itemId") }
 		if (kind !in KINDS) throw BadRequestException("only a permission request or a question is answered here")
 		if (!relaySwitch.enabled) throw ConflictException("중계가 꺼져 있다(ZM_BATON_RELAY). 그 세션의 터미널에서 답한다")
@@ -271,10 +277,10 @@ class RelayService(
 			   and exists (select 1 from agent_sessions a where a.id = i.source_id and a.ended_at is null
 			                 and a.deregistered_at is null and a.token_expires_at > now())
 			""".trimIndent(),
-		).param("answer", json.writeValueAsString(answer)).param("user", SessionService.OWNER).param("id", itemId).update()
+		).param("answer", json.writeValueAsString(answer)).param("user", person).param("id", itemId).update()
 		if (updated == 0) throw ConflictException(lateReason(itemId))
 		sessions.audit(
-			"person", SessionService.OWNER, "relay.answered", "inb", itemId,
+			"person", person, "relay.answered", "inb", itemId,
 			mapOf("kind" to kind, "decision" to answer["decision"], "questions" to (answer["answers"] as Map<*, *>?)?.size),
 		)
 		return RelayAnswered(itemId, "answered")
@@ -282,15 +288,15 @@ class RelayService(
 
 	/** A person sends an open relay to the terminal: the hook stops waiting and gives no decision. */
 	@Transactional
-	fun toTerminal(itemId: String): RelayAnswered {
+	fun toTerminal(itemId: String, person: String = Requester.STAGE1_PERSON): RelayAnswered {
 		val updated = jdbc.sql(
 			"""
 			update inbox_items set state = 'moved_to_terminal', relay_reason = 'person', closed_at = now()
 			 where id = :id and user_id = :user and kind in $KIND_LIST and state = 'open' and relay_deadline > now()
 			""".trimIndent(),
-		).param("id", itemId).param("user", SessionService.OWNER).update()
+		).param("id", itemId).param("user", person).update()
 		if (updated == 0) throw ConflictException(lateReason(itemId))
-		sessions.audit("person", SessionService.OWNER, "relay.to_terminal", "inb", itemId, emptyMap())
+		sessions.audit("person", person, "relay.to_terminal", "inb", itemId, emptyMap())
 		return RelayAnswered(itemId, "moved_to_terminal")
 	}
 
@@ -317,34 +323,34 @@ class RelayService(
 		}
 	}
 
-	fun me(): MeView =
+	fun me(person: String = Requester.STAGE1_PERSON): MeView =
 		jdbc.sql("select focus_on, focus_changed_at, coalesce(first_screen_visible_until > now(), false) from users where id = :user")
-			.param("user", SessionService.OWNER).query { rs, _ ->
+			.param("user", person).query { rs, _ ->
 				MeView(
-					SessionService.OWNER, rs.getBoolean(1), rs.getObject(2, OffsetDateTime::class.java), rs.getBoolean(3), waitSeconds(),
+					person, rs.getBoolean(1), rs.getObject(2, OffsetDateTime::class.java), rs.getBoolean(3), waitSeconds(facts.orgOf(person)),
 					relaySwitch.enabled,
 				)
 			}.single()
 
 	/** Turns focus mode on or off. Relays already waiting keep their deadline (relay 7). */
 	@Transactional
-	fun setFocus(on: Boolean): MeView {
+	fun setFocus(on: Boolean, person: String = Requester.STAGE1_PERSON): MeView {
 		val changed = jdbc.sql("update users set focus_on = :on, focus_changed_at = now() where id = :user and focus_on <> :on")
-			.param("on", on).param("user", SessionService.OWNER).update()
-		if (changed == 1) sessions.audit("person", SessionService.OWNER, "focus.changed", "usr", SessionService.OWNER, mapOf("on" to on))
-		return me()
+			.param("on", on).param("user", person).update()
+		if (changed == 1) sessions.audit("person", person, "focus.changed", "usr", person, mapOf("on" to on))
+		return me(person)
 	}
 
 	/** The first screen says whether its tab is visible (relay 12); the signal lasts [VISIBLE_SECONDS]. */
 	@Transactional
-	fun setFirstScreen(visible: Boolean): MeView {
+	fun setFirstScreen(visible: Boolean, person: String = Requester.STAGE1_PERSON): MeView {
 		jdbc.sql(
 			"""
 			update users set first_screen_visible_until = case when :visible then now() + make_interval(secs => :secs) end
 			 where id = :user
 			""".trimIndent(),
-		).param("visible", visible).param("secs", VISIBLE_SECONDS).param("user", SessionService.OWNER).update()
-		return me()
+		).param("visible", visible).param("secs", VISIBLE_SECONDS).param("user", person).update()
+		return me(person)
 	}
 
 	// ---------------------------------------------------------------- deadlines and retention
@@ -371,15 +377,21 @@ class RelayService(
 			 where kind in $KIND_LIST and detail is not null and state in ('moved_to_terminal', 'undelivered', 'closed')
 			   and closed_at < now() - make_interval(days => :days)
 			""".trimIndent(),
-		).param("days", setting("relay_detail_retention_days", DEFAULT_DETAIL_RETENTION_DAYS, 1, 3650)).update()
+		).param("days", setting(null, "relay_detail_retention_days", DEFAULT_DETAIL_RETENTION_DAYS, 1, 3650)).update()
 
 	// ---------------------------------------------------------------- helpers
 
 	/** The organisation's `relay_wait_seconds` (data model "organizations"), within what the hook waits. */
-	fun waitSeconds(): Int = setting("relay_wait_seconds", DEFAULT_WAIT_SECONDS, MIN_WAIT_SECONDS, MAX_WAIT_SECONDS)
+	fun waitSeconds(orgId: String): Int = setting(orgId, "relay_wait_seconds", DEFAULT_WAIT_SECONDS, MIN_WAIT_SECONDS, MAX_WAIT_SECONDS)
 
-	private fun setting(key: String, default: Int, min: Int, max: Int): Int =
-		jdbc.sql("select settings ->> :key from organizations where id = 'org_owner'").param("key", key)
+	/** An organisation's setting; [orgId] null: the server's first organisation (a sweep that serves them all). */
+	private fun setting(orgId: String?, key: String, default: Int, min: Int, max: Int): Int =
+		jdbc.sql(
+			"""
+			select settings ->> :key from organizations
+			 where id = coalesce(cast(:org as text), (select o.id from organizations o order by o.created_at, o.id limit 1))
+			""".trimIndent(),
+		).param("key", key).param("org", orgId)
 			.query(String::class.java).optional().orElse(null)?.toIntOrNull()?.coerceIn(min, max) ?: default
 
 	/** The detail as stored: a tool name, and for a question its questions with their options. */
@@ -477,7 +489,7 @@ class RelayService(
 
 @RestController
 @RequestMapping("/api")
-class RelayController(private val relays: RelayService, private val people: PersonService) {
+class RelayController(private val relays: RelayService, private val permissions: Permissions) {
 
 	/** The PermissionRequest or PreToolUse hook of a directly opened session asks to relay. */
 	@PostMapping("/sessions/{id}/relays")
@@ -503,8 +515,9 @@ class RelayController(private val relays: RelayService, private val people: Pers
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: RelayAnswerIn,
 	): RelayAnswered {
-		people.refuseSessionToken(authorization, "answer a relayed request")
-		return relays.answer(id, body)
+		val me = permissions.person(authorization, "answer a relayed request")
+		permissions.require(me, Act.RELAY_ANSWER, permissions.inboxItem(id))
+		return relays.answer(id, body, me.person!!)
 	}
 
 	@PostMapping("/inbox/{id}/to-terminal")
@@ -512,33 +525,26 @@ class RelayController(private val relays: RelayService, private val people: Pers
 		@PathVariable id: String,
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 	): RelayAnswered {
-		people.refuseSessionToken(authorization, "send a relayed request to the terminal")
-		return relays.toTerminal(id)
+		val me = permissions.person(authorization, "send a relayed request to the terminal")
+		permissions.require(me, Act.RELAY_ANSWER, permissions.inboxItem(id))
+		return relays.toTerminal(id, me.person!!)
 	}
 
 	@GetMapping("/me")
-	fun me(@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): MeView {
-		people.refuseSessionToken(authorization, "read my settings")
-		return relays.me()
-	}
+	fun me(@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): MeView =
+		relays.me(permissions.person(authorization, "read my settings", Act.READ).person!!)
 
 	@PutMapping("/me/focus")
 	fun focus(
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: FocusIn,
-	): MeView {
-		people.refuseSessionToken(authorization, "turn focus mode on or off")
-		return relays.setFocus(body.on)
-	}
+	): MeView = relays.setFocus(body.on, permissions.person(authorization, "turn focus mode on or off", Act.READ).person!!)
 
 	@PutMapping("/me/first-screen")
 	fun firstScreen(
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: FirstScreenIn,
-	): MeView {
-		people.refuseSessionToken(authorization, "report the first screen's visibility")
-		return relays.setFirstScreen(body.visible)
-	}
+	): MeView = relays.setFirstScreen(body.visible, permissions.person(authorization, "report the first screen's visibility", Act.READ).person!!)
 
 	private fun token(authorization: String?): String =
 		SessionTokens.bearer(authorization) ?: throw UnauthorizedException("a session token is required")

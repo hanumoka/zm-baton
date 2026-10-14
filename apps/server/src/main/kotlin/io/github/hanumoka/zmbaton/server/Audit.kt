@@ -1,6 +1,8 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
@@ -118,7 +120,7 @@ class AuditService(private val jdbc: JdbcClient, private val json: ObjectMapper)
 
 @RestController
 @RequestMapping("/api")
-class AuditController(private val audit: AuditService, private val people: PersonService) {
+class AuditController(private val audit: AuditService, private val permissions: Permissions) {
 
 	/** `GET /api/audit?target_kind=wrk&target_id=wrk_…&limit=50`; the next page passes `before=<last id>`. */
 	@GetMapping("/audit")
@@ -132,7 +134,7 @@ class AuditController(private val audit: AuditService, private val people: Perso
 		@RequestParam(required = false) before: String?,
 		@RequestParam(defaultValue = "100") limit: Int,
 	): List<AuditEntry> {
-		people.refuseSessionToken(authorization, "read the audit log")
+		permissions.person(authorization, "read the audit log", Act.AUDIT_READ)
 		return audit.list(AuditQuery(targetKind, targetId, actorKind, actorId, action, before, limit))
 	}
 }

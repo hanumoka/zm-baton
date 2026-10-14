@@ -1,6 +1,13 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Requester
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Actor
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.PermissionRules
+import io.github.hanumoka.zmbaton.server.permission.Permissions
+import io.github.hanumoka.zmbaton.server.permission.ScopeColumns
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
@@ -47,6 +54,9 @@ data class DecisionView(
 	val ref: String? = externalRef,
 	@JsonProperty("source_of_truth") val sourceOfTruth: String = "git",
 	val version: Long = 0,
+	/** Added with permissions: the sharing scope (G06.1) and who owns the record. */
+	val visibility: String = "org",
+	@JsonProperty("owner_user_id") val ownerUserId: String? = null,
 )
 
 data class DecisionSection(val heading: String, val body: String)
@@ -86,7 +96,7 @@ data class DecisionDetail(
 	@JsonProperty("review_conditions") val reviewConditions: String? = null,
 	val roles: DecisionRoles = DecisionRoles(),
 	/** Who may accept or reject it now. */
-	val approver: String = SessionService.OWNER,
+	val approver: String = Requester.STAGE1_PERSON,
 	@JsonProperty("work_items") val workItems: List<LinkedWork> = emptyList(),
 	val approvals: List<ApprovalView> = emptyList(),
 	/** Non-null when nothing here may change it, e.g. its source of truth is a Git file. */
@@ -101,6 +111,7 @@ class DecisionService(
 	private val jdbc: JdbcClient,
 	private val json: ObjectMapper,
 	private val approvals: ApprovalService,
+	private val access: PermissionFacts,
 ) {
 
 	companion object {
@@ -121,11 +132,14 @@ class DecisionService(
 
 	/**
 	 * Proposals first (so a long list never cuts off what is still to decide), then the newest
-	 * decision. [query] matches the number, the question and the decision.
+	 * decision. [query] matches the number, the question and the decision. With [viewer], only those
+	 * its scope lets them see.
 	 */
-	fun list(limit: Int, projectId: String?, status: String?, query: String?): List<DecisionView> {
+	fun list(limit: Int, projectId: String?, status: String?, query: String?, viewer: Actor? = null): List<DecisionView> {
 		if (status != null && status !in STATUSES) throw BadRequestException("status must be one of $STATUSES")
 		val where = mutableListOf("true")
+		val scope = viewer?.let { PermissionRules.filter(it, ScopeColumns.DECISIONS) }
+		if (scope != null) where += scope.sql
 		if (projectId != null) where += "exists (select 1 from decision_projects dp where dp.decision_id = d.id and dp.project_id = :project)"
 		if (status != null) where += "d.status = :status"
 		val q = query?.trim()?.take(100)?.ifEmpty { null }
@@ -134,11 +148,12 @@ class DecisionService(
 		if (projectId != null) stmt.param("project", projectId)
 		if (status != null) stmt.param("status", status)
 		if (q != null) stmt.param("q", "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+		scope?.params?.forEach { (k, v) -> stmt.param(k, v) }
 		return withProjects(stmt.query { rs, _ -> view(rs) }.list())
 	}
 
 	/** One decision with everything its screen shows; [actor] is the person asking, for what they may do. */
-	fun detail(id: String, actor: String = SessionService.OWNER): DecisionDetail {
+	fun detail(id: String, actor: String = Requester.STAGE1_PERSON): DecisionDetail {
 		val view = withProjects(listOf(load(id) ?: throw NotFoundException("no decision $id"))).single()
 		return jdbc.sql(
 			"""
@@ -164,15 +179,17 @@ class DecisionService(
 		}.single()
 	}
 
-	/** The decisions linked to a work item, as a list shows them. */
-	fun forWorkItem(workItemId: String): List<DecisionView> {
+	/** The decisions linked to a work item, as a list shows them; with [viewer], those they may see. */
+	fun forWorkItem(workItemId: String, viewer: Actor? = null): List<DecisionView> {
 		val exists = jdbc.sql("select count(*) from work_items where id = :id").param("id", workItemId)
 			.query(Long::class.javaObjectType).single() > 0
 		if (!exists) throw NotFoundException("no work item $workItemId")
-		return withProjects(
-			jdbc.sql("$SELECT_VIEW where d.id in (select decision_id from decision_work_items where work_item_id = :id) $ORDER")
-				.param("id", workItemId).query { rs, _ -> view(rs) }.list(),
-		)
+		val scope = viewer?.let { PermissionRules.filter(it, ScopeColumns.DECISIONS) }
+		val stmt = jdbc.sql(
+			"$SELECT_VIEW where d.id in (select decision_id from decision_work_items where work_item_id = :id) and ${scope?.sql ?: "true"} $ORDER",
+		).param("id", workItemId)
+		scope?.params?.forEach { (k, v) -> stmt.param(k, v) }
+		return withProjects(stmt.query { rs, _ -> view(rs) }.list())
 	}
 
 	/** The newest decisions recorded in one repository, for a session's status card. */
@@ -188,13 +205,14 @@ class DecisionService(
 		DecisionRules.Facts(
 			view.status, view.sourceOfTruth, gitRef?.get("path") as String?,
 			!choice.isNullOrBlank() || chosenOption != null,
-			ApprovalPolicy.approverFor(orgId, "decision"),
+			access.approverFor(orgId, "decision"),
 		)
 
 	private val ORDER = "order by (d.status = 'proposed') desc, d.decided_on desc nulls last, d.external_ref desc nulls last, d.number desc nulls last"
 
 	private val SELECT_VIEW = """
 		select d.id, d.external_ref, d.question, d.status, d.decided_on, d.updated_at, d.number, d.source_of_truth, d.version,
+		       d.visibility, d.owner_user_id,
 		       coalesce(d.choice, (select o ->> 'title' from jsonb_array_elements(d.options) o where o ->> 'key' = d.chosen_option limit 1)) as choice,
 		       s.id as s_id, s.external_ref as s_ref, s.number as s_number, s.question as s_question,
 		       b.id as b_id, b.external_ref as b_ref, b.number as b_number, b.question as b_question
@@ -213,6 +231,7 @@ class DecisionService(
 			ref(rs, "s"), ref(rs, "b"),
 			rs.getObject("updated_at", OffsetDateTime::class.java),
 			number, externalRef ?: number?.let(::refOf), rs.getString("source_of_truth"), rs.getLong("version"),
+			rs.getString("visibility"), rs.getString("owner_user_id"),
 		)
 	}
 
@@ -268,7 +287,7 @@ class DecisionService(
 
 @RestController
 @RequestMapping("/api")
-class DecisionController(private val decisions: DecisionService, private val people: PersonService) {
+class DecisionController(private val decisions: DecisionService, private val permissions: Permissions) {
 
 	@GetMapping("/decisions")
 	fun list(
@@ -278,8 +297,8 @@ class DecisionController(private val decisions: DecisionService, private val peo
 		@RequestParam(required = false) status: String?,
 		@RequestParam(required = false) q: String?,
 	): List<DecisionView> {
-		people.refuseSessionToken(authorization, "list decisions")
-		return decisions.list(limit.coerceIn(1, 500), projectId?.trim()?.ifEmpty { null }, status?.trim()?.ifEmpty { null }, q)
+		val me = permissions.person(authorization, "list decisions", Act.READ)
+		return decisions.list(limit.coerceIn(1, 500), projectId?.trim()?.ifEmpty { null }, status?.trim()?.ifEmpty { null }, q, me)
 	}
 
 	@GetMapping("/decisions/{id}")
@@ -287,8 +306,9 @@ class DecisionController(private val decisions: DecisionService, private val peo
 		@PathVariable id: String,
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 	): DecisionDetail {
-		people.refuseSessionToken(authorization, "read a decision")
-		return decisions.detail(id, Requester.person())
+		val me = permissions.person(authorization, "read a decision")
+		permissions.see(me, permissions.decision(id))
+		return decisions.detail(id, me.person!!)
 	}
 
 	/** The decisions that name this work item among the work they are about. */
@@ -297,7 +317,8 @@ class DecisionController(private val decisions: DecisionService, private val peo
 		@PathVariable id: String,
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 	): List<DecisionView> {
-		people.refuseSessionToken(authorization, "list a work item's decisions")
-		return decisions.forWorkItem(id)
+		val me = permissions.person(authorization, "list a work item's decisions")
+		permissions.see(me, permissions.workItem(id))
+		return decisions.forWorkItem(id, me)
 	}
 }

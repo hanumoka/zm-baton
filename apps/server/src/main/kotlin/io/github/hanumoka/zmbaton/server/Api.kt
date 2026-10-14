@@ -1,11 +1,15 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Permissions
+import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.ResponseStatus
@@ -153,12 +157,20 @@ class BadRequestException(message: String) : RuntimeException(message)
 
 @RestController
 @RequestMapping("/api")
-class ApiController(private val service: RunService) {
+class ApiController(private val service: RunService, private val permissions: Permissions) {
 
+	/** The compat test's run: a person asks for it on a work item they may hand over. */
 	@PostMapping("/work-items/{id}/runs")
 	@ResponseStatus(HttpStatus.CREATED)
-	fun createRun(@PathVariable id: String, @RequestBody body: CreateRun): RunCreated =
-		service.createRun(id, body.executor)
+	fun createRun(
+		@PathVariable id: String,
+		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
+		@RequestBody body: CreateRun,
+	): RunCreated {
+		val me = permissions.person(authorization, "start a compat-test run")
+		permissions.require(me, Act.WORK_HANDOFF, permissions.workItem(id))
+		return service.createRun(id, body.executor, me.person!!)
+	}
 
 	/**
 	 * Work poll (contract v1 "전송 경로" 2): runs waiting to be claimed. With `device_id`, only the
