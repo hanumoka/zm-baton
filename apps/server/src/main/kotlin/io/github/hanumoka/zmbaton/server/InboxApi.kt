@@ -57,6 +57,8 @@ data class InboxItemView(
 	@JsonProperty("repeat_count") val repeatCount: Int,
 	@JsonProperty("waiting_since") val waitingSince: OffsetDateTime,
 	val notify: String,
+	/** Added with human review picking: a review that waited too long and is raised to bucket 1. */
+	@JsonProperty("promoted_at") val promotedAt: OffsetDateTime? = null,
 )
 
 data class NoticeStatusIn(val status: String, val note: String? = null)
@@ -125,14 +127,14 @@ class PersonService(
 			)
 		}.list()
 
-	/** Open items, in the contract's order: bucket, then who waited longest. */
+	/** Open items, in the contract's order: bucket (a raised review counts as 1), then who waited longest. */
 	fun inbox(): List<InboxItemView> =
 		jdbc.sql(
 			"""
 			select id, bucket, kind, source_kind, source_id, summary, detail::text as detail, wait_kind, repeat_count,
-			       waiting_since, notify
+			       waiting_since, notify, promoted_at
 			  from inbox_items where user_id = :user and state = 'open'
-			 order by bucket, waiting_since, id
+			 order by case when promoted_at is null then bucket else 1 end, waiting_since, id
 			""".trimIndent(),
 		).param("user", SessionService.OWNER).query { rs, _ ->
 			InboxItemView(
@@ -147,6 +149,7 @@ class PersonService(
 				repeatCount = rs.getInt("repeat_count"),
 				waitingSince = rs.getObject("waiting_since", OffsetDateTime::class.java),
 				notify = rs.getString("notify"),
+				promotedAt = rs.getObject("promoted_at", OffsetDateTime::class.java),
 			)
 		}.list()
 

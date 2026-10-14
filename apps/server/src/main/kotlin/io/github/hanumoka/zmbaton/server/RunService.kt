@@ -25,6 +25,8 @@ class RunService(
 	private val json: ObjectMapper,
 	private val workItems: WorkItemService,
 	private val sessions: SessionService,
+	/** Pins a submitted result and picks who must see it (FN-0411). */
+	private val reviews: ReviewService,
 	transactions: PlatformTransactionManager,
 	/** Contract "실행 권리 청구" 6: how long a lapsed lease may stay silent before the run is lost. */
 	@Value("\${zm-baton.run-lost-grace-seconds:300}") private val lostGraceSeconds: Long,
@@ -404,7 +406,9 @@ class RunService(
 			val sub = p[key] ?: continue
 			if (!set.containsAll(stringList(sub) ?: return false)) return false
 		}
-		return p["truncated"] == null || p["truncated"] is Boolean
+		// The final list may carry the connector's snapshot commit of the result (contract "검토 대상을 고정한다" 3).
+		val snapshot = p["snapshot"]
+		return (p["truncated"] == null || p["truncated"] is Boolean) && (snapshot == null || (snapshot is String && COMMIT.matches(snapshot)))
 	}
 
 	private fun stringList(v: Any?): List<String>? =
@@ -448,6 +452,8 @@ class RunService(
 				if (outcomeUnknown(reason, payload)) addWait(target.workItemId, "outcome_unknown")
 				if (readinessFailed(payload)) addWait(target.workItemId, "readiness_failed")
 				if (reason == "submitted" && target.delegationId != null) {
+					// Before the work item moves: an open risk request keeps it in result review.
+					reviews.fixResult(runId)
 					workItems.followRun(target.workItemId, runId, WorkItemService.RunStep.SUBMITTED)
 				}
 			}

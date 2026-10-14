@@ -59,6 +59,17 @@ data class RunView(
 	val inputs: List<RunInputView> = emptyList(),
 	/** What a person may do with the run now; null once it ended. */
 	val actions: RunActions? = null,
+	// Added with human review picking (FN-0411; contract "사람 검토 상태와 자동 검사 상태를 따로 남긴다").
+	/** The snapshot commit the result was pinned to; null without one. */
+	@JsonProperty("result_snapshot_sha") val resultSnapshotSha: String? = null,
+	/** `required`, `sampled`, `reviewed` or `not_reviewed` (「사람 미확인」); null until a result was submitted. */
+	@JsonProperty("human_review_state") val humanReviewState: String? = null,
+	/** `passed`, `failed` or `not_run`; null until a result was submitted. */
+	@JsonProperty("auto_check_state") val autoCheckState: String? = null,
+	/** How the result was judged: matched patterns, the list they came from, the sample draw. */
+	@JsonProperty("review_basis") val reviewBasis: Map<String, Any?>? = null,
+	/** The result's review requests, oldest first. */
+	val reviews: List<RunReviewView> = emptyList(),
 )
 
 data class RunDelegationView(
@@ -87,6 +98,7 @@ data class EventView(
 class ReadService(
 	private val jdbc: JdbcClient,
 	private val json: ObjectMapper,
+	private val reviews: ReviewService,
 	@Value("\${zm-baton.run-lost-grace-seconds:300}") private val lostGraceSeconds: Long,
 ) {
 
@@ -102,6 +114,7 @@ class ReadService(
 			""".trimIndent(),
 		).param("wid", workItemId).query { rs, _ -> rs.getString("run_id") to RunControlService.inputView(rs) }.list()
 			.groupBy({ it.first }, { it.second })
+		val reviewsByRun = reviews.forRuns(workItemId)
 		return jdbc.sql(
 			"""
 			select * from (
@@ -112,6 +125,7 @@ class ReadService(
 			           order by e.seq desc limit 1) as git_changes,
 			         r.lease_expires_at, (r.state in ('claimed', 'running', 'stopping') and r.lease_expires_at < now()) as lease_lapsed,
 			         r.lease_expires_at + make_interval(secs => :grace) as lost_at, r.continue_reason, r.resumed_from_run_id,
+			         r.result_snapshot_sha, r.human_review_state, r.auto_check_state, r.review_basis::text as review_basis,
 			         (select (e.payload -> 'readiness')::text from run_events e
 			           where e.run_id = r.id and e.kind = 'lifecycle' and e.payload ->> 'phase' = 'ended' order by e.seq desc limit 1) as readiness,
 			         (select (e.payload -> 'capabilities')::text from run_events e
@@ -153,6 +167,8 @@ class ReadService(
 				rs.getString("readiness")?.let { json.readValue(it, payloadType) }, capabilities,
 				inputs[rs.getString("id")].orEmpty(),
 				RunActionRules.of(state, delegation != null, capabilities?.get("live_input") == true),
+				rs.getString("result_snapshot_sha"), rs.getString("human_review_state"), rs.getString("auto_check_state"),
+				rs.getString("review_basis")?.let { json.readValue(it, payloadType) }, reviewsByRun[rs.getString("id")].orEmpty(),
 			)
 		}.list()
 	}
