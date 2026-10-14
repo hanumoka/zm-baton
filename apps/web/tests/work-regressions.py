@@ -248,12 +248,13 @@ def main():
             checks.append("mobile_arrow_selects_without_opening_and_enter_opens")
 
             page.set_viewport_size({"width": 1440, "height": 900})
+            page.goto("about:blank")  # new document: no old hash effect can race a reload
             page.goto(base + "#work")
-            page.reload()
             expect(first).to_have_attribute("aria-current", "true")
+            expect(page).to_have_url(re.compile(r"[?&]item=wrk_a(?:&|$)"))
             page.set_viewport_size({"width": 390, "height": 844})
             expect(dialog).to_have_count(0)
-            checks.append("wide_auto_selection_does_not_open_sheet_after_resize")
+            checks.append("wide_unaddressed_entry_auto_selects_without_opening_sheet_after_resize")
 
             page.goto(base + "#inbox?item=inb_a")
             expect(dialog).to_be_visible()
