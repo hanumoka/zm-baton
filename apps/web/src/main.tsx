@@ -10,6 +10,7 @@ import './ui/panes.css';
 import './ui/prose.css';
 import './work/work.css';
 import './decisions/decisions.css';
+import './documents/documents.css';
 import './inbox/inbox.css';
 import './sessions/sessions.css';
 import './kit/kit.css';
