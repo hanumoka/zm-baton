@@ -3,9 +3,11 @@ import { Icon } from '../icons/Icon';
 import { BUCKETS, executorLabel, sessionHref, shortId, since, waited } from '../inboxModel';
 import type { InboxItem, NoticeStatus, SessionView } from '../sessionsApi';
 import { at } from '../workModel';
+import { ContradictionEvidence } from './ContradictionDetail';
 import {
   detailTitle,
   filePath,
+  isContradiction,
   isUsageAlert,
   itemSessions,
   judgement,
@@ -130,6 +132,7 @@ export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, 
             </section>
           )}
           {isUsageAlert(item) && <UsageLinks item={item} />}
+          {isContradiction(item) && <ContradictionEvidence item={item} />}
           {!relay && message && (
             <section className="dt-sec">
               <h3>실행기가 보낸 문구</h3>
@@ -271,7 +274,7 @@ function Judge({ item, onJudged, onError, send }: { item: InboxItem; onJudged: (
 
   return (
     <>
-      <div className="ib-acts" role="group" aria-label="충돌 판정">
+      <div className="ib-acts" role="group" aria-label={isContradiction(item) ? '모순 후보 판정' : '충돌 판정'}>
         {judgementsFor(item).map((j) => (
           <button
             key={j.status}
@@ -292,6 +295,7 @@ function Judge({ item, onJudged, onError, send }: { item: InboxItem; onJudged: (
       {asking && (
         <ReasonForm
           id={reasonId}
+          what={isContradiction(item) ? '모순' : '충돌'}
           reason={reason}
           onReason={setReason}
           busy={busy !== null}
@@ -313,6 +317,7 @@ function Judge({ item, onJudged, onError, send }: { item: InboxItem; onJudged: (
 /** The reason 「충돌 아님」 needs. Its button stays locked, with the reason why, until something is written. */
 export function ReasonForm({
   id,
+  what = '충돌',
   reason,
   onReason,
   busy,
@@ -320,6 +325,8 @@ export function ReasonForm({
   onCancel,
 }: {
   id?: string;
+  /** What is judged not to be one: 충돌 (a file conflict) or 모순 (a contradiction candidate). */
+  what?: '충돌' | '모순';
   reason: string;
   onReason: (reason: string) => void;
   busy: boolean;
@@ -337,16 +344,22 @@ export function ReasonForm({
       }}
     >
       <label>
-        충돌이 아닌 이유
-        <input className="field" value={reason} onChange={(e) => onReason(e.target.value)} placeholder="예: 같은 파일의 다른 절을 고친다" autoFocus />
+        {what}이 아닌 이유
+        <input
+          className="field"
+          value={reason}
+          onChange={(e) => onReason(e.target.value)}
+          placeholder={what === '모순' ? '예: 옛 판의 문장이고 지금 판은 같은 말을 한다' : '예: 같은 파일의 다른 절을 고친다'}
+          autoFocus
+        />
       </label>
       <button type="submit" className="btn btn-primary" disabled={busy || blank}>
-        충돌 아님으로 남기기
+        {what} 아님으로 남기기
       </button>
       <button type="button" className="btn" onClick={onCancel}>
         그만두기
       </button>
-      {blank && <span className="ctl-why">이유를 적어야 보낼 수 있다. 서버가 이유 없는 「충돌 아님」을 받지 않는다.</span>}
+      {blank && <span className="ctl-why">이유를 적어야 보낼 수 있다. 서버가 이유 없는 「{what} 아님」을 받지 않는다.</span>}
     </form>
   );
 }

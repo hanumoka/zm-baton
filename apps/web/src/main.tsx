@@ -12,6 +12,7 @@ import './work/work.css';
 import './decisions/decisions.css';
 import './documents/documents.css';
 import './inbox/inbox.css';
+import './ui/contradictions.css';
 import './sessions/sessions.css';
 import './accounts/accounts.css';
 import './kit/kit.css';
