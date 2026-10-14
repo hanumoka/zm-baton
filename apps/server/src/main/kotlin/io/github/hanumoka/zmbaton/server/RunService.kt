@@ -27,6 +27,8 @@ class RunService(
 	private val sessions: SessionService,
 	/** Pins a submitted result and picks who must see it (FN-0411). */
 	private val reviews: ReviewService,
+	/** Settles the questions whose answers a continuing run carried (FN-0210). */
+	private val questions: QuestionService,
 	transactions: PlatformTransactionManager,
 	/** Contract "실행 권리 청구" 6: how long a lapsed lease may stay silent before the run is lost. */
 	@Value("\${zm-baton.run-lost-grace-seconds:300}") private val lostGraceSeconds: Long,
@@ -429,6 +431,7 @@ class RunService(
 					.param("runId", runId).update()
 				if (started == 1 && target.delegationId != null) {
 					workItems.followRun(target.workItemId, runId, WorkItemService.RunStep.STARTED)
+					questions.markDelivered(runId)
 				}
 			}
 

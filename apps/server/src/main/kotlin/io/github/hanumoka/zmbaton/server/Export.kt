@@ -84,6 +84,8 @@ class ExportService(
 			// Who had to see which result and what they decided; the evidence holds patterns, paths and draws.
 			Triple("review_items", "review_items", "created_at, id"),
 			Triple("work_item_links", "work_item_links", "created_at, from_id, to_id"),
+			// Questions with their answers and routing: what people and runs asked, in their own words.
+			Triple("questions", "questions", "created_at, id"),
 			Triple("audit_log", "audit_log", "at, id"),
 		)
 

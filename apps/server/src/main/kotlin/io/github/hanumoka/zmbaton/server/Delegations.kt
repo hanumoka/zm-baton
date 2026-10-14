@@ -68,6 +68,8 @@ class DelegationService(
 	private val json: ObjectMapper,
 	private val workItems: WorkItemService,
 	private val sessions: SessionService,
+	/** Answered questions a continuing run carries (FN-0210). */
+	private val questions: QuestionService,
 ) {
 	companion object {
 		/** The owner's manager (contract "담당"): stage 1 has one person and so one manager. */
@@ -192,8 +194,11 @@ class DelegationService(
 			if (note == null) throw BadRequestException("결과를 돌려보내는 이유를 note에 쓴다")
 			workItems.transition(workItemId, TransitionIn("in_progress", body.version, note))
 		}
+		// Answers to questions the earlier runs asked go with a run that continues the work.
+		val answers = if (mode == Workflow.DelegationMode.RESUME) questions.answersToDeliver(workItemId) else emptyList()
 		val continueReason = when {
 			previous == null -> null
+			answers.isNotEmpty() -> "answer_arrived"
 			mode == Workflow.DelegationMode.REJECT_AND_RESUME || previous.endReason == "submitted" -> "result_rejected"
 			else -> "resume_after_cut"
 		}
@@ -203,7 +208,7 @@ class DelegationService(
 			} else {
 				null // after a cut there is no reason; when sending back now, the note says it
 			}
-			Instructions.Continuation(continueReason, previous.runId, previous.endReason, rejection)
+			Instructions.Continuation(continueReason, previous.runId, previous.endReason, rejection, answers)
 		} else {
 			null
 		}
@@ -233,6 +238,7 @@ class DelegationService(
 		} catch (e: DuplicateKeyException) {
 			throw ConflictException("살아 있는 실행 시도가 있다. 끝나거나 취소한 뒤에 다시 맡긴다")
 		}
+		questions.attachDelivery(answers.map { it.questionId }, run)
 		jdbc.sql(
 			"update work_items set executor_kind = 'manager', executor_id = :manager, version = version + 1, updated_at = now() where id = :id",
 		).param("manager", MANAGER).param("id", workItemId).update()
@@ -241,7 +247,8 @@ class DelegationService(
 			workItemId, "work_item.delegated",
 			mapOf("delegation_id" to dlg, "run_id" to run, "executor" to executor, "device_id" to deviceId,
 				"repo_key" to repoKey, "base_branch" to baseBranch, "allowed_tools" to tools,
-				"continue_reason" to continueReason, "resumed_from_run_id" to previous?.runId, "note" to note),
+				"continue_reason" to continueReason, "resumed_from_run_id" to previous?.runId, "note" to note,
+				"answers" to answers.map { it.questionId }),
 		)
 		return workItems.detail(workItemId)
 	}
@@ -332,7 +339,12 @@ object Instructions {
 		val previousEnd: String,
 		/** Why a person sent the last result back, when that is why this run goes on. */
 		val rejection: String?,
+		/** Added with questions: the answers this run carries (question path "③ 답을 실행기에 전달한다" 3). */
+		val answers: List<Answer> = emptyList(),
 	)
+
+	/** A question an earlier run asked and the person's answer to it. */
+	data class Answer(val questionId: String, val question: String, val answer: String)
 
 	const val NORMS_RESOURCE = "/executor/agent-norms.txt"
 
@@ -376,6 +388,14 @@ object Instructions {
 				appendLine("이어 가는 이유: ${CONTINUE_LABELS[continuation.reason] ?: continuation.reason}")
 				appendLine("이전 실행: ${continuation.previousRunId} (${END_LABELS[continuation.previousEnd] ?: continuation.previousEnd})")
 				continuation.rejection?.let { appendLine("돌려보낸 이유: $it") }
+				if (continuation.answers.isNotEmpty()) {
+					appendLine("이전 실행이 남긴 질문과 사람의 답:")
+					for (a in continuation.answers) {
+						appendLine("- 질문(${a.questionId}): ${a.question}")
+						appendLine("  답(사람): ${a.answer}")
+					}
+					appendLine("이 답을 따른다. 답 때문에 바뀌는 단계가 있으면 그 단계부터 다시 한다.")
+				}
 				appendLine("먼저 이 작업 트리의 파일을 살펴 이전 실행이 어디까지 했는지 확인하고, 남은 것만 한다.")
 			}
 			if (note != null) {
