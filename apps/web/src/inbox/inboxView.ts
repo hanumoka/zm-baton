@@ -88,8 +88,12 @@ const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() !
 /** The wait kind of a waiting session: the item's own field, else its detail. */
 const waitKind = (item: InboxItem) => item.wait_kind ?? text(item.detail?.wait_kind) ?? '';
 
+/** A notice that an AI account's usage limit or a provider's signal stopped work (server UsageService), not a conflict. */
+export const isUsageAlert = (item: Pick<InboxItem, 'kind' | 'detail'>) => item.kind === 'notice' && item.detail?.notice_kind === 'usage_alert';
+
 /** The kind on a row: a shape and a word, never colour alone (DESIGN.md 「색」). */
 export function kindOf(item: InboxItem): KindView {
+  if (isUsageAlert(item)) return { mark: 'alert', label: '사용량' };
   if (item.kind === 'notice') return { mark: 'conflict', label: '충돌' };
   if (item.kind === 'session_waiting') return { mark: 'wait', label: (WAIT_LABELS[waitKind(item)] ?? WAIT_OTHER).short };
   return OTHER_KINDS[item.kind] ?? { mark: MARKS[item.bucket] ?? 'inbox', label: '알림' };
@@ -141,6 +145,7 @@ export function rowTitle(item: InboxItem, sessions: SessionView[] | null): strin
 
 /** The detail's title: what waits for me, in one sentence. */
 export function detailTitle(item: InboxItem): string {
+  if (isUsageAlert(item)) return item.summary;
   if (item.kind === 'notice') return '두 세션이 같은 파일을 고쳤다';
   if (isRelay(item)) return relayDetailTitle(item);
   if (item.kind === 'session_waiting') return (WAIT_LABELS[waitKind(item)] ?? WAIT_OTHER).long;
@@ -149,6 +154,9 @@ export function detailTitle(item: InboxItem): string {
 
 /** Why it waits for me: what happened and what my part is. */
 export function whyMe(item: InboxItem): string {
+  if (isUsageAlert(item)) {
+    return '맡긴 AI 실행이 AI 계정의 사용량 상한이나 공급자의 신호에 닿았다. 실행을 멈췄으면 그 작업에 대기 사유가 붙어 있다. 작업과 계정을 확인한 뒤 「확인」을 누르면 이 목록에서 빠진다.';
+  }
   if (item.kind === 'notice') {
     return '내가 등록한 세션 둘이 같은 저장소의 같은 파일을 고쳤다. 이 알림은 일을 막지 않는다. 겹친 것이 문제인지 보고 판정하면 이 목록에서 빠진다.';
   }
@@ -178,6 +186,9 @@ export const JUDGEMENTS: { status: NoticeStatus; label: string; result: string }
   { status: 'not_a_conflict', label: '충돌 아님', result: '이유를 적어 남긴다' },
   { status: 'resolved', label: '해결', result: '고쳐서 겹침이 사라졌다' },
 ];
+
+/** The judgements an item offers: a usage notice is only acknowledged; a conflict takes all three. */
+export const judgementsFor = (item: Pick<InboxItem, 'kind' | 'detail'>) => (isUsageAlert(item) ? JUDGEMENTS.filter((j) => j.status === 'acknowledged') : JUDGEMENTS);
 
 /** What a judgement sends; null for 「충돌 아님」 without a reason, which the server refuses, so nothing is sent. */
 export function judgement(status: NoticeStatus, reason: string): { status: NoticeStatus; note?: string } | null {

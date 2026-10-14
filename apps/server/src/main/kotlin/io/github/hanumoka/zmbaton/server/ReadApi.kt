@@ -59,6 +59,27 @@ data class RunView(
 	val inputs: List<RunInputView> = emptyList(),
 	/** What a person may do with the run now; null once it ended. */
 	val actions: RunActions? = null,
+	// Added with AI accounts and usage limits.
+	/** The AI account the run goes on; null for a compat-test run or one handed over before accounts. */
+	val account: RunAccountView? = null,
+	/** `subscription_login`, `api_key` or `cloud_account`: what the adapter says the executor used. */
+	@JsonProperty("auth_method") val authMethod: String? = null,
+	/** The limits the run got at its claim: `max_turns`, `max_budget_usd`, `max_minutes`, `budget_from`. */
+	val limits: Map<String, Any?>? = null,
+	/** What the executor said the run used: `cost_usd` (price-list estimate), tokens, `num_turns`, `duration_ms`. */
+	val usage: Map<String, Any?>? = null,
+	/** Where the run's usage is charged (billing-signals 「과금 위치」), how that was detected and the newest signal. */
+	@JsonProperty("billing_location") val billingLocation: String? = null,
+	@JsonProperty("billing_detection") val billingDetection: String? = null,
+	@JsonProperty("billing_evidence") val billingEvidence: Map<String, Any?>? = null,
+	/** The limit or signal that stopped the run, if one did. */
+	@JsonProperty("stopped_by") val stoppedBy: String? = null,
+)
+
+data class RunAccountView(
+	val id: String,
+	val name: String,
+	@JsonProperty("auth_kind") val authKind: String,
 )
 
 data class RunDelegationView(
@@ -117,8 +138,11 @@ class ReadService(
 			         (select (e.payload -> 'capabilities')::text from run_events e
 			           where e.run_id = r.id and e.kind = 'lifecycle' and e.payload ->> 'phase' = 'started' order by e.seq desc limit 1) as capabilities,
 			         d.id as dlg_id, d.device_id as dlg_device, dv.name as dlg_device_name, d.scope::text as dlg_scope,
-			         dr.name as dlg_repo_name, d.expires_at as dlg_expires, d.revoked_at as dlg_revoked
+			         dr.name as dlg_repo_name, d.expires_at as dlg_expires, d.revoked_at as dlg_revoked,
+			         r.account_id, acc.name as acc_name, acc.auth_kind as acc_kind, r.auth_method, r.limits::text as limits,
+			         r.usage::text as usage, r.billing_location, r.billing_detection, r.billing_evidence::text as billing_evidence, r.stopped_by
 			    from runs r
+			    left join ai_accounts acc on acc.id = r.account_id
 			    left join delegations d on d.id = r.delegation_id
 			    left join devices dv on dv.id = d.device_id
 			    left join device_repositories dr on dr.device_id = d.device_id and dr.repo_key = d.scope ->> 'repo_key'
@@ -153,6 +177,11 @@ class ReadService(
 				rs.getString("readiness")?.let { json.readValue(it, payloadType) }, capabilities,
 				inputs[rs.getString("id")].orEmpty(),
 				RunActionRules.of(state, delegation != null, capabilities?.get("live_input") == true),
+				rs.getString("account_id")?.let { RunAccountView(it, rs.getString("acc_name"), rs.getString("acc_kind")) },
+				rs.getString("auth_method"), rs.getString("limits")?.let { json.readValue(it, payloadType) },
+				rs.getString("usage")?.let { json.readValue(it, payloadType) }, rs.getString("billing_location"),
+				rs.getString("billing_detection"), rs.getString("billing_evidence")?.let { json.readValue(it, payloadType) },
+				rs.getString("stopped_by"),
 			)
 		}.list()
 	}

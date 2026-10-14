@@ -220,7 +220,8 @@ func agentCmd(args []string, stderr io.Writer) int {
 	once := fs.Bool("once", false, "claim one run, execute it, then exit (exit code 0 only if it ended submitted)")
 	pollInterval := fs.Duration("poll-interval", 2*time.Second, "pause between polls when there is nothing to claim")
 	claudeBin := fs.String("claude", "claude", "Claude Code executable name or path")
-	runTimeout := fs.Duration("run-timeout", 30*time.Minute, "stop the executor after this long; 0 means no limit")
+	runTimeout := fs.Duration("run-timeout", 0,
+		"stop the executor after this long when that is shorter than the AI account's per-run time limit; 0 uses the account's limit (30m when the server sends none)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -259,7 +260,7 @@ func agentCmd(args []string, stderr io.Writer) int {
 	// started ended with no child left, which a continuing run needs before it reuses a worktree.
 	h, err := agent.NewHandoff(agent.Config{
 		Client: client, DeviceID: cfg.DeviceID, ClaudePath: claudePath, PollInterval: *pollInterval,
-		RunTimeout: *runTimeout, StateDir: filepath.Join(home, "runs"), Log: log,
+		RunTimeout: *runTimeout, StateDir: filepath.Join(home, "runs"), ExecutorDir: filepath.Join(home, "executors"), Log: log,
 	}, repos, tempDirs())
 	if err != nil {
 		return fail("bad flags", err)

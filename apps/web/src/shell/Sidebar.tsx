@@ -1,11 +1,9 @@
-import { useId } from 'react';
 import { Icon } from '../icons/Icon';
-import { NAV_GROUPS, screenById, type ScreenId } from './screens';
+import { FOOT_ITEMS, NAV_GROUPS, screenById, type ScreenId } from './screens';
 
 export type Permission = NotificationPermission | 'unsupported';
 export type Counts = Partial<Record<ScreenId, number>>;
 
-export const SETTINGS_WHY = '설정 화면은 아직 없다. 검토 단계는 작업 화면에서 켜고 끈다';
 const DENIED_FIX = '주소창 왼쪽의 사이트 설정에서 알림을 허용한다';
 
 type Props = {
@@ -52,9 +50,11 @@ export function Sidebar({ current, counts, open, onToggle, permission, onAskPerm
       </nav>
       <div className="side-foot">
         <ul>
-          <li>
-            <SettingsItem rail={rail} />
-          </li>
+          {FOOT_ITEMS.map((id) => (
+            <li key={id}>
+              <NavItem id={id} count={0} current={id === current} rail={rail} />
+            </li>
+          ))}
           <li>
             <NotifyItem permission={permission} onAsk={onAskPermission} rail={rail} />
           </li>
@@ -97,21 +97,6 @@ function NavItem({ id, count, current, rail }: { id: ScreenId; count: number; cu
         </>
       )}
     </a>
-  );
-}
-
-/** Settings has no screen yet: locked, with the reason on hover, on focus and for screen readers. */
-export function SettingsItem({ rail }: { rail: boolean }) {
-  const whyId = useId();
-  return (
-    <button type="button" className="it tipped" aria-disabled="true" aria-describedby={whyId} data-tip={rail ? `설정: ${SETTINGS_WHY}` : SETTINGS_WHY}>
-      <Icon name="settings" />
-      <span className="nm">설정</span>
-      <Icon name="lock" className="lock" />
-      <span id={whyId} className="sr">
-        {SETTINGS_WHY}
-      </span>
-    </button>
   );
 }
 

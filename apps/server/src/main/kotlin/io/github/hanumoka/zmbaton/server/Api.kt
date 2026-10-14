@@ -47,6 +47,35 @@ data class Claimed(
 	val instruction: String? = null,
 	/** Added with run control: set when the run continues an earlier one (contract "실행 권리 청구" 1-2). */
 	val resume: ClaimedResume? = null,
+	/** Added with AI accounts: the account the run goes on and how its executor signs in. Null for a run handed over before accounts. */
+	val account: ClaimedAccount? = null,
+	/** Added with AI accounts: the run's usage limits; an absent field has no limit. */
+	val limits: ClaimedLimits? = null,
+)
+
+/**
+ * The AI account a run goes on (contract "실행할 때 넘기는 것" 인증). The connector keeps only this
+ * sign-in method in the executor's environment and reports the method it used. Never a secret.
+ */
+data class ClaimedAccount(
+	val id: String,
+	val name: String,
+	/** `subscription_login` or `api_key`. */
+	@JsonProperty("auth_method") val authMethod: String,
+	/** `device_login` or `env:ANTHROPIC_API_KEY`: where the device keeps the sign-in. */
+	@JsonProperty("auth_source") val authSource: String,
+)
+
+/**
+ * A run's usage limits (FN-0409): turns and the price-list cost go to Claude Code's `--max-turns`
+ * and `--max-budget-usd`, minutes to the connector's timer. `budget_from` says whether the budget is
+ * the run's own limit or what is left of the account's daily limit.
+ */
+data class ClaimedLimits(
+	@JsonProperty("max_turns") val maxTurns: Int?,
+	@JsonProperty("max_budget_usd") val maxBudgetUsd: java.math.BigDecimal?,
+	@JsonProperty("max_minutes") val maxMinutes: Int?,
+	@JsonProperty("budget_from") val budgetFrom: String?,
 )
 
 /**
@@ -61,6 +90,8 @@ data class ClaimedResume(
 	@JsonProperty("session_id") val sessionId: String?,
 	/** `repo_key`, `base_commit`, `branch`, `base_ref` of the earlier run: never a path on the device. */
 	val workspace: Map<String, Any?>?,
+	/** Added with AI accounts: false when the earlier run went on another account; then neither its session nor its worktree is sent. */
+	@JsonProperty("same_account") val sameAccount: Boolean = true,
 )
 
 /** A lease renewal (contract "실행 권리 청구" 5), with what became of the instructions the connector took. */

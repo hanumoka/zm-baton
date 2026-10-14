@@ -13,6 +13,7 @@ import './decisions/decisions.css';
 import './documents/documents.css';
 import './inbox/inbox.css';
 import './sessions/sessions.css';
+import './accounts/accounts.css';
 import './kit/kit.css';
 
 createRoot(document.getElementById('root')!).render(

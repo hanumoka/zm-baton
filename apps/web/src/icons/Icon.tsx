@@ -36,7 +36,8 @@ export type IconName =
   | 'chevron-down'
   | 'more'
   | 'arrow-up'
-  | 'arrow-down';
+  | 'arrow-down'
+  | 'key';
 
 const SHAPES: Record<IconName, ReactNode> = {
   inbox: (
@@ -95,6 +96,12 @@ const SHAPES: Record<IconName, ReactNode> = {
     </>
   ),
   close: <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />,
+  key: (
+    <>
+      <circle cx="5.25" cy="10.75" r="2.75" />
+      <path d="M7.25 8.75 13.25 2.75M10.75 5.25l1.75 1.75M9.25 6.75l1.25 1.25" />
+    </>
+  ),
   plus: <path d="M8 3.5v9M3.5 8h9" />,
   'sidebar-expand': (
     <>
@@ -216,6 +223,7 @@ export const ICONS: { name: IconName; label: string }[] = [
   { name: 'more', label: '더 보기' },
   { name: 'arrow-up', label: '위로' },
   { name: 'arrow-down', label: '아래로' },
+  { name: 'key', label: 'AI 계정' },
 ];
 
 /**
