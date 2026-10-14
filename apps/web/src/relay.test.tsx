@@ -196,7 +196,7 @@ describe('the list', () => {
   it('says in bucket 1 that relays are off and why, and then no focus mode note about relays', () => {
     const [b1, b2, b3] = inboxGroups([]);
     expect(groupAside(b1, 0, true, false)).toBe(RELAY_OFF_NOTE);
-    expect(RELAY_OFF_NOTE).toBe('꺼져 있다(사람 인증이 생기기 전에는 기본 꺼짐)');
+    expect(RELAY_OFF_NOTE).toBe('꺼져 있다(로그인을 요구하는 서버에서만 켤 수 있다)');
     expect(groupAside(b2, 0, true, false)).toBe('기다리는 질문과 세션이 없다');
     expect(groupAside(b3, 1, true, false)).toBeUndefined();
     expect(groupAside(b1, 0, false, null)).toBe('권한 요청이 없다'); // before the server said
@@ -216,7 +216,7 @@ describe('the list', () => {
         onReload={() => {}}
       />,
     );
-    expect(html).toContain('<span class="grp-r">꺼져 있다(사람 인증이 생기기 전에는 기본 꺼짐)</span>');
+    expect(html).toContain('<span class="grp-r">꺼져 있다(로그인을 요구하는 서버에서만 켤 수 있다)</span>');
   });
 
   it('shows the seconds left on the row, and the focus mode note in the relaying buckets', () => {
