@@ -99,7 +99,8 @@ export type HandoffChoice = { device_id: string; repo_key: string; base_branch?:
 
 export type Project = ProjectRef & { open_work_items: number };
 
-export type DecisionRef = { id: string; external_ref: string | null; question: string };
+/** `ref` is the number people call it: `DEC-0106` copied from zm-docs, `DCS-0001` made here. */
+export type DecisionRef = { id: string; external_ref: string | null; question: string; ref: string | null };
 
 export type Decision = {
   id: string;
@@ -112,7 +113,33 @@ export type Decision = {
   supersedes: DecisionRef | null;
   superseded_by: DecisionRef | null;
   updated_at: string;
+  number: number | null;
+  ref: string | null;
+  source_of_truth: 'product' | 'git';
+  version: number;
 };
+
+export type DecisionOption = { key: string; title: string; body: string | null };
+
+/** Decision roles (DACI). In stage 1 the approver is always the owner. */
+export type DecisionRoles = { driver: string | null; approver: string | null; contributors: string[]; informed: string[] };
+
+export type DecisionActionName = 'edit' | 'accept' | 'reject' | 'supersede';
+
+export type DecisionAction = { name: DecisionActionName; allowed: boolean; reason: string | null };
+
+export type Approval = {
+  id: string;
+  decision: 'approved' | 'rejected' | 'revoked';
+  approver_kind: 'human' | 'ai_reviewer';
+  approver_id: string;
+  target_version: number;
+  policy_ref: string;
+  note: string | null;
+  decided_at: string;
+};
+
+export type LinkedWork = Pick<WorkItem, 'id' | 'external_ref' | 'title' | 'stage' | 'wait_reasons'>;
 
 export type DecisionDetail = {
   decision: Decision;
@@ -120,6 +147,20 @@ export type DecisionDetail = {
   sections: { heading: string; body: string }[];
   source_of_truth: 'product' | 'git';
   git_ref: { repo_key?: string; path?: string; commit?: string } | null;
+  /** The fields below are a decision made here; a Git copy has its text in `sections`. */
+  context: string | null;
+  options: DecisionOption[];
+  chosen_option: string | null;
+  rationale: string | null;
+  review_conditions: string | null;
+  roles: DecisionRoles;
+  /** Who may accept or reject it now. */
+  approver: string;
+  work_items: LinkedWork[];
+  approvals: Approval[];
+  read_only_reason: string | null;
+  actions: DecisionAction[];
+  history: HistoryEntry[];
 };
 
 export type NewWorkItem = {
@@ -141,7 +182,7 @@ export class ApiError extends Error {
   }
 }
 
-async function call<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+export async function call<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, {
     method,
     signal,

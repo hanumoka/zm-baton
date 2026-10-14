@@ -1,16 +1,17 @@
 import { useEffect, useRef } from 'react';
 import { DecisionMark } from '../icons/DecisionMark';
+import { Icon } from '../icons/Icon';
 import { EmptyState } from '../ui/EmptyState';
 import { GroupHead, RowSkeleton } from '../ui/Group';
 import { ListPane, type ListHead } from '../ui/ListPane';
 import { tabStop } from '../ui/rowKeys';
 import type { Decision } from '../workApi';
 import { decisionStatusLabel } from '../workModel';
-import { previewText, rowOrder, type Bucket, type DecisionGroup, type ListState } from './decisionView';
+import { previewText, refOf, rowOrder, type Bucket, type DecisionGroup, type ListState } from './decisionView';
 
 /** What an empty group says. */
 const GROUP_EMPTY: Record<Bucket, { title: string; body?: string }> = {
-  open: { title: '제안 상태로 남은 결정이 없다' },
+  open: { title: '제안 상태로 남은 결정이 없다', body: '「새 결정」으로 제안하면 여기에 쌓이고, 승인자가 채택하거나 기각한다.' },
   current: { title: '지금 유효한 결정이 없다' },
   past: { title: '대체되거나 기각된 결정이 없다' },
 };
@@ -29,6 +30,8 @@ type Props = {
   onShowPast: () => void;
   onClearFilters: () => void;
   onReload: () => void;
+  /** Start a new proposal. */
+  onNew: () => void;
 };
 
 /**
@@ -36,7 +39,7 @@ type Props = {
  * folded until asked for). Each group is newest first. The keys are the work list's: the arrows,
  * Home and End move the selection, Enter opens it.
  */
-export function DecisionList({ state, groups, head, selected, onSelect, onPick, onOpen, onShowPast, onClearFilters, onReload }: Props) {
+export function DecisionList({ state, groups, head, selected, onSelect, onPick, onOpen, onShowPast, onClearFilters, onReload, onNew }: Props) {
   const order = rowOrder(groups);
   const box = useRef<HTMLDivElement>(null);
   // A decision opened by its address or by a supersession link may sit far down: bring its row into view.
@@ -46,7 +49,20 @@ export function DecisionList({ state, groups, head, selected, onSelect, onPick, 
     box.current?.querySelector<HTMLElement>(`[data-row="${CSS.escape(selected)}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [selected, shows]);
   return (
-    <ListPane title="결정 목록" head={head} by="상태로 묶음" order={order} onSelect={onSelect} onOpen={onOpen} bodyRef={box}>
+    <ListPane
+      title="결정 목록"
+      head={head}
+      by="상태로 묶음"
+      action={
+        <button type="button" className="btn btn-primary" onClick={onNew}>
+          <Icon name="plus" />새 결정
+        </button>
+      }
+      order={order}
+      onSelect={onSelect}
+      onOpen={onOpen}
+      bodyRef={box}
+    >
       <ListBody
         state={state}
         groups={groups}
@@ -56,6 +72,7 @@ export function DecisionList({ state, groups, head, selected, onSelect, onPick, 
         onShowPast={onShowPast}
         onClearFilters={onClearFilters}
         onReload={onReload}
+        onNew={onNew}
       />
     </ListPane>
   );
@@ -70,6 +87,7 @@ function ListBody({
   onShowPast,
   onClearFilters,
   onReload,
+  onNew,
 }: Omit<Props, 'head' | 'onOpen' | 'onSelect'> & { tabbable: string | null }) {
   switch (state.kind) {
     case 'loading':
@@ -90,9 +108,17 @@ function ListBody({
       );
     case 'unused':
       return (
-        <EmptyState kind="unused" title="아직 가져온 결정이 없다">
-          결정 기록은 zm-docs의 <code>docs/governance/decisions/</code> 문서다. zm-docs 체크아웃에서 <code>zm-baton import zm-docs --apply</code>를
-          실행하면 가져온다. 정본이 Git 파일이라 여기서는 읽기만 하고, 고칠 때는 zm-docs에서 고친 뒤 다시 가져온다.
+        <EmptyState
+          kind="unused"
+          title="아직 결정이 없다"
+          action={
+            <button type="button" className="btn btn-primary" onClick={onNew}>
+              <Icon name="plus" />새 결정 제안하기
+            </button>
+          }
+        >
+          여기서 제안한 결정은 승인자가 채택하거나 기각한다. zm-docs의 <code>docs/governance/decisions/</code> 문서는 zm-docs 체크아웃에서{' '}
+          <code>zm-baton import zm-docs --apply</code>로 가져오고, 정본이 Git 파일이라 여기서는 읽기만 한다.
         </EmptyState>
       );
     case 'filtered':
@@ -170,13 +196,13 @@ export function DecisionRow({
       <span className="lrow-l1">
         <DecisionMark status={d.status} />
         <span className="lrow-state">{decisionStatusLabel(d.status)}</span>
-        {d.external_ref && <code className="lrow-ref">{d.external_ref}</code>}
+        {refOf(d) && <code className="lrow-ref">{refOf(d)}</code>}
         <span className="lrow-title">{d.question}</span>
       </span>
       <span className="lrow-sub">
-        <span className="dc-date num">{d.decided_on ?? '날짜 없음'}</span>
+        <span className="dc-date num">{d.decided_on ?? (d.source_of_truth === 'product' && d.status === 'proposed' ? '정하기 전' : '날짜 없음')}</span>
         {d.projects.length > 0 && <span className="lrow-proj">{d.projects.map((p) => p.name).join(', ')}</span>}
-        {d.superseded_by && <span className="dc-by">대체한 결정 {d.superseded_by.external_ref ?? d.superseded_by.question}</span>}
+        {d.superseded_by && <span className="dc-by">대체한 결정 {refOf(d.superseded_by) ?? d.superseded_by.question}</span>}
         <span className="dc-choice">{previewText(d)}</span>
       </span>
     </button>

@@ -1,5 +1,5 @@
 import type { DecisionStatus } from '../icons/DecisionMark';
-import type { Decision, DecisionDetail, Project, WorkItem } from '../workApi';
+import type { Decision, DecisionAction, DecisionActionName, DecisionDetail, Project, WorkItem } from '../workApi';
 import { decisionStatusLabel } from '../workModel';
 
 /*
@@ -26,6 +26,9 @@ export function bucketOf(status: DecisionStatus): Bucket {
 /** The four statuses for the status chip: the two that count now, then the two that are past. */
 export const STATUSES: DecisionStatus[] = ['proposed', 'accepted', 'rejected', 'superseded'];
 
+/** The number people call a decision: `DEC-0106` copied from zm-docs, `DCS-0001` made here. */
+export const refOf = (d: { ref?: string | null; external_ref: string | null }): string | null => d.ref ?? d.external_ref;
+
 /** Newest decision first; a decision with no date goes last, then by number, the higher first. */
 export function byNewest(a: Decision, b: Decision): number {
   if (a.decided_on !== b.decided_on) {
@@ -33,7 +36,12 @@ export function byNewest(a: Decision, b: Decision): number {
     if (b.decided_on === null) return -1;
     return b.decided_on.localeCompare(a.decided_on);
   }
-  return (b.external_ref ?? '').localeCompare(a.external_ref ?? '');
+  return (refOf(b) ?? '').localeCompare(refOf(a) ?? '');
+}
+
+/** One of the four things a person may do with a decision, as the server judged it. */
+export function actionOf(detail: Pick<DecisionDetail, 'actions'>, name: DecisionActionName): DecisionAction {
+  return detail.actions.find((a) => a.name === name) ?? { name, allowed: false, reason: '서버가 이 동작을 알려 주지 않았다' };
 }
 
 export type DecisionGroup = {

@@ -59,6 +59,9 @@ class ExportService(
 			Triple("work_items", "work_items", "created_at, id"),
 			Triple("decisions", "decisions", "decided_on nulls last, external_ref nulls last, id"),
 			Triple("decision_projects", "decision_projects", "decision_id, project_id"),
+			Triple("decision_work_items", "decision_work_items", "decision_id, work_item_id"),
+			// Verdicts on decisions (and later on document versions): who approved what, under which rule.
+			Triple("approvals", "approvals", "decided_at, id"),
 			Triple("devices", "devices", "created_at, id"),
 			// Remotes are stored cleaned (DelegationService.addRepository: SessionService.cleanRemote
 			// drops user info, query and fragment, and local paths), so no credential is exported.
