@@ -56,6 +56,7 @@ export function notSentWhy(basis: Record<string, unknown> | null | undefined): s
   if (sample.capped === true) return '오늘 표본 상한에 닿아 고르지 않았다';
   const draw = typeof sample.draw === 'number' ? sample.draw : null;
   const rate = typeof sample.rate === 'number' ? sample.rate : null;
+  if (rate !== null && rate <= 0) return '위험 경로에 걸리지 않았고 표본 비율이 0이라 뽑지 않았다';
   if (draw !== null && rate !== null && draw >= rate) return `위험 경로에 걸리지 않았고 표본으로 뽑히지 않았다(뽑은 수 ${draw.toFixed(3)}, 비율 ${rateLabel(rate)})`;
   return null;
 }

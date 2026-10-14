@@ -3,6 +3,9 @@ import { Icon } from '../icons/Icon';
 import type { RunEvent } from '../api';
 import { reportStatus, statusLabel, summary } from '../runState';
 import { inboxHref } from '../inboxModel';
+import { lastAnswer } from '../question/questionModel';
+import { RunQuestionForm } from '../question/Questions';
+import type { AskBody } from '../questionsApi';
 import { autoLabel, humanLabel, notSentWhy, reasonLabel } from '../review/reviewModel';
 import type { ItemRun, RunInput } from '../workApi';
 import { at } from '../workModel';
@@ -87,9 +90,12 @@ type Props = {
   onWithdraw: (runId: string) => Promise<void>;
   onCancel: (runId: string) => Promise<void>;
   onSendInput: (runId: string, text: string) => Promise<void>;
+  /** Records what this run asked as a question (FN-0210); absent while the work item takes none. */
+  onAsk?: (body: AskBody) => Promise<void>;
 };
 
-export function RunRow({ run, events, now, outcomeUnknown, onWithdraw, onCancel, onSendInput }: Props) {
+export function RunRow({ run, events, now, outcomeUnknown, onWithdraw, onCancel, onSendInput, onAsk }: Props) {
+  const [asking, setAsking] = useState(false);
   const d = run.delegation;
   const ws = run.workspace;
   const ended = run.state === 'ended';
@@ -266,6 +272,18 @@ export function RunRow({ run, events, now, outcomeUnknown, onWithdraw, onCancel,
             ))}
           </ul>
         </details>
+      )}
+      {ended && d && onAsk && (
+        asking ? (
+          <RunQuestionForm runId={run.id} start={lastAnswer(events)} onAsk={onAsk} onClose={() => setAsking(false)} />
+        ) : (
+          <p className="hr-ask">
+            <button type="button" className="btn" onClick={() => setAsking(true)}>
+              질문으로 남기기
+            </button>
+            <span className="hr-dim">AI가 답에 물음이나 가정을 남겼으면 질문으로 남겨 답을 받는다.</span>
+          </p>
+        )
       )}
       {run.instruction && (
         <details className="hr-inst">

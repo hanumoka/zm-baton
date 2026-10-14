@@ -34,9 +34,10 @@ export const rowOrder = (groups: InboxGroup[]) => groups.flatMap((g) => g.items.
 /** What an empty group says: a group the server fills says it is clear; one it does not fill yet says so. */
 export function groupNote(g: Pick<InboxGroup, 'bucket' | 'raised'>): string {
   if (!g.raised) return g.bucket === 1 ? '아직 중계하지 않는다' : '서버가 아직 만들지 않는다';
+  if (g.bucket === 2) return '기다리는 질문과 세션이 없다';
   if (g.bucket === 4) return '사람이 볼 위험 결과가 없다';
   if (g.bucket === 5) return '고른 표본이 없다';
-  return g.bucket === 2 ? '기다리는 세션이 없다' : '겹친 파일이 없다';
+  return '겹친 파일이 없다';
 }
 
 export type KindView = { mark: IconName; label: string };
@@ -69,6 +70,7 @@ const waitKind = (item: InboxItem) => item.wait_kind ?? text(item.detail?.wait_k
 export function kindOf(item: InboxItem): KindView {
   if (item.kind === 'notice') return { mark: 'conflict', label: '충돌' };
   if (item.kind === 'session_waiting') return { mark: 'wait', label: (WAIT_LABELS[waitKind(item)] ?? WAIT_OTHER).short };
+  if (item.kind === 'run_question') return { mark: 'ai', label: item.detail?.from_run === true ? '실행의 질문' : '질문' };
   return OTHER_KINDS[item.kind] ?? { mark: MARKS[item.bucket] ?? 'inbox', label: '알림' };
 }
 
@@ -109,6 +111,8 @@ export function rowTitle(item: InboxItem, sessions: SessionView[] | null): strin
   if (item.kind === 'notice') return filePath(item) ?? item.summary;
   // A review request: the work item it is about; its file goes on the second line.
   if (item.kind === 'risk_review' || item.kind === 'sample_review') return text(item.detail?.title) ?? item.summary;
+  // A question: what is asked; the work item it is about goes on the second line.
+  if (item.kind === 'run_question') return text(item.detail?.body) ?? item.summary;
   if (item.kind === 'session_waiting') {
     return waitMessage(item) ?? sharedWork(liveSession(sessions, item.source_id)) ?? (WAIT_LABELS[waitKind(item)] ?? WAIT_OTHER).long;
   }

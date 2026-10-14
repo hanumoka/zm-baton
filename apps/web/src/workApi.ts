@@ -53,6 +53,8 @@ export type WorkItemDetail = {
   history: HistoryEntry[];
   /** Whether the work item can be handed to an AI now, and why not (third stage-1 slice). */
   delegation?: DelegationAvailability;
+  /** Whether a question can be left on the work item now, and why not (FN-0210); an older server leaves it out. */
+  question?: { allowed: boolean; reason: string | null };
 };
 
 /** How the next run starts: a work item's first run, or one that continues an earlier run. */
@@ -76,6 +78,8 @@ export type DelegationAvailability = {
   /** Sending a result back needs a reason. */
   needs_note?: boolean;
   resume_from?: PreviousRun | null;
+  /** Answered questions of earlier runs that the next run carries (`answer_arrived`). */
+  answers_ready?: number;
 };
 
 /** A repository a device's connector can run in (`zm-baton repo add`). Never a path on the device. */
