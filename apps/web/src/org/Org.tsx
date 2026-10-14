@@ -40,7 +40,7 @@ export function Org({ onError, onRead }: Props) {
   const [refusal, setRefusal] = useState<Refusal>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const sheet = useSheet();
+  const sheet = useSheet(view.selected);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const root = useRef<HTMLElement>(null);
   const { selected } = view;

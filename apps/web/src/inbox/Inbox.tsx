@@ -49,7 +49,7 @@ export function Inbox({ items, error, sessions, now, onChanged, onError, onReloa
   const [view, setView] = useAddress('inbox', readView, writeView);
   /** Items judged here, hidden until the server's list no longer has them. */
   const [judged, setJudged] = useState<ReadonlySet<string>>(() => new Set());
-  const sheet = useSheet();
+  const sheet = useSheet(view.selected);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const root = useRef<HTMLElement>(null);
   /** Where the focus goes once the next item is selected after a judgement. */

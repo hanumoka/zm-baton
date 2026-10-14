@@ -67,7 +67,7 @@ export function Decisions({ onError, onRead, chipHost, query, onClearQuery }: Pr
   /** Work a form can link; read when a form opens. */
   const [work, setWork] = useState<WorkItem[] | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const sheet = useSheet();
+  const sheet = useSheet(view.selected);
   const [refresh, setRefresh] = useState(0);
   const q = useSettled(query.trim(), 200);
   const titleRef = useRef<HTMLHeadingElement>(null);

@@ -42,7 +42,7 @@ export function Sessions({ onError, onRead, chipHost, query, onClearQuery, inbox
   const [loaded, setLoaded] = useState<{ ended: boolean; list: SessionView[] } | null>(null);
   const [endedExist, setEndedExist] = useState<boolean | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  const sheet = useSheet();
+  const sheet = useSheet(view.selected);
   const [refresh, setRefresh] = useState(0);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const root = useRef<HTMLElement>(null);

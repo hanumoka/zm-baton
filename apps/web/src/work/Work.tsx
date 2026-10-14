@@ -60,7 +60,7 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
   const [detail, setDetail] = useState<WorkItemDetail | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pane, setPane] = useState<'detail' | 'new'>('detail');
-  const sheet = useSheet();
+  const sheet = useSheet(view.selected);
   const [refresh, setRefresh] = useState(0);
   const q = useSettled(query.trim(), 200);
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -131,8 +131,8 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
 
   /** Runs one action on the shown item with the version shown; a refusal is shown with its reason. */
   const act = (run: (d: WorkItemDetail) => Promise<WorkItemDetail>) => async () => {
-    if (detail === null || detail.item.id !== selected) return;
     try {
+      if (detail === null || detail.item.id !== selected) throw new Error('작업 상세를 읽은 뒤 다시 시도한다.');
       setDetail(await run(detail));
       setActionError(null);
       setRefresh((r) => r + 1);
@@ -142,16 +142,15 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
       throw e;
     }
   };
-  const swallow = (p: Promise<void>) => p.catch(() => undefined);
   const actions: DetailActions = {
-    move: (to, note) => swallow(act((d) => workApi.move(d.item.id, d.item.version, to, note))()),
-    update: (fields) => swallow(act((d) => workApi.update(d.item.id, d.item.version, fields))()),
-    addWait: (reason, note) => swallow(act((d) => workApi.addWait(d.item.id, d.item.version, reason, note))()),
-    removeWait: (reason) => swallow(act((d) => workApi.removeWait(d.item.id, d.item.version, reason))()),
-    delegate: (choice) => swallow(act((d) => workApi.delegate(d.item.id, d.item.version, choice))()),
-    withdraw: (runId) => swallow(act((d) => workApi.withdraw(runId, d.item.version))()),
-    cancel: (runId) => swallow(act((d) => workApi.cancel(runId, d.item.version))()),
-    ask: (body) => swallow(act((d) => questionsApi.ask(d.item.id, d.item.version, body))()),
+    move: (to, note) => act((d) => workApi.move(d.item.id, d.item.version, to, note))(),
+    update: (fields, version) => act((d) => workApi.update(d.item.id, version, fields))(),
+    addWait: (reason, note) => act((d) => workApi.addWait(d.item.id, d.item.version, reason, note))(),
+    removeWait: (reason) => act((d) => workApi.removeWait(d.item.id, d.item.version, reason))(),
+    delegate: (choice) => act((d) => workApi.delegate(d.item.id, d.item.version, choice))(),
+    withdraw: (runId) => act((d) => workApi.withdraw(runId, d.item.version))(),
+    cancel: (runId) => act((d) => workApi.cancel(runId, d.item.version))(),
+    ask: (body) => act((d) => questionsApi.ask(d.item.id, d.item.version, body))(),
   };
 
   function select(id: string) {
@@ -218,6 +217,7 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
       <NewWork projects={projects} defaultProject={view.projectId} onCreate={create} onCancel={cancelNew} inSheet={narrow} />
     ) : current ? (
       <WorkDetail
+        key={current.id}
         item={current}
         detail={detail}
         projects={projects}

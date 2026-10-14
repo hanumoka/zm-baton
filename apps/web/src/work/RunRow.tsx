@@ -200,7 +200,7 @@ export function RunRow({ run, events, now, outcomeUnknown, onWithdraw, onCancel,
       {run.state === 'requested' && d && !d.revoked_at && (
         <div className="hr-wait">
           <p className="dt-none">연결 프로그램이 아직 가져가지 않았다. 그 PC에서 <code>zm-baton agent</code>가 떠 있는지 본다.</p>
-          <button type="button" className="btn" onClick={() => void onWithdraw(run.id)}>
+          <button type="button" className="btn" onClick={() => void onWithdraw(run.id).catch(() => undefined)}>
             맡긴 일 거두기
           </button>
         </div>
@@ -398,7 +398,7 @@ function RunControls({
             className="btn btn-primary"
             onClick={() => {
               setConfirming(false);
-              void onCancel(run.id);
+              void onCancel(run.id).catch(() => undefined);
             }}
           >
             실행 멈추기
