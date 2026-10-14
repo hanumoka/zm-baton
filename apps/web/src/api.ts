@@ -1,6 +1,8 @@
 // Server API for the compat screen. Paths are relative: the page is served from the
 // same origin as the API (Vite proxy in dev, the server itself otherwise).
 
+import { apiFetch } from './http';
+
 export type WorkItem = {
   id: string;
   title: string;
@@ -37,7 +39,7 @@ export type RunEvent = {
 };
 
 async function call<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method,
     signal,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },

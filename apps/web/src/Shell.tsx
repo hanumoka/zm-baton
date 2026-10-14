@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Accounts } from './accounts/Accounts';
+import { LOCAL_FALLBACK } from './auth/AuthGate';
+import type { AuthState } from './authApi';
 import { Audit } from './audit/Audit';
 import { App as RunTest } from './App';
 import { Decisions } from './decisions/Decisions';
@@ -41,7 +43,7 @@ export const FINDS: Partial<Record<ScreenId, Pick<Find, 'placeholder' | 'label'>
  * The header's height is measured into `--h-tool`, so a screen can keep a pane in view under it
  * and the folded sidebar can start its items below it (their tooltips then never cover the chips).
  */
-export function Shell() {
+export function Shell({ auth = LOCAL_FALLBACK, onAuthChanged = () => {} }: { auth?: AuthState; onAuthChanged?: () => void } = {}) {
   const [screen, setScreen] = useState<ScreenId>(() => screenFromHash(currentHash()));
   const [sideOpen, setSideOpen] = useState(() => readSideOpen());
   /** What waits for me; null before the first read. */
@@ -297,7 +299,7 @@ export function Shell() {
             />
           )}
           {screen === 'risk' && <RiskRules onError={failed('risk')} onRead={() => cleared('risk')} />}
-          {screen === 'me' && <Me onError={failed('me')} onRead={() => cleared('me')} />}
+          {screen === 'me' && <Me onError={failed('me')} onRead={() => cleared('me')} auth={auth} onAuthChanged={onAuthChanged} />}
           {screen === 'org' && <Org onError={failed('org')} onRead={() => cleared('org')} />}
           {screen === 'accounts' && <Accounts onError={failed('accounts')} onRead={() => cleared('accounts')} />}
           {screen === 'audit' && <Audit onError={failed('audit')} onRead={() => cleared('audit')} chipHost={chipHost} />}

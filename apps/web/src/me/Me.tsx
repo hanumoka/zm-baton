@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
+import type { AuthState } from '../authApi';
+import { LOCAL_FALLBACK } from '../auth/AuthGate';
 import { Icon } from '../icons/Icon';
 import { StageGlyph } from '../icons/StageGlyph';
 import { meApi, type ManagerNote, type ManagerRecord } from '../orgApi';
@@ -9,10 +11,15 @@ import { usePoll } from '../usePoll';
 import { isBlocked } from '../work/workView';
 import { at, stageLabel, workTitle } from '../workModel';
 import { actionLabel, noteProblem, splitWork, STATE_LABELS, targetHref, workLine } from './meView';
+import { codeInAddress, DeviceApproval, MyDevices, SignedIn } from './MyAccess';
 
 type Props = {
   onError: (e: unknown) => void;
   onRead: () => void;
+  /** How the server signs people in (AuthGate). `local` shows my devices; `required` adds sign-in and device approval. */
+  auth?: AuthState;
+  /** Ask the server again who is signed in, after signing out. */
+  onAuthChanged?: () => void;
 };
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -23,10 +30,36 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * sessions, my own notes and what I did. The notes are mine alone: the organisation's operators do
  * not see them and the export leaves them out (DEC-0103).
  */
-export function Me({ onError, onRead }: Props) {
+export function Me({ onError, onRead, auth = LOCAL_FALLBACK, onAuthChanged = () => {} }: Props) {
   const [record, setRecord] = useState<ManagerRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
+  const [code, setCode] = useState(() => (typeof window === 'undefined' ? null : codeInAddress(window.location.hash)));
+
+  useEffect(() => {
+    const follow = () => setCode(codeInAddress(window.location.hash));
+    window.addEventListener('hashchange', follow);
+    window.addEventListener('popstate', follow);
+    return () => {
+      window.removeEventListener('hashchange', follow);
+      window.removeEventListener('popstate', follow);
+    };
+  }, []);
+
+  const required = auth.mode === 'required';
+  const top = required && code !== null ? <DeviceApproval key={code} code={code} /> : null;
+  const access = (
+    <>
+      {required && <SignedIn auth={auth} onAuthChanged={onAuthChanged} />}
+      <MyDevices
+        auth={auth}
+        onEnterCode={(c) => {
+          window.history.replaceState(window.history.state, '', `#me?device_login=${c}`);
+          setCode(c);
+        }}
+      />
+    </>
+  );
 
   usePoll(
     async (alive, signal) => {
@@ -69,14 +102,17 @@ export function Me({ onError, onRead }: Props) {
           </div>
         )
       ) : (
-        <MeView record={record} onChanged={() => setRefresh((r) => r + 1)} />
+        <MeView record={record} onChanged={() => setRefresh((r) => r + 1)} top={top} access={access} />
       )}
     </main>
   );
 }
 
-/** The record as drawn; notes change through the server and the record is read again. */
-export function MeView({ record: r, onChanged }: { record: ManagerRecord; onChanged: () => void }) {
+/**
+ * The record as drawn; notes change through the server and the record is read again. [top] goes first
+ * in the main column (a device login waiting for me), [access] after my sessions (sign-in and devices).
+ */
+export function MeView({ record: r, onChanged, top, access }: { record: ManagerRecord; onChanged: () => void; top?: ReactNode; access?: ReactNode }) {
   const { open, closed } = splitWork(r.work);
   return (
     <article className="dt me" aria-labelledby="me-title">
@@ -107,6 +143,7 @@ export function MeView({ record: r, onChanged }: { record: ManagerRecord; onChan
       </dl>
       <div className="dt-grid">
         <div className="dt-main">
+          {top}
           <section className="dt-sec">
             <h2 className="me-h">상태 카드 미리보기</h2>
             <p className="me-note">다음 세션이 시작할 때 받는 카드. 저장소에서 열면 그 저장소의 최근 결정과 다른 세션이 붙는다.</p>
@@ -159,6 +196,7 @@ export function MeView({ record: r, onChanged }: { record: ManagerRecord; onChan
               </ul>
             )}
           </section>
+          {access}
         </div>
         <aside className="dt-aside me-aside" aria-label="개인 메모와 작업 기록">
           <Notes notes={r.notes} onChanged={onChanged} />

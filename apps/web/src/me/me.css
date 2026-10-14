@@ -60,3 +60,31 @@ main.me-page { max-width: none; min-height: calc(100dvh - var(--h-tool, var(--h-
 .me-activity .wd-hist a { color: var(--c-ink-2); }
 .me-activity code { font-size: var(--fs-xs); overflow-wrap: anywhere; }
 .me-by { color: var(--c-ink-2); }
+
+/* Sign-in and devices (docs/stage1/auth.md): the same rows and heads as the rest of the page */
+.me-access .wd-acts { margin: var(--s-2) 0; }
+.me-pw,
+.me-code-form { display: grid; gap: var(--s-3); max-width: var(--w-form); margin-top: var(--s-2); }
+.me-pw label,
+.me-code-form label { display: flex; flex-direction: column; gap: var(--s-1); font-size: var(--fs-sm); color: var(--c-ink-2); }
+.me-pw .field,
+.me-code-form .field { width: 100%; color: var(--c-ink); }
+.me-code-form { grid-template-columns: 1fr auto; align-items: end; }
+.me-code-form .ctl-why { grid-column: 1 / -1; margin-top: calc(var(--s-2) * -1); }
+.me-done { margin: 0; font-size: var(--fs-sm); color: var(--c-ink); }
+.me-dev { display: flex; flex-direction: column; gap: var(--s-0); padding: var(--s-2) 0; border-top: var(--rule) solid var(--c-rule-soft); }
+.me-rows li.me-dev:first-child { border-top: 0; }
+.me-dev .me-sub { padding-left: 0; }
+.me-dev code { font-size: var(--fs-xs); }
+.me-dev .me-title { flex: none; }
+.me-dev.is-revoked .me-title { color: var(--c-ink-2); }
+/* The token state: a small outlined label beside the name, like 「공유 안 함」; a missing token in the warning colour and words */
+.me-tag { flex: none; padding: 0 var(--s-1); border: var(--rule) solid var(--c-rule-strong); border-radius: var(--r-xs); font-size: var(--fs-xs); line-height: var(--lh-row); color: var(--c-ink); }
+.me-tag.me-warn { border-color: var(--c-warn); color: var(--c-warn); }
+.me-access .wd-acts .ctl-why,
+.me-pw .wd-acts .ctl-why { margin-top: 0; }
+.me-dev-act { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); font-size: var(--fs-xs); color: var(--c-ink-2); }
+.me-dev-act .btn { min-height: var(--h-btn-sm); padding: 0 var(--s-2); font-size: var(--fs-xs); }
+.me-approve .me-code { margin: 0 0 var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xl); font-weight: var(--fw-semi); letter-spacing: var(--tracking-tight); }
+.me-approve .me-note b,
+.me-access .me-note b { color: var(--c-ink); font-weight: var(--fw-semi); }

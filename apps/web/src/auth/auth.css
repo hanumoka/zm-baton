@@ -1,0 +1,35 @@
+/*
+ * The sign-in screen (docs/stage1/auth.md): one narrow column on the canvas, the form on paper. The
+ * form's fields, buttons and refusal line are the shared parts (.wn, .field, .btn, .wd-refused).
+ * Every value is a token.
+ */
+
+main.au-page {
+  display: flex;
+  justify-content: center;
+  max-width: none;
+  min-height: 100dvh;
+  padding: var(--s-10) var(--s-4);
+  background: var(--c-canvas);
+}
+
+.au-col { display: flex; flex-direction: column; gap: var(--s-3); width: 100%; max-width: var(--w-form); margin-top: var(--s-10); }
+
+.au-brand { display: flex; align-items: center; gap: var(--s-2); margin: 0; font-size: var(--fs-sm); font-weight: var(--fw-semi); color: var(--c-ink-2); }
+
+/* The form: the new-item form's grid, on paper, narrower */
+.au-form.wn { padding: var(--s-5) var(--s-5) var(--s-6); background: var(--c-paper); border: var(--rule) solid var(--c-rule); border-radius: var(--r-md); }
+.au-form .dt-title { font-size: var(--fs-xl); }
+.au-form .wn-lead code { font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.au-form .field { height: var(--h-btn); }
+.au-form .wd-acts .btn-primary { min-width: var(--w-off); }
+.au-form .wd-acts .ctl-why { margin-top: 0; }
+
+.au-switch { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); margin: 0; font-size: var(--fs-sm); color: var(--c-ink-2); }
+.au-switch .btn { min-height: var(--h-btn-sm); padding: 0 var(--s-2); font-size: var(--fs-sm); color: var(--c-accent); }
+
+@media (max-width: 600px) {
+  main.au-page { padding: var(--s-4) var(--s-4) var(--s-8); }
+  .au-col { margin-top: var(--s-4); }
+  .au-form.wn { padding: var(--s-4); }
+}

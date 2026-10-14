@@ -3,6 +3,7 @@
 // the page. The server's own refusals carry a reason in `message`; it is shown as it is, because
 // it is written for a person.
 
+import { apiFetch } from './http';
 import type { Run, RunEvent } from './api';
 import type { AutoCheckState, HumanReviewState, RunReview } from './reviewsApi';
 
@@ -288,7 +289,7 @@ export class ApiError extends Error {
 }
 
 export async function call<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method,
     signal,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
