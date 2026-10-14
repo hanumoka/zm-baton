@@ -93,7 +93,7 @@ API 경로는 소유자가 키를 직접 넣을 때만 켜진다. zm-baton은 �
 1. claude.ai 결제 화면에서 Console 조직을 연결하고 API 키를 만든다. 자동 충전은 끈다(DEC-0095 후속 조치).
 2. 서버를 띄우는 환경에 `ZM_BATON_MASTER_API_KEY`로 키를 넣는다. 다른 이름을 쓰려면 `ZM_BATON_MASTER_API_KEY_ENV`에 그 **이름**을 준다.
    - 소스로 띄운 서버([run-locally.md](run-locally.md))는 그 PowerShell 창에서 변수를 정한 뒤 띄운다.
-   - Docker로 설치한 서버(`deploy/compose/compose.yaml`)는 지금 이 변수를 컨테이너에 넘기지 않는다. 넘기려면 배포 설정을 고쳐야 하므로 이 PR에서는 바꾸지 않았다. 켜기로 하면 소유자가 그 줄을 정한다.
+   - Docker로 설치한 서버(`deploy/compose/compose.yaml`)는 `deploy/compose/.env`(Git에 들어가지 않는다)에 `ZM_BATON_MASTER_API_KEY=<키>` 한 줄을 넣고 `docker compose -f deploy/compose/compose.yaml --profile app up -d`로 서버를 다시 띄운다. compose 파일이 이 변수를 서버 컨테이너에 넘긴다. 비어 있거나 줄이 없으면 꺼진 채다. 키를 끄려면 그 줄을 지우고 다시 띄운다. Docker 판에서는 변수 이름을 바꾸는 `ZM_BATON_MASTER_API_KEY_ENV`를 넘기지 않으므로 이 이름 그대로 쓴다. `.env.example`에는 이 줄을 넣지 못했다(저장소 훅이 비밀 파일 경로 쓰기를 막는다).
 3. 켜졌는지는 `Invoke-RestMethod http://127.0.0.1:18081/api/settings/master`의 `api_path`가 `True`인지로 본다. 키 값은 이 응답에도 없다.
 4. (선택) API 키 계정을 AI 계정 화면에 등록하고 그 번호를 `ZM_BATON_MASTER_API_ACCOUNT`에 주면, API 경로의 가격표 환산 비용이 그 계정의 하루 상한에 들어간다.
 
