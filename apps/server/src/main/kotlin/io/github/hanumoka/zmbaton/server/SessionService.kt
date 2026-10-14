@@ -1,5 +1,7 @@
 package io.github.hanumoka.zmbaton.server
 
+import io.github.hanumoka.zmbaton.server.auth.Requester
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -12,14 +14,22 @@ import java.time.OffsetDateTime
  * Directly opened AI sessions (contract v1 "직접 연 AI 세션을 서버에 등록한다"), the file
  * conflicts they reveal ("작업 충돌" 6) and the first-screen items they create.
  *
- * Until person authentication exists there is one person, [OWNER], and the server listens on
- * loopback only (stage-1 exit criterion 4).
+ * A device belongs to the person who registered it (Requester) and their organisation; a session
+ * belongs to its device's person and that person's manager record (FN-0402), and its first-screen
+ * items go to that person. The server listens on loopback only (stage-1 exit criterion 4).
  */
 @Service
-class SessionService(private val jdbc: JdbcClient, private val json: ObjectMapper, private val relaySwitch: RelaySwitch) {
+class SessionService(
+	private val jdbc: JdbcClient,
+	private val json: ObjectMapper,
+	private val relaySwitch: RelaySwitch,
+	private val facts: PermissionFacts,
+	private val cards: StatusCards,
+) {
 
 	companion object {
-		const val OWNER = "usr_owner"
+		/** The stage-1 person (Requester.STAGE1_PERSON), kept for callers written before Requester. */
+		const val OWNER = Requester.STAGE1_PERSON
 		const val PROTOCOL_VERSION = 2
 		const val TOKEN_HOURS = 12
 		/** A live session's token is pushed forward again when fewer hours than this remain. */
@@ -59,19 +69,22 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		val repoKey: String?,
 		val branch: String?,
 		var maxResumedSeq: Long,
+		/** The person the session belongs to (its device's person). */
+		val userId: String,
 	)
 
 	// ---------------------------------------------------------------- devices and registration
 
+	/** `zm-baton login`: a device of [person], in their organisation. */
 	@Transactional
-	fun registerDevice(body: RegisterDevice): DeviceRegistered {
+	fun registerDevice(body: RegisterDevice, person: String = Requester.STAGE1_PERSON): DeviceRegistered {
 		val name = body.name.trim()
 		if (name.isEmpty() || name.length > 100) throw BadRequestException("name must be 1-100 characters")
 		val os = body.os?.trim()?.take(50)
 		val id = Ids.device()
-		jdbc.sql("insert into devices (id, user_id, name, os, last_seen_at) values (:id, :user, :name, :os, now())")
-			.param("id", id).param("user", OWNER).param("name", name).param("os", os).update()
-		audit("person", OWNER, "device.registered", "dev", id, mapOf("name" to name, "os" to os))
+		jdbc.sql("insert into devices (id, org_id, user_id, name, os, last_seen_at) values (:id, :org, :user, :name, :os, now())")
+			.param("id", id).param("org", facts.orgOf(person)).param("user", person).param("name", name).param("os", os).update()
+		audit("person", person, "device.registered", "dev", id, mapOf("name" to name, "os" to os))
 		return DeviceRegistered(id)
 	}
 
@@ -85,8 +98,9 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		}
 		val repository = cleanRepository(req.repository)
 		val deviceId = req.deviceId.trim()
-		jdbc.sql("select id from devices where id = :id and revoked_at is null for update")
-			.param("id", deviceId).query(String::class.java).optional()
+		// The session belongs to the device's person, in their organisation and manager record.
+		val (userId, orgId) = jdbc.sql("select user_id, org_id from devices where id = :id and revoked_at is null for update")
+			.param("id", deviceId).query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional()
 			.orElseThrow { NotFoundException("no active device $deviceId; run zm-baton login") }
 
 		// Two start hooks of one executor session must not race into two registrations.
@@ -129,12 +143,13 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			sessionId = Ids.session()
 			jdbc.sql(
 				"""
-				insert into agent_sessions (id, user_id, device_id, executor, executor_version, executor_session_id,
+				insert into agent_sessions (id, org_id, user_id, manager_id, device_id, executor, executor_version, executor_session_id,
 				                            repository, repo_key, token_hash, token_expires_at)
-				values (:id, :user, :device, :executor, :version, :esid, cast(:repo as jsonb), :repoKey, :hash,
+				values (:id, :org, :user, :manager, :device, :executor, :version, :esid, cast(:repo as jsonb), :repoKey, :hash,
 				        now() + make_interval(hours => :hours))
 				""".trimIndent(),
-			).param("id", sessionId).param("user", OWNER).param("device", deviceId).param("executor", req.executor)
+			).param("id", sessionId).param("org", orgId).param("user", userId).param("manager", facts.managerOf(userId, orgId))
+				.param("device", deviceId).param("executor", req.executor)
 				.param("version", req.executorVersion?.take(50)).param("esid", executorSessionId)
 				.param("repo", repositoryJson).param("repoKey", repository?.repoKey)
 				.param("hash", SessionTokens.hash(token)).param("hours", TOKEN_HOURS).update()
@@ -358,7 +373,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			              wait_first_seq = excluded.wait_first_seq, wait_seq = excluded.wait_seq,
 			              repeat_count = excluded.repeat_count, waiting_since = excluded.waiting_since
 			""".trimIndent(),
-		).param("id", Ids.inbox()).param("user", OWNER).param("session", session.id).param("summary", summary)
+		).param("id", Ids.inbox()).param("user", session.userId).param("session", session.id).param("summary", summary)
 			.param("detail", json.writeValueAsString(mapOf("wait_kind" to waitKind, "message" to message, "branch" to session.branch)))
 			.param("kind", waitKind).param("first", span.first).param("last", span.last).param("repeats", span.count - 1)
 			.param("since", span.since).param("notify", if (waitKind in IMMEDIATE_WAITS) "immediate" else "digest").update()
@@ -412,17 +427,17 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		// Serialises checks of one file: of two sessions touching it at once, the second sees the first.
 		// The batch already holds this lock (see [ingest]); taking it again is free.
 		lockFiles(listOf(fileLockKey(repoKey, path)))
-		data class Other(val id: String, val executor: String, val branch: String?, val touchedAt: OffsetDateTime)
+		data class Other(val id: String, val executor: String, val branch: String?, val touchedAt: OffsetDateTime, val userId: String)
 		val others = jdbc.sql(
 			"""
-			select a.id, a.executor, a.repository ->> 'branch' as branch, max(e.received_at) as touched_at
+			select a.id, a.executor, a.repository ->> 'branch' as branch, max(e.received_at) as touched_at, a.user_id
 			  from session_events e join agent_sessions a on a.id = e.session_id
 			 where e.kind = 'file_touch' and e.payload ->> 'repo_key' = :repo and e.payload ->> 'path' = :path
 			   and a.id <> :me and a.ended_at is null and a.deregistered_at is null and a.token_expires_at > now()
-			 group by a.id, a.executor, a.repository ->> 'branch'
+			 group by a.id, a.executor, a.repository ->> 'branch', a.user_id
 			""".trimIndent(),
 		).param("repo", repoKey).param("path", path).param("me", session.id).query { rs, _ ->
-			Other(rs.getString(1), rs.getString(2), rs.getString(3), rs.getObject(4, OffsetDateTime::class.java))
+			Other(rs.getString(1), rs.getString(2), rs.getString(3), rs.getObject(4, OffsetDateTime::class.java), rs.getString(5))
 		}.list()
 		for (other in others) {
 			val pair = listOf(session.id, other.id).sorted()
@@ -441,12 +456,18 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			val summary = "두 세션이 같은 파일을 고침: $path · " +
 				"${short(session.id)}(${session.executor}${session.branch?.let { ", $it" } ?: ""}) · " +
 				"${short(other.id)}(${other.executor}${other.branch?.let { ", $it" } ?: ""})"
-			raiseConflict("work_conflict|$repoKey|$path|${pair[0]}|${pair[1]}", evidence, summary.take(300), session.id)
+			raiseConflict(
+				"work_conflict|$repoKey|$path|${pair[0]}|${pair[1]}", evidence, summary.take(300), session.id,
+				listOf(session.userId, other.userId).distinct(),
+			)
 		}
 	}
 
-	/** [sessionId] is the session whose report revealed the conflict: the actor of the audit row. */
-	private fun raiseConflict(dedupeKey: String, evidence: Map<String, Any?>, summary: String, sessionId: String) {
+	/**
+	 * [sessionId] is the session whose report revealed the conflict: the actor of the audit row. The
+	 * people of both sessions receive the notice; its one first-screen item goes to the first of them.
+	 */
+	private fun raiseConflict(dedupeKey: String, evidence: Map<String, Any?>, summary: String, sessionId: String, recipients: List<String>) {
 		val evidenceJson = json.writeValueAsString(evidence)
 		val existing = jdbc.sql("select id, status from notices where dedupe_key = :key for update")
 			.param("key", dedupeKey).query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional()
@@ -456,9 +477,9 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			jdbc.sql(
 				"""
 				insert into notices (id, kind, evidence, dedupe_key, recipients)
-				values (:id, 'work_conflict', cast(:evidence as jsonb), :key, array[:owner])
+				values (:id, 'work_conflict', cast(:evidence as jsonb), :key, array[:recipients])
 				""".trimIndent(),
-			).param("id", noticeId).param("evidence", evidenceJson).param("key", dedupeKey).param("owner", OWNER).update()
+			).param("id", noticeId).param("evidence", evidenceJson).param("key", dedupeKey).param("recipients", recipients).update()
 			audit("session", sessionId, "notice.raised", "ntc", noticeId, noticeAuditDetails(evidence))
 		} else {
 			noticeId = existing.get().first
@@ -487,7 +508,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 			values (:id, :user, 3, 'notice', 'ntc', :notice, :summary, cast(:detail as jsonb), 'immediate')
 			on conflict (source_id) where state = 'open' and kind = 'notice' do nothing
 			""".trimIndent(),
-		).param("id", Ids.inbox()).param("user", OWNER).param("notice", noticeId).param("summary", summary)
+		).param("id", Ids.inbox()).param("user", recipients.first()).param("notice", noticeId).param("summary", summary)
 			.param("detail", evidenceJson).update()
 	}
 
@@ -502,84 +523,8 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 
 	// ---------------------------------------------------------------- status card
 
-	/**
-	 * What a session loads at start (contract "현재 상태 카드"), at most [STATUS_CARD_MAX] characters:
-	 * first-screen counts, the person's open work items with their next action, the newest
-	 * decisions recorded in this repository and the other live sessions here. When it does not
-	 * fit, the next actions go first, then the card is cut before its last line.
-	 */
-	fun statusCard(sessionId: String): String {
-		val repoKey = jdbc.sql("select repo_key from agent_sessions where id = :id")
-			.param("id", sessionId).query(String::class.java).optional().orElse(null)
-		val counts = jdbc.sql(
-			"select bucket, count(*) from inbox_items where user_id = :user and state = 'open' group by bucket",
-		).param("user", OWNER).query { rs, _ -> rs.getInt(1) to rs.getLong(2) }.list().toMap()
-		val openCount = jdbc.sql(
-			"select count(*) from work_items where responsible_user_id = :user and stage not in ('done', 'cancelled')",
-		).param("user", OWNER).query(Long::class.javaObjectType).single()
-		// Work under way first; among equals the most recently changed.
-		val work = jdbc.sql(
-			"""
-			select external_ref, title, stage, wait_reasons, next_action from work_items
-			 where responsible_user_id = :user and stage not in ('done', 'cancelled')
-			 order by (stage = 'in_progress') desc, updated_at desc, opened_on desc nulls last, id desc limit $CARD_WORK_ITEMS
-			""".trimIndent(),
-		).param("user", OWNER).query { rs, _ ->
-			@Suppress("UNCHECKED_CAST")
-			val reasons = (rs.getArray(4).array as Array<String>).toList()
-			val head = "- ${rs.getString(1)?.let { "$it " } ?: ""}${clip(rs.getString(2), 60)} (${Workflow.label(rs.getString(3))}" +
-				(if (reasons.isEmpty()) "" else " · ${reasons.joinToString(", ") { Workflow.waitLabel(it) }}") + ")"
-			head to rs.getString(5)?.let { "  다음: ${clip(it, 80)}" }
-		}.list()
-		val decisions = if (repoKey == null) emptyList() else jdbc.sql(
-			"""
-			select external_ref, decided_on, question from decisions where git_ref ->> 'repo_key' = :repo
-			 order by decided_on desc nulls last, external_ref desc limit $CARD_DECISIONS
-			""".trimIndent(),
-		).param("repo", repoKey).query { rs, _ ->
-			"- ${rs.getString(1) ?: ""} (${rs.getString(2) ?: "날짜 없음"}) ${clip(rs.getString(3), 60)}"
-		}.list()
-		val others = if (repoKey == null) emptyList() else jdbc.sql(
-			"""
-			select id, executor, repository ->> 'branch', current_work, share_current_work from agent_sessions
-			 where repo_key = :repo and id <> :id and ended_at is null and deregistered_at is null and token_expires_at > now()
-			 order by last_seen_at desc limit 5
-			""".trimIndent(),
-		).param("repo", repoKey).param("id", sessionId).query { rs, _ ->
-			val work = if (rs.getBoolean(5)) rs.getString(4) ?: "아직 올리지 않음" else "공유 안 함"
-			"- ${short(rs.getString(1))}(${rs.getString(2)}${rs.getString(3)?.let { ", $it" } ?: ""}): $work"
-		}.list()
-
-		fun compose(withNext: Boolean): String {
-			val lines = mutableListOf<String>()
-			lines += "[zm-baton] 이 세션을 등록했다: $sessionId (등록을 끄려면 `zm-baton session off`)"
-			lines += "나를 기다리는 것: 권한 요청 ${counts[1] ?: 0} · 멈춘 AI의 질문 ${counts[2] ?: 0} · " +
-				"겹친 충돌 ${counts[3] ?: 0} · 위험 검토 ${counts[4] ?: 0} · 표본·알림 ${counts[5] ?: 0}"
-			lines += if (work.isEmpty()) {
-				"열린 작업: 없음"
-			} else {
-				val more = if (openCount > work.size) " (그 밖에 ${openCount - work.size}건)" else ""
-				"열린 작업 ${openCount}건$more:\n" + work.joinToString("\n") { (head, next) ->
-					if (withNext && next != null) "$head\n$next" else head
-				}
-			}
-			if (decisions.isNotEmpty()) lines += "이 저장소의 최근 결정:\n" + decisions.joinToString("\n")
-			if (others.isNotEmpty()) lines += "같은 저장소에서 지금 살아 있는 다른 세션:\n" + others.joinToString("\n")
-			return lines.joinToString("\n")
-		}
-
-		val last = "하는 일이 바뀌면 `zm-baton session work \"<무엇을, 어디서>\"`로 한 줄(300자 이하)을 올린다."
-		val budget = STATUS_CARD_MAX - last.length - 1
-		val full = compose(withNext = true)
-		val body = if (full.length <= budget) full else compose(withNext = false).take(budget)
-		return "$body\n$last"
-	}
-
-	/** [s] in at most [max] characters, ending in "…" when cut. */
-	private fun clip(s: String, max: Int): String {
-		val flat = s.replace(Regex("\\s+"), " ").trim()
-		return if (flat.length > max) flat.take(max - 1) + "…" else flat
-	}
+	/** What a session loads at start (contract "현재 상태 카드"), built from its person's record (StatusCards). */
+	fun statusCard(sessionId: String): String = cards.forSession(sessionId)
 
 	// ---------------------------------------------------------------- helpers
 
@@ -604,11 +549,11 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		val row = jdbc.sql(
 			"""
 			select id, executor, repo_key, repository ->> 'branch', max_resumed_seq,
-			       (ended_at is null and deregistered_at is null and token_expires_at > now()) as live
+			       (ended_at is null and deregistered_at is null and token_expires_at > now()) as live, user_id
 			  from agent_sessions where id = :id and token_hash = :hash
 			""".trimIndent() + if (forUpdate) " for update" else "",
 		).param("id", sessionId).param("hash", SessionTokens.hash(token)).query { rs, _ ->
-			SessionRow(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getLong(5)) to rs.getBoolean(6)
+			SessionRow(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getLong(5), rs.getString(7)) to rs.getBoolean(6)
 		}.optional().orElseThrow { UnauthorizedException("unknown session or token") }
 		if (!row.second) throw UnauthorizedException("the session has ended or its token expired; register again")
 		return row.first
@@ -735,13 +680,23 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 	/** `ses_01J9…7f3c`: enough to tell sessions apart on one screen. */
 	internal fun short(id: String): String = if (id.length > 12) id.take(8) + "…" + id.takeLast(4) else id
 
+	/**
+	 * One audit row. The person it is done for (`on_behalf_of_user_id`): a person acts for themselves,
+	 * a session for its person, a delegated run for the person who handed the work over; anything else
+	 * the server does, for the first organisation's owner.
+	 */
 	fun audit(actorKind: String, actorId: String, action: String, targetKind: String?, targetId: String?, details: Map<String, Any?>) {
 		jdbc.sql(
 			"""
 			insert into audit_log (id, actor_kind, actor_id, on_behalf_of_user_id, action, target_kind, target_id, details)
-			values (:id, :kind, :actor, :user, :action, :tkind, :tid, cast(:details as jsonb))
+			values (:id, :kind, :actor, coalesce(
+			            case when cast(:kind as text) = 'person' then cast(:actor as text) end,
+			            (select a.user_id from agent_sessions a where a.id = :actor),
+			            (select d.granted_by_user_id from runs r join delegations d on d.id = r.delegation_id where r.id = :actor),
+			            (select o.owner_user_id from organizations o order by o.created_at, o.id limit 1)),
+			        :action, :tkind, :tid, cast(:details as jsonb))
 			""".trimIndent(),
-		).param("id", Ids.audit()).param("kind", actorKind).param("actor", actorId).param("user", OWNER)
+		).param("id", Ids.audit()).param("kind", actorKind).param("actor", actorId)
 			.param("action", action).param("tkind", targetKind).param("tid", targetId)
 			.param("details", json.writeValueAsString(details)).update()
 	}
