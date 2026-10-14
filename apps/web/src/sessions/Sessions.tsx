@@ -37,12 +37,12 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
  */
 export function Sessions({ onError, onRead, chipHost, query, onClearQuery, inbox, now }: Props) {
   const narrow = useNarrow();
-  const [view, setView] = useAddress('sessions', readView, writeView);
+  const [view, setView, , navigation] = useAddress('sessions', readView, writeView);
   /** The last list the server returned, with whether it holds ended sessions. */
   const [loaded, setLoaded] = useState<{ ended: boolean; list: SessionView[] } | null>(null);
   const [endedExist, setEndedExist] = useState<boolean | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  const sheet = useSheet();
+  const sheet = useSheet(view.selected, navigation);
   const [refresh, setRefresh] = useState(0);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const root = useRef<HTMLElement>(null);

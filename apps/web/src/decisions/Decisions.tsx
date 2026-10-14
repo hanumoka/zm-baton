@@ -57,7 +57,7 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
  */
 export function Decisions({ onError, onRead, chipHost, query, onClearQuery }: Props) {
   const narrow = useNarrow();
-  const [view, setView, pushView] = useAddress('decisions', readView, writeView);
+  const [view, setView, pushView, navigation] = useAddress('decisions', readView, writeView);
   /** The last list the server returned, with the server-side filters it answered. */
   const [loaded, setLoaded] = useState<{ key: string; list: Decision[] } | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -67,7 +67,7 @@ export function Decisions({ onError, onRead, chipHost, query, onClearQuery }: Pr
   /** Work a form can link; read when a form opens. */
   const [work, setWork] = useState<WorkItem[] | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const sheet = useSheet();
+  const sheet = useSheet(view.selected, navigation);
   const [refresh, setRefresh] = useState(0);
   const q = useSettled(query.trim(), 200);
   const titleRef = useRef<HTMLHeadingElement>(null);

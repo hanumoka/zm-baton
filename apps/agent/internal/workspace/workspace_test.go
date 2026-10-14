@@ -241,11 +241,11 @@ func TestAnEarlierRunsWorktreeIsTakenOverOrItsBranchContinued(t *testing.T) {
 		t.Fatalf("previous %+v %v", prev, ok)
 	}
 
-	again, err := Open(ctx, root, first.Path, "git:abc", prev)
+	again, err := Open(ctx, root, trees, "git:abc", "run_resumed", prev)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.Origin != OriginReused || again.Path != first.Path || again.Branch != first.Branch || again.BaseCommit != first.BaseCommit {
+	if again.RunID != "run_resumed" || again.Origin != OriginReused || again.Path != first.Path || again.Branch != first.Branch || again.BaseCommit != first.BaseCommit {
 		t.Fatalf("taken over %+v", again)
 	}
 	if _, err := again.Changes(ctx, true); err != nil {
@@ -255,13 +255,21 @@ func TestAnEarlierRunsWorktreeIsTakenOverOrItsBranchContinued(t *testing.T) {
 		t.Fatal("Make on a taken-over worktree")
 	}
 	// Another run's worktree, or one moved to another branch, is not taken over.
+	badBranch := prev
+	badBranch.Branch = "zm-baton/../elsewhere"
+	if _, err := Open(ctx, root, trees, "git:abc", "run_resumed", badBranch); err == nil {
+		t.Fatal("an unsafe branch was used as a worktree folder")
+	}
+	if _, err := Open(ctx, root, trees, "git:abc", "not-a-run", prev); err == nil {
+		t.Fatal("an invalid current run was accepted")
+	}
 	other := gitT(t, root, "rev-parse", "HEAD")
 	gitT(t, first.Path, "switch", "--quiet", "-c", "elsewhere")
-	if _, err := Open(ctx, root, first.Path, "git:abc", prev); err == nil {
+	if _, err := Open(ctx, root, trees, "git:abc", "run_resumed", prev); err == nil {
 		t.Fatal("a worktree on another branch was taken over")
 	}
 	gitT(t, first.Path, "switch", "--quiet", first.Branch)
-	if _, err := Open(ctx, newRepo(t), first.Path, "git:abc", prev); err == nil {
+	if _, err := Open(ctx, newRepo(t), trees, "git:abc", "run_resumed", prev); err == nil {
 		t.Fatal("a worktree of another repository was taken over")
 	}
 

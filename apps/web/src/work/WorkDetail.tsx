@@ -14,7 +14,7 @@ import { isBlocked, isClosed } from './workView';
 
 export type DetailActions = {
   move: (to: Stage, note?: string) => Promise<void>;
-  update: (fields: Record<string, string | null>) => Promise<void>;
+  update: (fields: Record<string, string | null>, version: number) => Promise<void>;
   addWait: (reason: string, note?: string) => Promise<void>;
   removeWait: (reason: string) => Promise<void>;
   /** Hands the work item to an AI (contract "위임"); the server checks whether it may. */
@@ -116,7 +116,7 @@ export function WorkDetail({ item, detail, projects, skipped, actions, error, ti
             <Questions detail={d} onAsk={actions.ask ?? (async () => {})} />
             <Handoff detail={d} onDelegate={actions.delegate} onWithdraw={actions.withdraw} onCancel={actions.cancel} onAsk={actions.ask} />
             {editable && !isClosed(it) && <WaitControls reasons={it.wait_reasons} onAdd={actions.addWait} />}
-            {editable && <EditFields key={`${it.id}:${it.version}`} detail={d} projects={projects} onSave={actions.update} />}
+            {editable && <EditFields key={it.id} detail={d} projects={projects} onSave={actions.update} />}
           </div>
           <aside className="dt-aside" aria-labelledby={`${titleId}-h`}>
             <LinkedDecisions workItemId={it.id} />
@@ -199,7 +199,7 @@ function Fields({ detail, editable, onRemoveWait }: { detail: WorkItemDetail; ed
                   <StageGlyph stage={item.stage} blocked />
                   {waitLabel(r)}
                   {editable && (r === 'waiting_other' || r === 'waiting_predecessor') && (
-                    <button type="button" className="btn btn-quiet" onClick={() => void onRemoveWait(r)}>
+                    <button type="button" className="btn btn-quiet" onClick={() => void onRemoveWait(r).catch(() => undefined)}>
                       떼기
                     </button>
                   )}
@@ -254,7 +254,7 @@ function Moves({ moves, from, onMove }: { moves: Move[]; from: Stage; onMove: (t
                   setAsking(m);
                   setNote('');
                 } else {
-                  void onMove(m.target);
+                  void onMove(m.target).catch(() => undefined);
                 }
               }}
             >
@@ -279,7 +279,7 @@ function Moves({ moves, from, onMove }: { moves: Move[]; from: Stage; onMove: (t
           onSubmit={(e) => {
             e.preventDefault();
             if (note.trim() === '') return;
-            void onMove(asking.target, note.trim()).then(() => setAsking(null));
+            void onMove(asking.target, note.trim()).then(() => setAsking(null)).catch(() => undefined);
           }}
         >
           <label>
@@ -309,7 +309,7 @@ function WaitControls({ reasons, onAdd }: { reasons: string[]; onAdd: (reason: s
         onSubmit={(e) => {
           e.preventDefault();
           if (note.trim() === '') return;
-          void onAdd('waiting_other', note.trim()).then(() => setNote(''));
+          void onAdd('waiting_other', note.trim()).then(() => setNote('')).catch(() => undefined);
         }}
       >
         <label>
@@ -320,7 +320,7 @@ function WaitControls({ reasons, onAdd }: { reasons: string[]; onAdd: (reason: s
           막힘 표시
         </button>
         {!reasons.includes('waiting_predecessor') && (
-          <button type="button" className="btn" onClick={() => void onAdd('waiting_predecessor')}>
+          <button type="button" className="btn" onClick={() => void onAdd('waiting_predecessor').catch(() => undefined)}>
             선행 작업 대기 표시
           </button>
         )}
@@ -337,41 +337,63 @@ function EditFields({
 }: {
   detail: WorkItemDetail;
   projects: Project[];
-  onSave: (fields: Record<string, string | null>) => Promise<void>;
+  onSave: DetailActions['update'];
 }) {
-  const start = {
+  const latest = {
     title: detail.item.title,
     next_action: detail.item.next_action ?? '',
     acceptance: detail.acceptance ?? '',
     due_on: detail.item.due_on ?? '',
     project_id: detail.item.project?.id ?? '',
   };
-  const [form, setForm] = useState(start);
+  const [start, setStart] = useState(latest);
+  const [form, setForm] = useState(latest);
+  const [version, setVersion] = useState(detail.item.version);
   const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   if (!open) {
     return (
       <div className="dt-sec">
-        <button type="button" className="btn" onClick={() => setOpen(true)}>
+        <button type="button" className="btn" onClick={() => {
+          setStart(latest);
+          setForm(latest);
+          setVersion(detail.item.version);
+          setOpen(true);
+        }}>
           내용 고치기
         </button>
       </div>
     );
   }
-  const changed = Object.fromEntries(
-    (Object.keys(form) as (keyof typeof form)[])
-      .filter((k) => form[k] !== start[k])
-      .map((k) => [k, form[k].trim() === '' && k !== 'title' ? null : form[k].trim()]),
-  );
+  const changedKeys = (Object.keys(form) as (keyof typeof form)[]).filter((k) => form[k] !== start[k]);
+  const changed = Object.fromEntries(changedKeys.map((k) => [k, form[k].trim() === '' && k !== 'title' ? null : form[k].trim()]));
+  const newer = version !== detail.item.version;
   const set = (k: keyof typeof form) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
   return (
     <section className="dt-sec">
       <h3>내용 고치기</h3>
+      {newer && (
+        <div className="wd-why" role="status">
+          <Icon name="alert" />
+          <span>다른 곳에서 작업이 바뀌었다. 작성한 내용은 남아 있다. 내가 고친 항목만 최신 내용에 합친 뒤 확인하고 저장한다.</span>
+          <button type="button" className="btn" disabled={busy} onClick={() => {
+            setForm({ ...latest, ...Object.fromEntries(changedKeys.map((k) => [k, form[k]])) });
+            setStart(latest);
+            setVersion(detail.item.version);
+          }}>내 수정과 최신 내용 합치기</button>
+        </div>
+      )}
       <form
         className="wd-edit"
         onSubmit={(e) => {
           e.preventDefault();
+          if (busy || newer) return;
           if (Object.keys(changed).length === 0) return setOpen(false);
-          void onSave(changed).then(() => setOpen(false));
+          setBusy(true);
+          void onSave(changed, version)
+            .then(() => setOpen(false))
+            .catch(() => undefined) // Work shows the refusal; keep this draft for retry.
+            .finally(() => setBusy(false));
         }}
       >
         <label>
@@ -405,7 +427,7 @@ function EditFields({
           </span>
         </label>
         <div className="wd-acts">
-          <button type="submit" className="btn btn-primary" disabled={form.title.trim() === ''}>
+          <button type="submit" className="btn btn-primary" disabled={busy || newer || form.title.trim() === ''} aria-busy={busy || undefined}>
             고친 내용 저장
           </button>
           <button type="button" className="btn" onClick={() => setOpen(false)}>

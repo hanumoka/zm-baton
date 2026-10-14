@@ -240,6 +240,7 @@ export function HandoffForm({
             account_id: accountId || undefined,
           })
             .then(() => setOpen(false))
+            .catch(() => undefined) // Work shows the refusal; keep the delegation choices.
             .finally(() => setBusy(false));
         }}
       >

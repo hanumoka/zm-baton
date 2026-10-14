@@ -168,6 +168,7 @@ export function AskForm({ detail, onAsk }: { detail: WorkItemDetail; onAsk: (bod
             setText('');
             setOpen(false);
           })
+          .catch(() => undefined) // The parent shows the refusal; retain the question.
           .finally(() => setBusy(false));
       }}
     >
@@ -222,6 +223,7 @@ export function RunQuestionForm({ runId, start, onAsk, onClose }: { runId: strin
         setBusy(true);
         onAsk(body)
           .then(onClose)
+          .catch(() => undefined)
           .finally(() => setBusy(false));
       }}
     >

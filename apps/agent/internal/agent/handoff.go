@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -263,7 +262,7 @@ func (h *Handoff) workspaceFor(ctx context.Context, c api.Claim, repo Repo, read
 		if prev, ok := workspace.PreviousFrom(r.Workspace); ok {
 			confirmed, why := h.runner.records.endedConfirmed(r.RunID, r.SessionID)
 			if confirmed {
-				ws, err := workspace.Open(ctx, repo.Root, filepath.Join(repo.Worktrees, r.RunID), repo.Key, prev)
+				ws, err := workspace.Open(ctx, repo.Root, repo.Worktrees, repo.Key, c.RunID, prev)
 				if err == nil {
 					ready.Pass("resume", why+". 이전 실행의 작업 트리와 세션을 이어 쓴다")
 					return ws, r.SessionID, fmt.Sprintf("이 작업 트리는 이전 실행(%s)이 쓰던 것이고, 같은 세션을 이어 간다.", r.RunID), nil

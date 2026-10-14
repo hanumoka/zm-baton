@@ -44,6 +44,7 @@ func IsBranchName(s string) bool {
 
 // Workspace is one run's worktree. Root and Path are local absolute paths and are never sent.
 type Workspace struct {
+	RunID      string // the current run; a reused worktree's branch may name an earlier run
 	RepoKey    string
 	Root       string // the repository the person registered
 	Path       string // the run's worktree
@@ -109,7 +110,7 @@ func Plan(ctx context.Context, root, worktrees, repoKey, runIDValue, baseBranch 
 	if baseBranch != "" && !IsBranchName(baseBranch) {
 		return nil, fmt.Errorf("base branch %q is not a usable branch name", baseBranch)
 	}
-	w := &Workspace{RepoKey: repoKey, Root: root, Path: filepath.Join(worktrees, runIDValue), Branch: BranchPrefix + runIDValue, Origin: OriginNew}
+	w := &Workspace{RunID: runIDValue, RepoKey: repoKey, Root: root, Path: filepath.Join(worktrees, runIDValue), Branch: BranchPrefix + runIDValue, Origin: OriginNew}
 	if baseBranch != "" {
 		// A local branch first; a name such as origin/main is taken as it is.
 		w.tipRef = "refs/heads/" + baseBranch
@@ -149,16 +150,22 @@ func PlanFrom(ctx context.Context, root, worktrees, repoKey, runIDValue string, 
 		return nil, fmt.Errorf("the earlier run's branch %s is not in the repository: %w", prev.Branch, err)
 	}
 	w := &Workspace{
-		RepoKey: repoKey, Root: root, Path: filepath.Join(worktrees, runIDValue), Branch: BranchPrefix + runIDValue,
+		RunID: runIDValue, RepoKey: repoKey, Root: root, Path: filepath.Join(worktrees, runIDValue), Branch: BranchPrefix + runIDValue,
 		BaseCommit: prev.BaseCommit, BaseRef: prev.BaseRef, Origin: OriginPreviousBranch, startPoint: tip,
 		tipRef: tipRefFor(ctx, root, prev.BaseRef),
 	}
 	return w, w.checkFree(ctx)
 }
 
-// Open takes over an earlier run's worktree at path (contract 6): it must still be a worktree of
-// root, checked out on that run's branch. Nothing in it changes.
-func Open(ctx context.Context, root, path, repoKey string, prev Previous) (*Workspace, error) {
+// Open takes over the worktree named by the earlier run's branch (contract 6). Several runs may
+// have reused it, so the immediately preceding run's ID need not name its folder. The current
+// run gets its own snapshot reference; the worktree, branch and uncommitted files stay unchanged.
+func Open(ctx context.Context, root, worktrees, repoKey, runIDValue string, prev Previous) (*Workspace, error) {
+	worktreeID, ok := strings.CutPrefix(prev.Branch, BranchPrefix)
+	if !ok || !IsRunID(worktreeID) || !IsRunID(runIDValue) {
+		return nil, errors.New("the run or earlier branch does not name a run worktree")
+	}
+	path := filepath.Join(worktrees, worktreeID)
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("the earlier run's worktree is gone: %w", err)
 	}
@@ -181,7 +188,7 @@ func Open(ctx context.Context, root, path, repoKey string, prev Previous) (*Work
 		return nil, fmt.Errorf("the earlier run's base commit is gone: %w", err)
 	}
 	return &Workspace{
-		RepoKey: repoKey, Root: root, Path: path, Branch: prev.Branch, BaseCommit: prev.BaseCommit, BaseRef: prev.BaseRef,
+		RunID: runIDValue, RepoKey: repoKey, Root: root, Path: path, Branch: prev.Branch, BaseCommit: prev.BaseCommit, BaseRef: prev.BaseRef,
 		Origin: OriginReused, tipRef: tipRefFor(ctx, root, prev.BaseRef), startPoint: prev.BaseCommit,
 	}, nil
 }
@@ -315,9 +322,9 @@ const SnapshotRef = "refs/zm-baton/snapshots/"
 // as they are, and keeps it only under refs/zm-baton/snapshots/<run id>, never on a branch. When
 // nothing is left uncommitted the snapshot is the branch tip itself. It returns the commit.
 func (w *Workspace) Snapshot(ctx context.Context) (string, error) {
-	runIDValue := strings.TrimPrefix(w.Branch, BranchPrefix)
+	runIDValue := w.RunID
 	if !runID.MatchString(runIDValue) {
-		return "", fmt.Errorf("branch %q does not name a run", w.Branch)
+		return "", fmt.Errorf("run id %q cannot name a snapshot", runIDValue)
 	}
 	head, err := revParse(ctx, w.Path, "HEAD")
 	if err != nil {
