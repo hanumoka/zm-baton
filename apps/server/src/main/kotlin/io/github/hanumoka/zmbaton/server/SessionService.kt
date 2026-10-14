@@ -16,7 +16,7 @@ import java.time.OffsetDateTime
  * loopback only (stage-1 exit criterion 4).
  */
 @Service
-class SessionService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
+class SessionService(private val jdbc: JdbcClient, private val json: ObjectMapper, private val relaySwitch: RelaySwitch) {
 
 	companion object {
 		const val OWNER = "usr_owner"
@@ -154,7 +154,7 @@ class SessionService(private val jdbc: JdbcClient, private val json: ObjectMappe
 		)
 		val expiresAt = jdbc.sql("select token_expires_at from agent_sessions where id = :id")
 			.param("id", sessionId).query(OffsetDateTime::class.java).single()
-		return SessionRegistered(sessionId, token, expiresAt, existing.isPresent, statusCard(sessionId))
+		return SessionRegistered(sessionId, token, expiresAt, existing.isPresent, statusCard(sessionId), relaySwitch.enabled)
 	}
 
 	// ---------------------------------------------------------------- events

@@ -47,6 +47,8 @@ data class SessionRegistered(
 	/** True when a live registration of the same executor session was reused (a resume). */
 	val reused: Boolean,
 	@JsonProperty("status_card") val statusCard: String,
+	/** Whether this server relays permission requests and questions (ZM_BATON_RELAY). Off by default. */
+	@JsonProperty("relay_enabled") val relayEnabled: Boolean = false,
 )
 
 data class SessionEventIn(

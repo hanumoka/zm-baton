@@ -5,7 +5,7 @@ import { EmptyState } from '../ui/EmptyState';
 import { GroupHead, GroupSubHead, RowSkeleton } from '../ui/Group';
 import { ListPane, type ListHead } from '../ui/ListPane';
 import { tabStop } from '../ui/rowKeys';
-import { focusNote, groupNote, itemSessions, kindOf, notifyLabel, rowOrder, rowTitle, type InboxGroup, type ListState } from './inboxView';
+import { groupAside, itemSessions, kindOf, notifyLabel, rowOrder, rowTitle, type InboxGroup, type ListState } from './inboxView';
 import { RelayState } from './RelayDetail';
 import { isRelay, relayActive } from './relayView';
 
@@ -19,6 +19,8 @@ type Props = {
   now: number;
   /** Focus mode is on: the relaying buckets say that new requests go to the terminal. */
   focusOn?: boolean;
+  /** Whether the server relays at all (ZM_BATON_RELAY); null until it said. Off: bucket 1 says so and why. */
+  relayOn?: boolean | null;
   /** The arrow keys moved the selection. */
   onSelect: (id: string) => void;
   /** A click or tap on a row: select it (wide) or open it as a sheet (narrow). */
@@ -34,7 +36,7 @@ type Props = {
  * yet says so in its head, so an empty box never reads as 「nothing came」. The keys are the work
  * list's: the arrows, Home and End move the selection, Enter opens it.
  */
-export function InboxList({ state, groups, head, selected, sessions, now, focusOn = false, onSelect, onPick, onOpen, onReload }: Props) {
+export function InboxList({ state, groups, head, selected, sessions, now, focusOn = false, relayOn = null, onSelect, onPick, onOpen, onReload }: Props) {
   const order = rowOrder(groups);
   return (
     <ListPane title="나를 기다리는 것 목록" head={head} by="급한 순서로 묶음" order={order} onSelect={onSelect} onOpen={onOpen}>
@@ -46,6 +48,7 @@ export function InboxList({ state, groups, head, selected, sessions, now, focusO
         sessions={sessions}
         now={now}
         focusOn={focusOn}
+        relayOn={relayOn}
         onPick={onPick}
         onReload={onReload}
       />
@@ -60,7 +63,8 @@ function ListBody({
   tabbable,
   sessions,
   now,
-  focusOn,
+  focusOn = false,
+  relayOn = null,
   onPick,
   onReload,
 }: Omit<Props, 'head' | 'onOpen' | 'onSelect'> & { tabbable: string | null }) {
@@ -118,7 +122,7 @@ function ListBody({
                   mark={<Icon name={g.mark} />}
                   label={g.label}
                   count={waiting.length}
-                  aside={(focusOn ? focusNote(g.bucket) : null) ?? (waiting.length === 0 ? groupNote(g) : undefined)}
+                  aside={groupAside(g, waiting.length, focusOn, relayOn)}
                 />
                 {waiting.length > 0 && rows(waiting)}
                 {ended.length > 0 && (

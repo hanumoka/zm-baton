@@ -59,6 +59,8 @@ export type MeView = {
   focus_changed_at: string | null;
   first_screen_visible: boolean;
   relay_wait_seconds: number;
+  /** Whether the server relays permission requests and questions (ZM_BATON_RELAY=on). A server setting; no screen turns it on. */
+  relay_enabled?: boolean;
 };
 
 export type NoticeStatus = 'acknowledged' | 'not_a_conflict' | 'resolved';

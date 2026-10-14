@@ -17,10 +17,11 @@ import kotlin.test.assertTrue
 
 /**
  * Contract v1 "권한 요청과 선택형 질문을 첫 화면으로 중계한다" and the boundary cases its "구현 PR이
- * 시험으로 확인할 경계 상황" names (1, 2, 3, 8, 11, 12), against a real PostgreSQL 17.
+ * 시험으로 확인할 경계 상황" names (1, 2, 3, 8, 11, 12), against a real PostgreSQL 17, with relays
+ * turned on (ZM_BATON_RELAY=on; RelayOffTests covers the default, off).
  */
 @Import(TestcontainersConfiguration::class)
-@SpringBootTest
+@SpringBootTest(properties = ["zm-baton.relay=on"])
 class RelayTests @Autowired constructor(
 	private val sessions: SessionService,
 	private val relays: RelayService,

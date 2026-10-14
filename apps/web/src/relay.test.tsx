@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { InboxDetail } from './inbox/InboxDetail';
 import { InboxList } from './inbox/InboxList';
-import { inboxGroups, kindOf, rowTitle } from './inbox/inboxView';
+import { groupAside, inboxGroups, kindOf, RELAY_OFF_NOTE, rowTitle } from './inbox/inboxView';
 import {
   canAnswer,
   choose,
@@ -191,6 +191,32 @@ describe('the list', () => {
     expect(html).toMatch(/권한 요청 <span class="n num">1<\/span>/);
     expect(html).toMatch(/<h4 class="sub">방금 끝난 중계 <span class="n num">1<\/span><\/h4>/);
     expect(html.split('data-row="inb_d"')[1]).not.toContain('바로 알림');
+  });
+
+  it('says in bucket 1 that relays are off and why, and then no focus mode note about relays', () => {
+    const [b1, b2, b3] = inboxGroups([]);
+    expect(groupAside(b1, 0, true, false)).toBe(RELAY_OFF_NOTE);
+    expect(RELAY_OFF_NOTE).toBe('꺼져 있다(사람 인증이 생기기 전에는 기본 꺼짐)');
+    expect(groupAside(b2, 0, true, false)).toBe('기다리는 세션이 없다');
+    expect(groupAside(b3, 1, true, false)).toBeUndefined();
+    expect(groupAside(b1, 0, false, null)).toBe('권한 요청이 없다'); // before the server said
+    expect(groupAside(b1, 2, true, true)).toBe('집중 모드: 새 요청은 터미널에서');
+    const html = renderToStaticMarkup(
+      <InboxList
+        state={{ kind: 'rows' }}
+        groups={inboxGroups([])}
+        head={{ base: '기다리는 것', count: 0, narrowed: false }}
+        selected={null}
+        sessions={[live]}
+        now={T0}
+        relayOn={false}
+        onSelect={() => {}}
+        onPick={() => {}}
+        onOpen={() => {}}
+        onReload={() => {}}
+      />,
+    );
+    expect(html).toContain('<span class="grp-r">꺼져 있다(사람 인증이 생기기 전에는 기본 꺼짐)</span>');
   });
 
   it('shows the seconds left on the row, and the focus mode note in the relaying buckets', () => {

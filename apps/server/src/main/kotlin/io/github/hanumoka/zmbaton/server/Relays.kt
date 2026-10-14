@@ -1,6 +1,7 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.scheduling.annotation.Scheduled
@@ -25,6 +26,11 @@ import java.time.OffsetDateTime
 // the hook takes the answer with another. Anything that does not line up gives no decision, and
 // the executor asks in its terminal. Nothing here answers on its own: an answer is only ever what
 // a person pressed. Also the person's focus mode and first-screen visibility ("알림과 집중 모드").
+//
+// Relays are off unless the server starts with ZM_BATON_RELAY=on. Until person authentication
+// exists, any program on this PC can call the first screen's API, so an AI session with a shell
+// could answer another session's permission request (hardening backlog H-21). While off, the
+// server makes no relay, takes no answer, and the hook ends without a decision.
 
 data class RelayRequest(
 	@JsonProperty("protocol_version") val protocolVersion: Int,
@@ -79,9 +85,21 @@ data class MeView(
 	@JsonProperty("focus_changed_at") val focusChangedAt: OffsetDateTime?,
 	@JsonProperty("first_screen_visible") val firstScreenVisible: Boolean,
 	@JsonProperty("relay_wait_seconds") val relayWaitSeconds: Int,
+	/** Whether relays are on (ZM_BATON_RELAY=on). It is a server setting; no screen turns it on. */
+	@JsonProperty("relay_enabled") val relayEnabled: Boolean,
 )
 
 data class FocusIn(val on: Boolean)
+
+/**
+ * Whether relays are on: the server setting `zm-baton.relay` (environment ZM_BATON_RELAY), `on`
+ * or anything else for off. Off by default until person authentication exists (H-21). It is read
+ * at start only, so no request can turn it on.
+ */
+@Component
+class RelaySwitch(@Value("\${zm-baton.relay:off}") setting: String) {
+	val enabled: Boolean = setting.trim().equals("on", ignoreCase = true)
+}
 
 data class FirstScreenIn(val visible: Boolean)
 
@@ -90,6 +108,7 @@ class RelayService(
 	private val jdbc: JdbcClient,
 	private val json: ObjectMapper,
 	private val sessions: SessionService,
+	private val relaySwitch: RelaySwitch,
 ) {
 	companion object {
 		val KINDS = setOf("permission_request", "session_question")
@@ -125,6 +144,11 @@ class RelayService(
 		if (!FINGERPRINT.matches(req.inputFingerprint)) throw BadRequestException("input_fingerprint must be 64 lower-case hex digits")
 		if (req.localSeq < 1) throw BadRequestException("local_seq must be 1 or more")
 		if (req.withheld != null && req.withheld !in WITHHELD) throw BadRequestException("withheld must be one of $WITHHELD")
+		// Off: nothing is made and nothing of the request is kept; the hook ends without a decision.
+		if (!relaySwitch.enabled) {
+			sessions.authenticate(sessionId, token, forUpdate = false)
+			return RelayStarted(false, null, "relay_off", null, null)
+		}
 		val detail = if (req.withheld != null) null else cleanDetail(req.kind, req.detail)
 		// The row lock orders this against the session's own end in another transaction.
 		val session = sessions.authenticate(sessionId, token, forUpdate = true)
@@ -190,6 +214,8 @@ class RelayService(
 		sessions.requireProtocol(req.protocolVersion)
 		if (!FINGERPRINT.matches(req.inputFingerprint)) throw BadRequestException("input_fingerprint must be 64 lower-case hex digits")
 		val session = sessions.authenticate(sessionId, token, forUpdate = true)
+		// Turned off since the relay started (a restart without ZM_BATON_RELAY=on): no answer goes out.
+		if (!relaySwitch.enabled) return RelayTaken("over", "relay_off", null)
 		val taken = jdbc.sql(
 			"""
 			update inbox_items i set state = 'delivered', delivered_at = now()
@@ -236,6 +262,7 @@ class RelayService(
 			.param("id", itemId).param("user", SessionService.OWNER).query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional()
 			.orElseThrow { NotFoundException("no first-screen item $itemId") }
 		if (kind !in KINDS) throw BadRequestException("only a permission request or a question is answered here")
+		if (!relaySwitch.enabled) throw ConflictException("중계가 꺼져 있다(ZM_BATON_RELAY). 그 세션의 터미널에서 답한다")
 		val answer = buildAnswer(kind, detailText?.let { json.readValue(it, mapType) }, body)
 		val updated = jdbc.sql(
 			"""
@@ -293,7 +320,10 @@ class RelayService(
 	fun me(): MeView =
 		jdbc.sql("select focus_on, focus_changed_at, coalesce(first_screen_visible_until > now(), false) from users where id = :user")
 			.param("user", SessionService.OWNER).query { rs, _ ->
-				MeView(SessionService.OWNER, rs.getBoolean(1), rs.getObject(2, OffsetDateTime::class.java), rs.getBoolean(3), waitSeconds())
+				MeView(
+					SessionService.OWNER, rs.getBoolean(1), rs.getObject(2, OffsetDateTime::class.java), rs.getBoolean(3), waitSeconds(),
+					relaySwitch.enabled,
+				)
 			}.single()
 
 	/** Turns focus mode on or off. Relays already waiting keep their deadline (relay 7). */

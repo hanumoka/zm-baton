@@ -24,6 +24,10 @@ import (
 // it to Claude Code. It gives a decision only when it took a person's answer from the server;
 // any failure, refusal, mismatch or timeout ends the hook without output, and Claude Code asks in
 // its terminal as it would without zm-baton. Nothing here allows or answers on its own.
+//
+// Relays are off unless the server runs with ZM_BATON_RELAY=on (no person authentication yet, so
+// any program on this PC could answer one). The hook learns the switch at registration; while it
+// is off the hook asks nothing and ends at once, and a server that answers relay_off ends it too.
 
 // relayLimit is how long a relay hook may take: longer than the server's longest deadline (70
 // seconds, RelayService.MAX_WAIT_SECONDS), shorter than the plugin's hook timeout (90 seconds).
@@ -128,8 +132,8 @@ func (h *Hooks) relay(ctx context.Context, in HookInput, kind string) error {
 		return errors.New("relay: hook input has no tool_name")
 	}
 	st, ok, err := LoadState(h.Dir, h.Executor, in.SessionID)
-	if err != nil || !ok || st.Off || st.SessionID == "" {
-		return err // not registered here: Claude Code asks as usual
+	if err != nil || !ok || st.Off || st.SessionID == "" || !st.RelayOn {
+		return err // not registered here, or relays are off: Claude Code asks as usual
 	}
 	fingerprint, err := Fingerprint(in.ToolName, in.ToolInput)
 	if err != nil {
@@ -196,6 +200,13 @@ func (h *Hooks) startRelay(ctx context.Context, in HookInput, req RelayRequest, 
 			req.LocalSeq = 0
 			return h.startRelay(ctx, in, req, false)
 		}
+	}
+	if err == nil && started.Reason == "relay_off" {
+		// Turned off since this session registered: the next relays need not ask.
+		_ = Update(ctx, h.Dir, h.Executor, in.SessionID, 500*time.Millisecond, func(s *State, exists bool) (bool, error) {
+			s.RelayOn = false
+			return !exists, nil
+		})
 	}
 	return client, started, st, err
 }

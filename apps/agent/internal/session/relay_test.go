@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -167,6 +168,8 @@ type relayServer struct {
 	started string // the start answer
 	// takeFn answers the n-th take (1-based); nil keeps waiting.
 	takeFn func(n int, body map[string]any) (int, string)
+	// relayOff makes the registration say relays are off (ZM_BATON_RELAY unset), as a default server does.
+	relayOff bool
 }
 
 func newRelayServer(t *testing.T) *relayServer {
@@ -180,7 +183,7 @@ func newRelayServer(t *testing.T) *relayServer {
 		switch {
 		case req.URL.Path == "/api/sessions":
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"session_id":"ses_r","token":"zmbs_r","status_card":"card"}`))
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"session_id":"ses_r","token":"zmbs_r","status_card":"card","relay_enabled":%t}`, !r.relayOff)))
 		case req.URL.Path == "/api/sessions/ses_r/relays" && req.Header.Get("Authorization") == "Bearer zmbs_r":
 			r.starts = append(r.starts, body)
 			_, _ = w.Write([]byte(r.started))
@@ -359,6 +362,59 @@ func TestARelayStopsWaitingAtItsTimeLimitWithoutADecision(t *testing.T) {
 	}
 }
 
+func TestRelaysAreOffUnlessTheServerSaysOnAndThenTheHookAsksNothing(t *testing.T) {
+	r := newRelayServer(t)
+	r.relayOff = true // a server without ZM_BATON_RELAY=on
+	h, out := relaySetup(t, r.srv.URL, t.TempDir())
+	start := time.Now()
+	if err := h.Run(context.Background(), "permission-request", permissionInput(t, t.TempDir(), map[string]any{"command": "ls"})); err != nil {
+		t.Fatal(err)
+	}
+	var question map[string]any
+	_ = json.Unmarshal([]byte(questionJSON), &question)
+	if err := h.Run(context.Background(), "pre-tool-use", hookInput(t, map[string]any{"session_id": "esid-relay", "tool_name": "AskUserQuestion", "tool_input": question})); err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	starts, takes := len(r.starts), r.takes
+	r.mu.Unlock()
+	if starts != 0 || takes != 0 || out.Len() != 0 {
+		t.Errorf("relays off: %d starts, %d takes, stdout %q", starts, takes, out.String())
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("took %v to end", d)
+	}
+	// A registration that leaves the field out (an older server) counts as off too.
+	f := newFakeServer(t)
+	h2, out2 := setup(t, f.srv.URL)
+	if err := h2.Run(context.Background(), "session-start", hookInput(t, map[string]any{"session_id": "esid-old", "cwd": t.TempDir()})); err != nil {
+		t.Fatal(err)
+	}
+	out2.Reset()
+	if err := h2.Run(context.Background(), "permission-request", hookInput(t, map[string]any{"session_id": "esid-old", "tool_name": "Bash", "tool_input": map[string]any{"command": "ls"}})); err != nil {
+		t.Fatal(err)
+	}
+	if st, _, _ := LoadState(h2.Dir, "claude_code", "esid-old"); st.RelayOn || out2.Len() != 0 {
+		t.Errorf("state %+v stdout %q", st, out2.String())
+	}
+}
+
+func TestAServerThatSaysRelaysAreOffEndsTheHookAndTheNextOnesAskNothing(t *testing.T) {
+	r := newRelayServer(t)
+	r.started = `{"relay":false,"reason":"relay_off"}`
+	h, out := relaySetup(t, r.srv.URL, t.TempDir())
+	for i := 0; i < 2; i++ {
+		if err := h.Run(context.Background(), "permission-request", permissionInput(t, t.TempDir(), map[string]any{"command": "ls"})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.starts) != 1 || r.takes != 0 || out.Len() != 0 {
+		t.Errorf("%d starts, %d takes, stdout %q", len(r.starts), r.takes, out.String())
+	}
+}
+
 func TestARelayWithTheServerDownGivesNoDecisionAtOnce(t *testing.T) {
 	r := newRelayServer(t)
 	h, out := relaySetup(t, r.srv.URL, t.TempDir())
@@ -505,7 +561,7 @@ func newExpiringServer(t *testing.T) *expiringServer {
 			e.register++
 			e.live = "zmbs_" + strings.Repeat("t", e.register)
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"session_id":"ses_e` + strings.Repeat("x", e.register) + `","token":"` + e.live + `","status_card":"card"}`))
+			_, _ = w.Write([]byte(`{"session_id":"ses_e` + strings.Repeat("x", e.register) + `","token":"` + e.live + `","status_card":"card","relay_enabled":true}`))
 		case strings.HasSuffix(r.URL.Path, "/relays"):
 			if r.Header.Get("Authorization") != "Bearer "+e.live {
 				w.WriteHeader(http.StatusUnauthorized)

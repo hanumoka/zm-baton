@@ -32,6 +32,8 @@ type Props = {
   send?: Send;
   /** Focus mode is on (contract 「알림과 집중 모드」): the relaying buckets say so. */
   focusOn?: boolean;
+  /** Whether the server relays (ZM_BATON_RELAY); null until it said. */
+  relayOn?: boolean | null;
   /** For tests: what sends a relay's answer. */
   relaySend?: RelaySend;
 };
@@ -42,7 +44,7 @@ type Props = {
  * selected item lives in the address. When an item leaves the list, because it was judged here or
  * closed elsewhere, the one that took its place opens.
  */
-export function Inbox({ items, error, sessions, now, onChanged, onError, onReload, send, focusOn = false, relaySend }: Props) {
+export function Inbox({ items, error, sessions, now, onChanged, onError, onReload, send, focusOn = false, relayOn = null, relaySend }: Props) {
   const narrow = useNarrow();
   const [view, setView] = useAddress('inbox', readView, writeView);
   /** Items judged here, hidden until the server's list no longer has them. */
@@ -134,6 +136,7 @@ export function Inbox({ items, error, sessions, now, onChanged, onError, onReloa
         sessions={sessions}
         now={now}
         focusOn={focusOn}
+        relayOn={relayOn}
         onSelect={choose}
         onPick={narrow ? open : choose}
         onOpen={open}

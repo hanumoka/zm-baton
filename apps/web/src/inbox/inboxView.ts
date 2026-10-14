@@ -39,6 +39,22 @@ export function groupNote(g: Pick<InboxGroup, 'bucket' | 'raised'>): string {
   return g.bucket === 2 ? '기다리는 세션이 없다' : '겹친 파일이 없다';
 }
 
+/**
+ * Relays are off by default until person authentication exists: any program on this PC could answer
+ * one (hardening backlog H-21). Turning them on is a server setting (ZM_BATON_RELAY=on), never a button here.
+ */
+export const RELAY_OFF_NOTE = '꺼져 있다(사람 인증이 생기기 전에는 기본 꺼짐)';
+
+/** What a bucket's head says beside its name: relays off, focus mode, or why it is empty. */
+export function groupAside(g: Pick<InboxGroup, 'bucket' | 'raised'>, waiting: number, focusOn: boolean, relayOn: boolean | null): string | undefined {
+  if (relayOn === false && g.bucket === 1) return RELAY_OFF_NOTE;
+  if (focusOn && relayOn !== false) {
+    const note = focusNote(g.bucket);
+    if (note) return note;
+  }
+  return waiting === 0 ? groupNote(g) : undefined;
+}
+
 /** While focus mode is on, the buckets that relay say what it changes (contract 「알림과 집중 모드」 4, relay 12). */
 export function focusNote(bucket: Bucket): string | null {
   if (bucket === 1) return '집중 모드: 새 요청은 터미널에서';

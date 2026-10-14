@@ -209,6 +209,7 @@ func (h *Hooks) register(ctx context.Context, in HookInput) (reg Registered, reg
 			st.Waiting = false
 		}
 		st.SessionID, st.Token, st.Server = reg.SessionID, reg.Token, cfg.Server
+		st.RelayOn = reg.RelayEnabled
 		st.RepoRoot, st.RepoKey = "", ""
 		if repo != nil {
 			st.RepoRoot, st.RepoKey = repo.Root, repo.Key

@@ -245,6 +245,7 @@ export function Shell() {
               onError={failed('judge')}
               onReload={() => setRefresh((r) => r + 1)}
               focusOn={focusOn}
+              relayOn={me === null ? null : me.relay_enabled === true}
             />
           )}
           {screen === 'sessions' && (

@@ -17,9 +17,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** The relay over real HTTP, as the hook (session token) and the first screen (no token) call it. */
+/** The relay over real HTTP, as the hook (session token) and the first screen (no token) call it, turned on. */
 @Import(TestcontainersConfiguration::class)
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = ["zm-baton.relay=on"])
 class RelayApiTests @Autowired constructor(
 	env: Environment,
 	private val json: ObjectMapper,
@@ -47,6 +47,7 @@ class RelayApiTests @Autowired constructor(
 			"""{"protocol_version":2,"device_id":"$device","executor":"claude_code","executor_session_id":"${UUID.randomUUID()}"}""",
 		)
 		assertEquals(201, status, body)
+		assertEquals(true, obj(body)["relay_enabled"], "the hook learns at registration that relays are on")
 		return obj(body)["session_id"] as String to obj(body)["token"] as String
 	}
 
@@ -107,6 +108,7 @@ class RelayApiTests @Autowired constructor(
 		assertEquals(200, meStatus)
 		assertEquals("usr_owner", obj(meBody)["user_id"])
 		assertEquals(60, obj(meBody)["relay_wait_seconds"])
+		assertEquals(true, obj(meBody)["relay_enabled"])
 		val (on, onBody) = call("PUT", "/api/me/focus", """{"on":true}""")
 		assertEquals(200, on)
 		assertEquals(true, obj(onBody)["focus_on"])
