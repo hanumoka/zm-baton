@@ -1,6 +1,9 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -140,6 +143,7 @@ class QuestionService(
 	private val workItems: WorkItemService,
 	private val sessions: SessionService,
 	transactions: PlatformTransactionManager,
+	private val access: PermissionFacts,
 ) {
 	companion object {
 		const val BODY_MAX = 4000
@@ -174,7 +178,7 @@ class QuestionService(
 		if (options.size > OPTIONS_MAX || options.any { it.length > LINE_MAX }) {
 			throw BadRequestException("at most $OPTIONS_MAX options of up to $LINE_MAX characters")
 		}
-		val dueHours = body.dueHours ?: dueHours()
+		val dueHours = body.dueHours ?: dueHours(workItemId)
 		if (dueHours !in 1..720) throw BadRequestException("due_hours must be 1-720")
 		val facts = workItems.lockFacts(workItemId, body.version)
 		facts.readOnlyReason?.let { throw ConflictException("$it. 질문은 원본 저장소에서 다룬다") }
@@ -188,17 +192,17 @@ class QuestionService(
 			else -> throw BadRequestException("asked_by must be person or run")
 		}
 		if (fromRun != null && facts.stage == "result_review" && fromRun.newest) {
-			workItems.transition(workItemId, TransitionIn("in_progress", body.version, "AI 실행의 질문이 남아 수행으로 돌린다: ${text.take(100)}"))
+			workItems.transition(workItemId, TransitionIn("in_progress", body.version, "AI 실행의 질문이 남아 수행으로 돌린다: ${text.take(100)}"), actorId)
 		}
-		val (owner, title) = jdbc.sql("select responsible_user_id, title from work_items where id = :id").param("id", workItemId)
-			.query { rs, _ -> rs.getString(1) to rs.getString(2) }.single()
+		val (owner, title, org) = jdbc.sql("select responsible_user_id, title, org_id from work_items where id = :id").param("id", workItemId)
+			.query { rs, _ -> Triple(rs.getString(1), rs.getString(2), rs.getString(3)) }.single()
 		val docOwner = jdbc.sql(
 			"""
 			select d.owner_user_id from document_work_items l join documents d on d.id = l.document_id
 			 where l.work_item_id = :id order by l.created_at, d.id limit 1
 			""".trimIndent(),
 		).param("id", workItemId).query(String::class.java).optional().orElse(null)
-		val route = QuestionRouting.route(kind, owner, docOwner, ApprovalPolicy.approverFor(WorkItemService.ORG, "question"))
+		val route = QuestionRouting.route(kind, owner, docOwner, access.approverFor(org, "question"))
 
 		val id = Ids.question()
 		val history = listOf(mapOf("at" to OffsetDateTime.now().toString(), "event" to "routed", "to" to route.id, "role" to route.role))
@@ -210,7 +214,7 @@ class QuestionService(
 			values (:id, :org, :wid, :step, :run, :esid, :origin, :kind, :blocking, :independent, :body, cast(:options as jsonb),
 			        :akind, :aid, :rkind, :rid, :role, cast(:history as jsonb), now() + make_interval(hours => :hours))
 			""".trimIndent(),
-		).param("id", id).param("org", WorkItemService.ORG).param("wid", workItemId).param("step", blockedStep)
+		).param("id", id).param("org", org).param("wid", workItemId).param("step", blockedStep)
 			.param("run", fromRun?.id).param("esid", fromRun?.sessionId).param("origin", if (fromRun != null) "run_answer" else "person")
 			.param("kind", kind).param("blocking", body.blocking).param("independent", independent).param("body", text)
 			.param("options", json.writeValueAsString(options)).param("akind", if (fromRun != null) "manager" else "person")
@@ -226,7 +230,7 @@ class QuestionService(
 		val details = mapOf("question_id" to id, "kind" to kind, "blocking" to body.blocking, "asked_by" to body.askedBy,
 			"run_id" to fromRun?.id, "routed_to" to route.id, "role" to route.role, "body" to text.take(200))
 		sessions.audit("person", actorId, "question.asked", "qst", id, details)
-		workItems.record(workItemId, "question.asked", details)
+		workItems.record(workItemId, "question.asked", details, actorId)
 		return workItems.detail(workItemId)
 	}
 
@@ -300,7 +304,7 @@ class QuestionService(
 		val details = mapOf("question_id" to questionId, "state" to state, "answer" to text.take(200), "doc_change_ref" to docChange,
 			"decision_ref" to decision, "approval_ref" to approval, "needs_doc_change" to body.needsDocChange)
 		sessions.audit("person", actorId, "question.answered", "qst", questionId, details)
-		workItems.record(q.workItemId, "question.answered", details)
+		workItems.record(q.workItemId, "question.answered", details, actorId)
 		return view(questionId)
 	}
 
@@ -320,7 +324,7 @@ class QuestionService(
 		).param("ref", ref).param("state", state).param("id", questionId).update()
 		val details = mapOf("question_id" to questionId, "doc_change_ref" to ref, "state" to state)
 		sessions.audit("person", actorId, "question.doc_changed", "qst", questionId, details)
-		workItems.record(q.workItemId, "question.doc_changed", details)
+		workItems.record(q.workItemId, "question.doc_changed", details, actorId)
 		return view(questionId)
 	}
 
@@ -335,7 +339,7 @@ class QuestionService(
 		releaseWait(q.workItemId)
 		val details = mapOf("question_id" to questionId, "note" to note)
 		sessions.audit("person", actorId, "question.withdrawn", "qst", questionId, details)
-		workItems.record(q.workItemId, "question.withdrawn", details)
+		workItems.record(q.workItemId, "question.withdrawn", details, actorId)
 		return view(questionId)
 	}
 
@@ -393,8 +397,11 @@ class QuestionService(
 		return t
 	}
 
-	private fun dueHours(): Int =
-		jdbc.sql("select (settings ->> 'question_due_hours')::int from organizations where id = :org").param("org", WorkItemService.ORG)
+	/** The work item's organisation's `question_due_hours`, or the starting value. */
+	private fun dueHours(workItemId: String): Int =
+		jdbc.sql(
+			"select (o.settings ->> 'question_due_hours')::int from organizations o join work_items w on w.org_id = o.id where w.id = :wid",
+		).param("wid", workItemId)
 			.query(Int::class.javaObjectType).optional().orElse(null)?.takeIf { it in 1..720 } ?: DEFAULT_DUE_HOURS
 
 	// ---------------------------------------------------------------- delivering the answer
@@ -473,7 +480,7 @@ class QuestionService(
 			       due_at = now() + make_interval(hours => :hours)
 			 where id = :id
 			""".trimIndent(),
-		).param("count", row.count).param("entry", json.writeValueAsString(listOf(entry))).param("hours", dueHours()).param("id", questionId).update()
+		).param("count", row.count).param("entry", json.writeValueAsString(listOf(entry))).param("hours", dueHours(row.workItemId)).param("id", questionId).update()
 		closeInbox(questionId)
 		raise(questionId, row.routedTo, row.title, row.body, row.kind, row.blocking, row.fromRun, row.workItemId, remind = row.count)
 		sessions.audit("system", SessionService.SYSTEM_ACTOR, "question.overdue", "qst", questionId, mapOf("remind_count" to row.count))
@@ -528,7 +535,7 @@ class QuestionService(
 
 @RestController
 @RequestMapping("/api")
-class QuestionController(private val questions: QuestionService, private val people: PersonService) {
+class QuestionController(private val questions: QuestionService, private val permissions: Permissions) {
 
 	/** Returns the work item, like every other change to it: its version and wait reasons moved. */
 	@PostMapping("/work-items/{id}/questions")
@@ -538,19 +545,22 @@ class QuestionController(private val questions: QuestionService, private val peo
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: AskIn,
 	): WorkItemDetail {
-		people.refuseSessionToken(authorization, "ask a question")
-		return questions.ask(id, body, Requester.person())
+		val me = permissions.person(authorization, "ask a question")
+		permissions.require(me, Act.QUESTION_ASK, permissions.workItem(id))
+		return questions.ask(id, body, me.person!!)
 	}
 
 	@GetMapping("/work-items/{id}/questions")
 	fun list(@PathVariable id: String, @RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): List<QuestionView> {
-		people.refuseSessionToken(authorization, "read questions")
+		val me = permissions.person(authorization, "read questions")
+		permissions.see(me, permissions.workItem(id))
 		return questions.forWorkItem(id)
 	}
 
 	@GetMapping("/questions/{id}")
 	fun detail(@PathVariable id: String, @RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): QuestionDetail {
-		people.refuseSessionToken(authorization, "read a question")
+		val me = permissions.person(authorization, "read a question")
+		permissions.see(me, permissions.question(id))
 		return questions.detail(id)
 	}
 
@@ -560,8 +570,9 @@ class QuestionController(private val questions: QuestionService, private val peo
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: AnswerIn,
 	): QuestionView {
-		people.refuseSessionToken(authorization, "answer a question")
-		return questions.answer(id, body, Requester.person())
+		val me = permissions.person(authorization, "answer a question")
+		permissions.require(me, Act.QUESTION_ANSWER, permissions.question(id))
+		return questions.answer(id, body, me.person!!)
 	}
 
 	@PostMapping("/questions/{id}/doc-change")
@@ -570,8 +581,9 @@ class QuestionController(private val questions: QuestionService, private val peo
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: DocChangeIn,
 	): QuestionView {
-		people.refuseSessionToken(authorization, "record a question's document change")
-		return questions.confirmDocChange(id, body, Requester.person())
+		val me = permissions.person(authorization, "record a question's document change")
+		permissions.require(me, Act.QUESTION_ANSWER, permissions.question(id))
+		return questions.confirmDocChange(id, body, me.person!!)
 	}
 
 	@PostMapping("/questions/{id}/withdraw")
@@ -580,8 +592,9 @@ class QuestionController(private val questions: QuestionService, private val peo
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: WithdrawQuestionIn,
 	): QuestionView {
-		people.refuseSessionToken(authorization, "withdraw a question")
-		return questions.withdraw(id, body, Requester.person())
+		val me = permissions.person(authorization, "withdraw a question")
+		permissions.require(me, Act.QUESTION_ANSWER, permissions.question(id))
+		return questions.withdraw(id, body, me.person!!)
 	}
 }
 

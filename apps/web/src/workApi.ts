@@ -28,6 +28,8 @@ export type WorkItem = {
   due_on: string | null;
   closed_at: string | null;
   updated_at: string;
+  /** The sharing scope (G06.1); an older server leaves it out, which means `org`. */
+  visibility?: string;
 };
 
 export type Move = { target: Stage; path: Stage[]; allowed: boolean; reason: string | null; needs_note: boolean };
@@ -217,6 +219,9 @@ export type Decision = {
   ref: string | null;
   source_of_truth: 'product' | 'git';
   version: number;
+  /** The sharing scope (G06.1) and who owns the record; an older server leaves them out. */
+  visibility?: string;
+  owner_user_id?: string | null;
 };
 
 export type DecisionOption = { key: string; title: string; body: string | null };

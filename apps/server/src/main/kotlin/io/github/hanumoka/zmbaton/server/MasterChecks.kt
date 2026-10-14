@@ -1,5 +1,6 @@
 package io.github.hanumoka.zmbaton.server
 
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -89,7 +90,14 @@ class MasterCheckService(
 	private val settings: MasterSettings,
 	private val api: MasterApiSettings,
 	transactions: PlatformTransactionManager,
+	private val access: PermissionFacts,
 ) {
+	/**
+	 * Whom a check works for: the subjects' organisation, its owner (whose subscription the master uses,
+	 * DEC-0095) as the responsible person, and the owner's manager carrying the work out (FN-0402).
+	 */
+	private data class For(val orgId: String, val owner: String, val manager: String?)
+
 	companion object {
 		/** The actor of what the server does for the master (audit `actor_kind` `system`). */
 		const val ACTOR = "master"
@@ -132,7 +140,11 @@ class MasterCheckService(
 			linkedMapOf("kind" to s.kind, "id" to s.id, "document_id" to s.documentId, "number" to s.number, "ref" to s.ref, "label" to s.label)
 		}
 		val project = rows.flatMap { it.projectIds }.firstOrNull()
-		fun skip(reason: String) = insert(e.trigger, subjects, project, "skipped", null, emptyList(), reason)
+		// With no subject found, the server's first organisation keeps the skipped check.
+		val org = rows.firstNotNullOfOrNull { it.orgId }
+			?: jdbc.sql("select id from organizations order by created_at, id limit 1").query(String::class.java).single()
+		val forWhom = forOrg(org)
+		fun skip(reason: String) = insert(forWhom, e.trigger, subjects, project, "skipped", null, emptyList(), reason)
 		if (rows.isEmpty()) return skip("바뀐 문서나 결정을 찾지 못했다")
 		if (e.trigger == "zm_docs_import" && rows.size > settings.importLimit) {
 			return skip("가져오기 한 번에 채택된 결정 ${rows.size}건이 바뀌었다. 한 번에 묶어 비교하는 ${settings.importLimit}건을 넘어 만들지 않았다")
@@ -151,13 +163,13 @@ class MasterCheckService(
 		val title = "모순 후보 찾기: ${withText.first().label}" + if (withText.size > 1) " 외 ${withText.size - 1}건" else ""
 		val apiAccount = if (api.enabled()) api.usableAccount() else null
 		val useApi = api.enabled() && apiAccount?.second == null
-		val id = insert(e.trigger, subjects, project, "requested", if (useApi) "api" else "local", items, null)
+		val id = insert(forWhom, e.trigger, subjects, project, "requested", if (useApi) "api" else "local", items, null)
 		if (useApi) {
-			val work = createWorkItem(id, title, project)
-			val run = delegateRun(work, id, null, apiAccount?.first, API_EXECUTOR, prompt, null)
+			val work = createWorkItem(forWhom, id, title, project)
+			val run = delegateRun(forWhom, work, id, null, apiAccount?.first, API_EXECUTOR, prompt, null)
 			jdbc.sql("update master_checks set work_item_id = :w, run_id = :r where id = :id").param("w", work).param("r", run).param("id", id).update()
 		} else {
-			val why = startLocal(id, prompt, title, project, null, null)
+			val why = startLocal(forWhom, id, prompt, title, project, null, null)
 			if (why != null) {
 				jdbc.sql("update master_checks set state = 'skipped', reason = :why, finished_at = now() where id = :id").param("why", why).param("id", id).update()
 				sessions.audit("system", ACTOR, "master_check.skipped", "mck", id, mapOf("reason" to why))
@@ -170,13 +182,16 @@ class MasterCheckService(
 		return id
 	}
 
+	private fun forOrg(org: String): For = access.ownerOf(org).let { owner -> For(org, owner, access.managerOf(owner, org)) }
+
 	/** Checks that ran or will run today, in the day zone of the usage limits. */
 	fun usedToday(): Int =
 		jdbc.sql("select count(*) from master_checks where state <> 'skipped' and created_at >= :start")
 			.param("start", usage.dayStart(usage.now())).query(Int::class.javaObjectType).single()
 
 	private fun insert(
-		trigger: String, subjects: List<Map<String, Any?>>, project: String?, state: String, path: String?, items: List<MaterialItem>, reason: String?,
+		forWhom: For, trigger: String, subjects: List<Map<String, Any?>>, project: String?, state: String, path: String?, items: List<MaterialItem>,
+		reason: String?,
 	): String {
 		val id = Ids.masterCheck()
 		jdbc.sql(
@@ -185,7 +200,7 @@ class MasterCheckService(
 			values (:id, :org, :project, :trigger, cast(:subjects as jsonb), cast(:material as jsonb), :path, :state, :reason,
 			        case when :state = 'skipped' then now() end)
 			""".trimIndent(),
-		).param("id", id).param("org", WorkItemService.ORG).param("project", project).param("trigger", trigger)
+		).param("id", id).param("org", forWhom.orgId).param("project", project).param("trigger", trigger)
 			.param("subjects", json.writeValueAsString(subjects)).param("material", json.writeValueAsString(items))
 			.param("path", path).param("state", state).param("reason", reason).update()
 		if (state == "skipped") {
@@ -204,17 +219,17 @@ class MasterCheckService(
 	 * last. The account is the one a person's handoff would pick (AccountService.forDelegation): an
 	 * account that is stopped now gives its reason.
 	 */
-	private fun startLocal(checkId: String, prompt: String, title: String, project: String?, workItem: String?, replaces: String?): String? {
-		val device = pickDevice() ?: return "연결 프로그램을 돌릴 기기가 없다. zm-baton login으로 이 PC를 등록하고 zm-baton agent를 띄운다"
+	private fun startLocal(forWhom: For, checkId: String, prompt: String, title: String, project: String?, workItem: String?, replaces: String?): String? {
+		val device = pickDevice(forWhom.owner) ?: return "연결 프로그램을 돌릴 기기가 없다. zm-baton login으로 이 PC를 등록하고 zm-baton agent를 띄운다"
 		val account = try {
-			accounts.forDelegation(null, device, SessionService.OWNER)
+			accounts.forDelegation(null, device, forWhom.owner)
 		} catch (e: ConflictException) {
 			return "마스터 실행을 맡길 AI 계정이 없다: ${e.message}"
 		} catch (e: BadRequestException) {
 			return "마스터 실행을 맡길 AI 계정이 없다: ${e.message}"
 		}
-		val work = workItem ?: createWorkItem(checkId, title, project)
-		val run = delegateRun(work, checkId, device, account.id, "claude_code", prompt, replaces)
+		val work = workItem ?: createWorkItem(forWhom, checkId, title, project)
+		val run = delegateRun(forWhom, work, checkId, device, account.id, "claude_code", prompt, replaces)
 		jdbc.sql(
 			"""
 			update master_checks set path = 'local', work_item_id = :w, run_id = :r, api_run_id = coalesce(api_run_id, :api)
@@ -224,7 +239,7 @@ class MasterCheckService(
 		return null
 	}
 
-	private fun pickDevice(): String? =
+	private fun pickDevice(owner: String): String? =
 		jdbc.sql(
 			"""
 			select d.id from devices d
@@ -233,17 +248,18 @@ class MasterCheckService(
 			          d.last_seen_at desc nulls last, d.created_at desc
 			 limit 1
 			""".trimIndent(),
-		).param("owner", SessionService.OWNER).query(String::class.java).optional().orElse(null)
+		).param("owner", owner).query(String::class.java).optional().orElse(null)
 
 	/** The owner's work item for one check: ready, the owner responsible, the owner's manager carrying it out. */
-	private fun createWorkItem(checkId: String, title: String, project: String?): String {
+	private fun createWorkItem(forWhom: For, checkId: String, title: String, project: String?): String {
 		val id = Ids.workItem()
 		jdbc.sql(
 			"""
-			insert into work_items (id, title, stage, responsible_user_id, executor_kind, executor_id, project_id, acceptance, opened_on)
-			values (:id, :title, 'ready', :owner, 'manager', :manager, :project, :acceptance, current_date)
+			insert into work_items (id, org_id, title, stage, responsible_user_id, executor_kind, executor_id, project_id, acceptance, opened_on)
+			values (:id, :org, :title, 'ready', :owner, 'manager', :manager, :project, :acceptance, current_date)
 			""".trimIndent(),
-		).param("id", id).param("title", title.take(200)).param("owner", SessionService.OWNER).param("manager", DelegationService.MANAGER)
+		).param("id", id).param("org", forWhom.orgId).param("title", title.take(200)).param("owner", forWhom.owner)
+			.param("manager", forWhom.manager ?: Ids.managerOf(forWhom.owner))
 			.param("project", project).param("acceptance", ACCEPTANCE).update()
 		sessions.audit("system", ACTOR, "work_item.created", "wrk", id, mapOf("stage" to "ready", "title" to title.take(200), "check_id" to checkId))
 		return id
@@ -254,19 +270,22 @@ class MasterCheckService(
 	 * path has no device and no tools. [replaces] is the failed API run a local run takes over from
 	 * (contract "실행 권리 청구" 1-2, `replacement`).
 	 */
-	private fun delegateRun(work: String, checkId: String, device: String?, account: String?, executor: String, prompt: String, replaces: String?): String {
+	private fun delegateRun(
+		forWhom: For, work: String, checkId: String, device: String?, account: String?, executor: String, prompt: String, replaces: String?,
+	): String {
+		val manager = forWhom.manager ?: Ids.managerOf(forWhom.owner)
 		val dlg = Ids.delegation()
 		val run = Ids.run()
 		val scope = linkedMapOf<String, Any?>("executor" to executor, "purpose" to PURPOSE, "check_id" to checkId,
 			"allowed_tools" to if (device == null) emptyList() else TOOLS)
-		val callPath = listOf(mapOf("kind" to "system", "id" to ACTOR), mapOf("kind" to "manager", "id" to DelegationService.MANAGER))
+		val callPath = listOf(mapOf("kind" to "system", "id" to ACTOR), mapOf("kind" to "manager", "id" to manager))
 		jdbc.sql(
 			"""
 			insert into delegations (id, work_item_id, granted_by_user_id, grantee_kind, grantee_id, device_id, account_id, scope, call_path, expires_at)
 			values (:id, :wid, :owner, 'manager', :manager, :device, :account, cast(:scope as jsonb), cast(:path as jsonb),
 			        now() + make_interval(hours => :hours))
 			""".trimIndent(),
-		).param("id", dlg).param("wid", work).param("owner", SessionService.OWNER).param("manager", DelegationService.MANAGER)
+		).param("id", dlg).param("wid", work).param("owner", forWhom.owner).param("manager", manager)
 			.param("device", device).param("account", account).param("scope", json.writeValueAsString(scope))
 			.param("path", json.writeValueAsString(callPath)).param("hours", DelegationService.DELEGATION_HOURS).update()
 		jdbc.sql(
@@ -334,7 +353,8 @@ class MasterCheckService(
 			}
 			check.path == "api" && check.apiRun == null -> {
 				// DEC-0095 2: the API stopped (credit used up, refusal, outage); the owner's task goes to the local path.
-				val why = startLocal(checkId, run.instruction.orEmpty(), "", null, check.workItem, runId)
+				val org = jdbc.sql("select org_id from master_checks where id = :id").param("id", checkId).query(String::class.java).single()
+				val why = startLocal(forOrg(org), checkId, run.instruction.orEmpty(), "", null, check.workItem, runId)
 				if (why == null) {
 					jdbc.sql("update master_checks set state = 'requested' where id = :id").param("id", checkId).update()
 					sessions.audit("system", ACTOR, "master_check.fallback", "mck", checkId, mapOf("api_run_id" to runId, "end_reason" to run.endReason))

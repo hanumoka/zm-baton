@@ -2,6 +2,12 @@ package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Requester
+import io.github.hanumoka.zmbaton.server.permission.Actor
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.PermissionRules
+import io.github.hanumoka.zmbaton.server.permission.ScopeColumns
+import io.github.hanumoka.zmbaton.server.permission.Visibility
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -15,6 +21,7 @@ import java.time.format.DateTimeParseException
 // Work items a person creates, edits and moves through their stages (contract v1 "작업"), the
 // projects they belong to and the organisation's workflow setting. Every change checks the
 // `version` the caller saw and is written to audit_log, which is also the work item's history.
+// Who may make a change is judged before it (Permissions); the person who made it is its actor.
 
 data class CreateWorkItem(
 	val title: String,
@@ -27,6 +34,8 @@ data class CreateWorkItem(
 	@JsonProperty("initial_stage") val initialStage: String? = null,
 	/** `human` makes the responsible person the executor. Absent leaves the executor unset. */
 	@JsonProperty("executor_kind") val executorKind: String? = null,
+	/** Added with permissions: the sharing scope (G06.1). Absent: `org`, as every work item before. */
+	val visibility: String? = null,
 )
 
 data class WorkItemCreated(val id: String, val stage: String)
@@ -56,6 +65,8 @@ data class WorkItemView(
 	@JsonProperty("due_on") val dueOn: LocalDate?,
 	@JsonProperty("closed_at") val closedAt: OffsetDateTime?,
 	@JsonProperty("updated_at") val updatedAt: OffsetDateTime,
+	/** Added with permissions: the sharing scope (G06.1): personal, restricted, team, org or public. */
+	val visibility: String = "org",
 )
 
 data class MoveView(
@@ -139,9 +150,11 @@ class WorkItemService(
 	private val jdbc: JdbcClient,
 	private val json: ObjectMapper,
 	private val sessions: SessionService,
+	private val facts: PermissionFacts,
 ) {
 	companion object {
-		const val ORG = "org_owner"
+		/** The stage-1 organisation, kept for callers written before organisations had their own rows. */
+		const val ORG = Requester.STAGE1_ORG
 		const val TITLE_MAX = 300
 		const val TEXT_MAX = 4000
 		const val NOTE_MAX = 1000
@@ -152,10 +165,17 @@ class WorkItemService(
 
 	// ---------------------------------------------------------------- create and edit
 
+	/**
+	 * A new work item in [actor]'s organisation. The responsible person must be an active member of it
+	 * (data model constraint 1: always a person).
+	 */
 	@Transactional
-	fun create(body: CreateWorkItem): WorkItemCreated {
+	fun create(body: CreateWorkItem, actor: String = Requester.STAGE1_PERSON): WorkItemCreated {
 		val owner = body.responsibleUserId.trim()
 		if (owner.isEmpty()) throw BadRequestException("responsible_user_id is required")
+		val org = facts.orgOf(actor)
+		if (!facts.isActiveMember(org, owner)) throw BadRequestException("책임자($owner)는 이 조직에서 활동 중인 사람이어야 한다")
+		val visibility = visibility(body.visibility) ?: Visibility.ORG
 		val title = title(body.title)
 		val stage = body.initialStage?.trim() ?: "ready"
 		if (stage !in setOf("draft", "ready")) throw BadRequestException("initial_stage must be draft or ready")
@@ -165,16 +185,17 @@ class WorkItemService(
 		val id = Ids.workItem()
 		jdbc.sql(
 			"""
-			insert into work_items (id, title, stage, responsible_user_id, executor_kind, executor_id, project_id,
-			                        acceptance, next_action, due_on, opened_on)
-			values (:id, :title, :stage, :owner, :ekind, :eid, :project, :acceptance, :next, :due, current_date)
+			insert into work_items (id, org_id, title, stage, responsible_user_id, executor_kind, executor_id, project_id,
+			                        acceptance, next_action, due_on, opened_on, visibility)
+			values (:id, :org, :title, :stage, :owner, :ekind, :eid, :project, :acceptance, :next, :due, current_date, :visibility)
 			""".trimIndent(),
-		).param("id", id).param("title", title).param("stage", stage).param("owner", owner)
+		).param("id", id).param("org", org).param("title", title).param("stage", stage).param("owner", owner)
+			.param("visibility", visibility.wire)
 			.param("ekind", executorKind).param("eid", if (executorKind == "human") owner else null)
 			.param("project", projectId).param("acceptance", text(body.acceptance, "acceptance"))
 			.param("next", text(body.nextAction, "next_action")).param("due", date(body.dueOn, "due_on"))
 			.update()
-		history(id, "work_item.created", mapOf("stage" to stage, "title" to title))
+		history(id, "work_item.created", mapOf("stage" to stage, "title" to title, "visibility" to visibility.wire), actor)
 		return WorkItemCreated(id, stage)
 	}
 
@@ -183,9 +204,9 @@ class WorkItemService(
 	 * cannot be cleared. `version` must be the version the caller saw.
 	 */
 	@Transactional
-	fun update(id: String, patch: Map<String, Any?>): WorkItemDetail {
+	fun update(id: String, patch: Map<String, Any?>, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
 		val version = (patch["version"] as? Number)?.toLong() ?: throw BadRequestException("version is required")
-		val known = setOf("version", "title", "acceptance", "next_action", "due_on", "project_id")
+		val known = setOf("version", "title", "acceptance", "next_action", "due_on", "project_id", "visibility")
 		val unknown = patch.keys - known
 		if (unknown.isNotEmpty()) throw BadRequestException("unknown fields $unknown")
 		val row = lockEditable(id, version)
@@ -195,6 +216,9 @@ class WorkItemService(
 		if ("next_action" in patch) changes["next_action"] = text(patch["next_action"] as String?, "next_action")
 		if ("due_on" in patch) changes["due_on"] = date(patch["due_on"] as String?, "due_on")
 		if ("project_id" in patch) changes["project_id"] = (patch["project_id"] as String?)?.trim()?.ifEmpty { null }?.also(::requireProject)
+		if ("visibility" in patch) {
+			changes["visibility"] = (visibility(patch["visibility"] as? String) ?: throw BadRequestException("visibility cannot be cleared")).wire
+		}
 		if (changes.isEmpty()) throw BadRequestException("nothing to change")
 		// Column names come from the fixed set above, never from input.
 		val sets = changes.keys.joinToString(", ") { "$it = :$it" }
@@ -202,14 +226,14 @@ class WorkItemService(
 			.param("id", row.id)
 		changes.forEach { (k, v) -> stmt.param(k, v) }
 		stmt.update()
-		history(id, "work_item.updated", changes.mapValues { it.value?.toString() })
+		history(id, "work_item.updated", changes.mapValues { it.value?.toString() }, actor)
 		return detail(id)
 	}
 
 	// ---------------------------------------------------------------- stages and wait reasons
 
 	@Transactional
-	fun transition(id: String, body: TransitionIn): WorkItemDetail {
+	fun transition(id: String, body: TransitionIn, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
 		val row = lockEditable(id, body.version, checkSource = false)
 		val note = body.note?.trim()?.take(NOTE_MAX)?.ifEmpty { null }
 		val target = body.to.trim()
@@ -231,9 +255,9 @@ class WorkItemService(
 		).param("stage", move.finalStage).param("closing", closing).param("id", id).update()
 		history(
 			id, "work_item.stage_changed",
-			mapOf("from" to row.stage, "to" to move.finalStage, "path" to move.path, "note" to note),
+			mapOf("from" to row.stage, "to" to move.finalStage, "path" to move.path, "note" to note), actor,
 		)
-		if (move.finalStage == "cancelled") closeQuestions(id)
+		if (move.finalStage == "cancelled") closeQuestions(id, actor)
 		return detail(id)
 	}
 
@@ -241,7 +265,7 @@ class WorkItemService(
 	 * A cancelled work item takes its questions with it (question path: close reason
 	 * `work_cancelled`), and their first-screen items close in the same transaction.
 	 */
-	private fun closeQuestions(id: String) {
+	private fun closeQuestions(id: String, actor: String) {
 		jdbc.sql(
 			"""
 			update inbox_items set state = 'closed', closed_at = now()
@@ -252,11 +276,11 @@ class WorkItemService(
 		val closed = jdbc.sql(
 			"update questions set state = 'resolved', close_reason = 'work_cancelled' where work_item_id = :id and state <> 'resolved'",
 		).param("id", id).update()
-		if (closed > 0) history(id, "question.closed_with_work", mapOf("count" to closed))
+		if (closed > 0) history(id, "question.closed_with_work", mapOf("count" to closed), actor)
 	}
 
 	@Transactional
-	fun addWait(id: String, body: WaitReasonIn): WorkItemDetail {
+	fun addWait(id: String, body: WaitReasonIn, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
 		val reason = body.reason.trim()
 		if (reason !in Workflow.PERSON_WAITS) throw BadRequestException("a person can set only ${Workflow.PERSON_WAITS}")
 		val row = lockEditable(id, body.version)
@@ -272,12 +296,12 @@ class WorkItemService(
 			 where id = :id
 			""".trimIndent(),
 		).param("reason", reason).param("note", note).param("id", id).update()
-		history(id, "work_item.wait_added", mapOf("reason" to reason, "note" to note))
+		history(id, "work_item.wait_added", mapOf("reason" to reason, "note" to note), actor)
 		return detail(id)
 	}
 
 	@Transactional
-	fun removeWait(id: String, reason: String, version: Long): WorkItemDetail {
+	fun removeWait(id: String, reason: String, version: Long, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
 		if (reason !in Workflow.PERSON_WAITS) throw BadRequestException("a person can clear only ${Workflow.PERSON_WAITS}")
 		val row = lockEditable(id, version)
 		if (reason !in row.waitReasons) throw ConflictException("the work item is not $reason")
@@ -290,7 +314,7 @@ class WorkItemService(
 			 where id = :id
 			""".trimIndent(),
 		).param("reason", reason).param("id", id).update()
-		history(id, "work_item.wait_removed", mapOf("reason" to reason))
+		history(id, "work_item.wait_removed", mapOf("reason" to reason), actor)
 		return detail(id)
 	}
 
@@ -298,10 +322,12 @@ class WorkItemService(
 
 	/**
 	 * Work items, newest first. [open] keeps only those not done or cancelled; [query] matches
-	 * the title, external number and next action.
+	 * the title, external number and next action. With [viewer], only those its scope lets them see.
 	 */
-	fun list(limit: Int, projectId: String?, open: Boolean, query: String?): List<WorkItemView> {
+	fun list(limit: Int, projectId: String?, open: Boolean, query: String?, viewer: Actor? = null): List<WorkItemView> {
 		val where = mutableListOf("true")
+		val scope = viewer?.let { PermissionRules.filter(it, ScopeColumns.WORK_ITEMS) }
+		if (scope != null) where += scope.sql
 		if (projectId != null) where += "w.project_id = :project"
 		if (open) where += "w.stage not in ('done', 'cancelled')"
 		val q = query?.trim()?.take(100)?.ifEmpty { null }
@@ -311,8 +337,21 @@ class WorkItemService(
 		).param("limit", limit)
 		if (projectId != null) stmt.param("project", projectId)
 		if (q != null) stmt.param("q", "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+		scope?.params?.forEach { (k, v) -> stmt.param(k, v) }
 		return stmt.query { rs, _ -> view(rs) }.list()
 	}
+
+	/**
+	 * Work items a person holds: responsible for, or executing themselves or through their manager
+	 * (contract "현재 상태 카드" 1). Open ones first, work under way first, then the most recently changed.
+	 */
+	fun involving(personId: String, managerId: String?, limit: Int): List<WorkItemView> =
+		jdbc.sql(
+			"""
+			$SELECT_VIEW where w.responsible_user_id = :p or w.executor_id in (:who)
+			 order by (w.stage in ('done', 'cancelled')), (w.stage = 'in_progress') desc, w.updated_at desc, w.id desc limit :limit
+			""".trimIndent(),
+		).param("p", personId).param("who", listOfNotNull(personId, managerId)).param("limit", limit).query { rs, _ -> view(rs) }.list()
 
 	fun detail(id: String): WorkItemDetail {
 		val row = load(id) ?: throw NotFoundException("no work item $id")
@@ -342,33 +381,41 @@ class WorkItemService(
 		)
 	}
 
-	fun projects(): List<ProjectView> =
-		jdbc.sql(
+	/** The projects of [viewer]'s organisation (every project without one) and the open work items they may see in each. */
+	fun projects(viewer: Actor? = null): List<ProjectView> {
+		val scope = viewer?.let { PermissionRules.filter(it, ScopeColumns.WORK_ITEMS) }
+		val stmt = jdbc.sql(
 			"""
 			select p.id, p.external_ref, p.name,
-			       (select count(*) from work_items w where w.project_id = p.id and w.stage not in ('done', 'cancelled'))
-			  from projects p order by p.external_ref nulls last, p.name
+			       (select count(*) from work_items w where w.project_id = p.id and w.stage not in ('done', 'cancelled')
+			           and ${scope?.sql ?: "true"})
+			  from projects p where cast(:org as text) is null or p.org_id = :org order by p.external_ref nulls last, p.name
 			""".trimIndent(),
-		).query { rs, _ -> ProjectView(rs.getString(1), rs.getString(2), rs.getString(3), rs.getLong(4)) }.list()
+		).param("org", viewer?.orgId)
+		scope?.params?.forEach { (k, v) -> stmt.param(k, v) }
+		return stmt.query { rs, _ -> ProjectView(rs.getString(1), rs.getString(2), rs.getString(3), rs.getLong(4)) }.list()
+	}
 
-	fun workflow(): WorkflowSettings = WorkflowSettings(skippedStages().sortedBy { Workflow.STAGES.indexOf(it) })
+	fun workflow(orgId: String = ORG): WorkflowSettings = WorkflowSettings(skippedStages(orgId).sortedBy { Workflow.STAGES.indexOf(it) })
 
+	/** Changes the skipped stages of [actor]'s organisation. */
 	@Transactional
-	fun setWorkflow(body: WorkflowSettings): WorkflowSettings {
+	fun setWorkflow(body: WorkflowSettings, actor: String = Requester.STAGE1_PERSON): WorkflowSettings {
 		val skipped = body.skippedStages.map { it.trim() }.toSet()
 		val bad = skipped - Workflow.SKIPPABLE
 		if (bad.isNotEmpty()) throw BadRequestException("only ${Workflow.SKIPPABLE} can be skipped, not $bad")
-		val before = skippedStages()
+		val org = facts.orgOf(actor)
+		val before = skippedStages(org)
 		jdbc.sql(
 			"""
 			update organizations
 			   set settings = jsonb_set(settings, '{workflow,skipped_stages}', cast(:stages as jsonb), true)
 			 where id = :org
 			""".trimIndent(),
-		).param("stages", json.writeValueAsString(skipped.sortedBy { Workflow.STAGES.indexOf(it) })).param("org", ORG).update()
-		sessions.audit("person", SessionService.OWNER, "workflow.skipped_stages", "org", ORG,
+		).param("stages", json.writeValueAsString(skipped.sortedBy { Workflow.STAGES.indexOf(it) })).param("org", org).update()
+		sessions.audit("person", actor, "workflow.skipped_stages", "org", org,
 			mapOf("before" to before.sorted(), "after" to skipped.sorted()))
-		return workflow()
+		return workflow(org)
 	}
 
 	// ---------------------------------------------------------------- delegated runs
@@ -382,8 +429,9 @@ class WorkItemService(
 	 */
 	fun lockFacts(id: String, version: Long): Workflow.Facts = facts(lockEditable(id, version, checkSource = false))
 
-	/** Writes one line of the work item's history, acted by the owner. */
-	fun record(id: String, action: String, details: Map<String, Any?>) = history(id, action, details)
+	/** Writes one line of the work item's history, acted by [actor]. */
+	fun record(id: String, action: String, details: Map<String, Any?>, actor: String = Requester.STAGE1_PERSON) =
+		history(id, action, details, actor)
 
 	/**
 	 * Moves a work item along with its delegated run. A run that started takes `ready` to
@@ -460,8 +508,10 @@ class WorkItemService(
 			"select count(*) from questions where work_item_id = :id and state = 'answered' and run_id is not null and delivery_run_id is null",
 		).param("id", id).query(Int::class.javaObjectType).single()
 
-	/** Whether the organisation skips result review (contract "단계": `workflow.skipped_stages`). */
-	fun skipsResultReview(): Boolean = "result_review" in skippedStages()
+	/** Whether the work item's organisation skips result review (contract "단계": `workflow.skipped_stages`). */
+	fun skipsResultReview(workItemId: String): Boolean = "result_review" in skippedStages(
+		jdbc.sql("select org_id from work_items where id = :id").param("id", workItemId).query(String::class.java).single(),
+	)
 
 	/**
 	 * A result held in result review only because of an open risk review request goes on to done
@@ -469,9 +519,9 @@ class WorkItemService(
 	 * 작업이 어떻게 되나" 4: skipping applies when no risk request is open). Written as the person's
 	 * move, since their approval let it go. Returns whether it moved. The caller holds the lock.
 	 */
-	fun releaseHeldResult(id: String): Boolean {
+	fun releaseHeldResult(id: String, actor: String = Requester.STAGE1_PERSON): Boolean {
 		val row = load(id, forUpdate = true) ?: return false
-		if (row.stage != "result_review" || row.sourceOfTruth != "product" || !skipsResultReview()) return false
+		if (row.stage != "result_review" || row.sourceOfTruth != "product" || "result_review" !in skippedStages(row.orgId)) return false
 		val move = Workflow.move(facts(row), "done")
 		if (!move.allowed) return false
 		jdbc.sql(
@@ -483,7 +533,7 @@ class WorkItemService(
 			""".trimIndent(),
 		).param("id", id).update()
 		history(id, "work_item.stage_changed", mapOf("from" to row.stage, "to" to "done", "path" to move.path,
-			"note" to "위험 목록 검토를 승인해, 결과 검토를 쓰지 않는 조직의 단계 생략을 적용했다"))
+			"note" to "위험 목록 검토를 승인해, 결과 검토를 쓰지 않는 조직의 단계 생략을 적용했다"), actor)
 		return true
 	}
 
@@ -517,6 +567,7 @@ class WorkItemService(
 		val lastRunEnd: String?,
 		/** The newest run's result has an open risk review request (ReviewService). */
 		val resultHeld: Boolean,
+		val orgId: String,
 	)
 
 	private fun load(id: String, forUpdate: Boolean = false): Row? =
@@ -531,7 +582,8 @@ class WorkItemService(
 			       exists (select 1 from review_items v
 			                where v.work_item_id = w.id and v.state = 'open' and v.reason <> 'sample'
 			                  and v.run_id = (select r.id from runs r where r.work_item_id = w.id
-			                                   order by r.created_at desc, r.id desc limit 1)) as result_held
+			                                   order by r.created_at desc, r.id desc limit 1)) as result_held,
+			       w.org_id
 			  from work_items w where w.id = :id
 			""".trimIndent() + if (forUpdate) " for update of w" else "",
 		).param("id", id).query { rs, _ ->
@@ -540,6 +592,7 @@ class WorkItemService(
 				rs.getString(1), rs.getString(2), (rs.getArray(3).array as Array<String>).toList(), rs.getLong(4),
 				rs.getString(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getString(9), rs.getString(10),
 				rs.getString(11)?.let { json.readValue(it, mapType) }, rs.getBoolean(12), rs.getString(13), rs.getBoolean(14),
+				rs.getString(15),
 			)
 		}.optional().orElse(null)
 
@@ -557,7 +610,7 @@ class WorkItemService(
 	}
 
 	private fun facts(row: Row) =
-		Workflow.Facts(row.stage, row.executorKind, row.hasLiveRun, skippedStages(), readOnlyReason(row), row.lastRunEnd, row.resultHeld)
+		Workflow.Facts(row.stage, row.executorKind, row.hasLiveRun, skippedStages(row.orgId), readOnlyReason(row), row.lastRunEnd, row.resultHeld)
 
 	private fun readOnlyReason(row: Row): String? =
 		if (row.sourceOfTruth == "git") {
@@ -566,9 +619,9 @@ class WorkItemService(
 			null
 		}
 
-	private fun skippedStages(): Set<String> {
+	private fun skippedStages(orgId: String): Set<String> {
 		val raw = jdbc.sql("select settings -> 'workflow' -> 'skipped_stages' from organizations where id = :org")
-			.param("org", ORG).query(String::class.java).optional().orElse(null) ?: return emptySet()
+			.param("org", orgId).query(String::class.java).optional().orElse(null) ?: return emptySet()
 		return json.readValue(raw, object : TypeReference<List<String>>() {}).filter { it in Workflow.SKIPPABLE }.toSet()
 	}
 
@@ -578,8 +631,14 @@ class WorkItemService(
 		if (!found) throw BadRequestException("no project $id")
 	}
 
-	private fun history(id: String, action: String, details: Map<String, Any?>) =
-		sessions.audit("person", SessionService.OWNER, action, "wrk", id, details)
+	private fun history(id: String, action: String, details: Map<String, Any?>, actor: String) =
+		sessions.audit("person", actor, action, "wrk", id, details)
+
+	/** A sharing scope from input; null when absent. */
+	private fun visibility(raw: String?): Visibility? {
+		val t = raw?.trim()?.ifEmpty { null } ?: return null
+		return Visibility.parse(t) ?: throw BadRequestException("visibility must be one of ${Visibility.entries.map { it.wire }}")
+	}
 
 	private fun title(raw: String): String {
 		val t = raw.trim()
@@ -605,7 +664,7 @@ class WorkItemService(
 	private val SELECT_VIEW = """
 		select w.id, w.title, w.stage, w.wait_reasons, w.generation, w.created_at, w.version, w.external_ref,
 		       p.id as project_id, p.external_ref as project_ref, p.name as project_name, w.source_of_truth,
-		       w.executor_kind, w.next_action, w.wait_note, w.opened_on, w.due_on, w.closed_at, w.updated_at
+		       w.executor_kind, w.next_action, w.wait_note, w.opened_on, w.due_on, w.closed_at, w.updated_at, w.visibility
 		  from work_items w left join projects p on p.id = w.project_id
 	""".trimIndent()
 
@@ -619,7 +678,7 @@ class WorkItemService(
 			project, rs.getString("source_of_truth"), rs.getString("executor_kind"), rs.getString("next_action"),
 			rs.getString("wait_note"), rs.getObject("opened_on", LocalDate::class.java),
 			rs.getObject("due_on", LocalDate::class.java), rs.getObject("closed_at", OffsetDateTime::class.java),
-			rs.getObject("updated_at", OffsetDateTime::class.java),
+			rs.getObject("updated_at", OffsetDateTime::class.java), rs.getString("visibility"),
 		)
 	}
 }

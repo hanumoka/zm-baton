@@ -1,0 +1,70 @@
+/*
+ * The organisation screen's own parts. The list-and-detail layout, the rows and the detail head are
+ * shared (ui/panes.css); forms, refusals and the lock line are the work screen's (work/work.css).
+ * Here are the quiet row of a one-person organisation, archived rows, the links and member lists,
+ * the role chips and the legends. Every value is a token.
+ */
+
+/* A one-person organisation's folded kinds: one quiet line, an add button at its end */
+.org-rest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-1) var(--s-2);
+  margin: 0;
+  padding: var(--s-3) var(--s-4);
+  border-top: var(--rule) solid var(--c-rule);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-row);
+  color: var(--c-ink-2);
+}
+.org-rest .ico { flex: none; }
+.org-rest span { flex: 1 1 var(--w-cell); }
+.org-rest .btn { margin-left: auto; }
+
+/* Archived and inactive rows read quieter; the word says it, not only the colour */
+.lrow.org-off .lrow-title { color: var(--c-ink-2); font-weight: var(--fw-regular); }
+.org-tag { margin-right: var(--s-2); padding: 0 var(--s-1); border: var(--rule) solid var(--c-rule-strong); border-radius: var(--r-xs); color: var(--c-ink-2); }
+
+/* Links and members: the other end's kind, then its name as a link to it, then undo */
+.org-links { display: flex; flex-direction: column; gap: var(--s-1); max-width: var(--w-text); margin: 0 0 var(--s-2); padding: 0; list-style: none; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.org-links li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); }
+.org-kind { min-width: var(--w-ref); font-size: var(--fs-xs); color: var(--c-ink-2); }
+.org-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--c-ink);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: var(--underline-gap);
+  overflow-wrap: anywhere;
+}
+.org-link:hover { color: var(--c-accent); }
+.org-link:focus-visible { outline: var(--ring) solid var(--c-accent); outline-offset: var(--ring); }
+
+/* Role chips, for a person who reads the roles without changing them */
+.org-chips { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-2); margin: 0; padding: 0; list-style: none; }
+.org-chip { padding: 0 var(--s-2); border: var(--rule) solid var(--c-rule-strong); border-radius: var(--r-xs); font-size: var(--fs-xs); line-height: var(--lh-row); color: var(--c-ink); }
+
+/* Role checks with what each lets a person do */
+.org-roles .check small { color: var(--c-ink-2); }
+.org-kinds { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-4); }
+
+/* Short notes under a control, the read-only line and a refusal right under its control */
+.org-note { max-width: var(--w-text); margin: var(--s-2) 0 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.org-readonly { display: flex; align-items: flex-start; gap: var(--s-2); margin: var(--s-3) 0 0; }
+.org-readonly .ico { flex: none; margin-top: var(--s-0); }
+.org-refused { margin-top: var(--s-2); }
+
+/* The roles and the sharing scopes, explained on the organisation's own row */
+.org-legend { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s-1) var(--s-4); max-width: var(--w-text); margin: 0; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.org-legend div { display: contents; }
+.org-legend dt { font-weight: var(--fw-semi); color: var(--c-ink); }
+.org-legend dd { margin: 0; color: var(--c-ink-2); }
+
+@media (max-width: 760px) {
+  .org-legend { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .org-legend dd { margin-bottom: var(--s-2); }
+}

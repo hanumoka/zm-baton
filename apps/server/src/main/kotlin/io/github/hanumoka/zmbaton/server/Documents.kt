@@ -1,6 +1,12 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Actor
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.PermissionRules
+import io.github.hanumoka.zmbaton.server.permission.Permissions
+import io.github.hanumoka.zmbaton.server.permission.ScopeColumns
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
@@ -41,6 +47,8 @@ data class DocumentView(
 	/** The highest version number that is approved; null when none is. */
 	@JsonProperty("approved_number") val approvedNumber: Int?,
 	@JsonProperty("updated_at") val updatedAt: OffsetDateTime,
+	/** Added with permissions: the sharing scope (G06.1). */
+	val visibility: String = "org",
 )
 
 data class DocumentActionView(val allowed: Boolean, val reason: String?)
@@ -80,7 +88,7 @@ data class DocumentDetail(
 )
 
 @Service
-class DocumentService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
+class DocumentService(private val jdbc: JdbcClient, private val json: ObjectMapper, private val access: PermissionFacts) {
 
 	companion object {
 		const val HISTORY_MAX = 50
@@ -89,10 +97,12 @@ class DocumentService(private val jdbc: JdbcClient, private val json: ObjectMapp
 
 	private val mapType = object : TypeReference<Map<String, Any?>>() {}
 
-	/** Most recently changed first. [query] matches the title and a Git document's path. */
-	fun list(limit: Int, projectId: String?, source: String?, query: String?): List<DocumentView> {
+	/** Most recently changed first. [query] matches the title and a Git document's path. With [viewer], those they may see. */
+	fun list(limit: Int, projectId: String?, source: String?, query: String?, viewer: Actor? = null): List<DocumentView> {
 		if (source != null && source !in SOURCES) throw BadRequestException("source must be one of $SOURCES")
 		val where = mutableListOf("true")
+		val scope = viewer?.let { PermissionRules.filter(it, ScopeColumns.DOCUMENTS) }
+		if (scope != null) where += scope.sql
 		if (projectId != null) where += "d.project_id = :project"
 		if (source != null) where += "d.source_of_truth = :source"
 		val q = query?.trim()?.take(100)?.ifEmpty { null }
@@ -102,13 +112,14 @@ class DocumentService(private val jdbc: JdbcClient, private val json: ObjectMapp
 		if (projectId != null) stmt.param("project", projectId)
 		if (source != null) stmt.param("source", source)
 		if (q != null) stmt.param("q", "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+		scope?.params?.forEach { (k, v) -> stmt.param(k, v) }
 		return stmt.query { rs, _ -> view(rs) }.list()
 	}
 
 	/** One document with its versions; [number] picks the version shown, the newest by default. */
 	fun detail(id: String, number: Int?, actor: String): DocumentDetail {
 		val view = load(id) ?: throw NotFoundException("no document $id")
-		val approver = ApprovalPolicy.approverFor(orgOf(id), "document_version")
+		val approver = access.approverFor(orgOf(id), "document_version")
 		val versions = jdbc.sql(
 			"""
 			select id, number, note, git_commit_sha, created_by, created_at, approved_by, approved_at
@@ -136,7 +147,7 @@ class DocumentService(private val jdbc: JdbcClient, private val json: ObjectMapp
 		jdbc.sql("select org_id from documents where id = :id").param("id", id).query(String::class.java).single()
 
 	private val SELECT_VIEW = """
-		select d.id, d.title, d.source_of_truth, d.git_ref::text as git_ref, d.owner_user_id, d.version, d.updated_at,
+		select d.id, d.title, d.source_of_truth, d.git_ref::text as git_ref, d.owner_user_id, d.version, d.updated_at, d.visibility,
 		       p.id as project_id, p.external_ref as project_ref, p.name as project_name,
 		       v.number as v_number, v.approved_by as v_approved_by, v.git_commit_sha as v_commit, v.created_at as v_created_at,
 		       (select max(a.number) from document_versions a where a.doc_id = d.id and a.approved_by is not null) as approved_number
@@ -159,7 +170,7 @@ class DocumentService(private val jdbc: JdbcClient, private val json: ObjectMapp
 					rs.getObject("v_created_at", OffsetDateTime::class.java))
 			},
 			rs.getObject("approved_number") as Int?,
-			rs.getObject("updated_at", OffsetDateTime::class.java),
+			rs.getObject("updated_at", OffsetDateTime::class.java), rs.getString("visibility"),
 		)
 	}
 
@@ -209,7 +220,7 @@ class DocumentService(private val jdbc: JdbcClient, private val json: ObjectMapp
 
 @RestController
 @RequestMapping("/api")
-class DocumentController(private val documents: DocumentService, private val people: PersonService) {
+class DocumentController(private val documents: DocumentService, private val permissions: Permissions) {
 
 	@GetMapping("/documents")
 	fun list(
@@ -219,8 +230,8 @@ class DocumentController(private val documents: DocumentService, private val peo
 		@RequestParam(required = false) source: String?,
 		@RequestParam(required = false) q: String?,
 	): List<DocumentView> {
-		people.refuseSessionToken(authorization, "list documents")
-		return documents.list(limit.coerceIn(1, 500), projectId?.trim()?.ifEmpty { null }, source?.trim()?.ifEmpty { null }, q)
+		val me = permissions.person(authorization, "list documents", Act.READ)
+		return documents.list(limit.coerceIn(1, 500), projectId?.trim()?.ifEmpty { null }, source?.trim()?.ifEmpty { null }, q, me)
 	}
 
 	/** `version` picks the version whose body is shown; the newest by default. */
@@ -230,7 +241,8 @@ class DocumentController(private val documents: DocumentService, private val peo
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestParam(required = false) version: Int?,
 	): DocumentDetail {
-		people.refuseSessionToken(authorization, "read a document")
-		return documents.detail(id, version, Requester.person())
+		val me = permissions.person(authorization, "read a document")
+		permissions.see(me, permissions.document(id))
+		return documents.detail(id, version, me.person!!)
 	}
 }

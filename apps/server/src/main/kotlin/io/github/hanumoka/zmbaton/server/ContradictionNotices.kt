@@ -1,6 +1,8 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
@@ -155,7 +157,7 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 			values (:id, :user, 5, 'notice', 'ntc', :notice, :summary, cast(:detail as jsonb), 'digest')
 			on conflict (source_id) where state = 'open' and kind = 'notice' do nothing
 			""".trimIndent(),
-		).param("id", Ids.inbox()).param("user", SessionService.OWNER).param("notice", id)
+		).param("id", Ids.inbox()).param("user", recipients(c).first()).param("notice", id)
 			.param("summary", "모순 후보: ${c.left.label}, ${c.right.label}".take(300)).param("detail", evidenceJson).update()
 		return id
 	}
@@ -166,19 +168,35 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 	)
 
 	/**
-	 * The owners of the two items (contract "문서 모순 후보" 4): a document's owner, a decision's driver.
-	 * A one-person organisation (stage 1) has only its owner; a Git copy of a decision has no driver.
+	 * The owners of the two items (contract "문서 모순 후보" 4): a document's owner, a decision's driver
+	 * when the driver is a person of the organisation, else the decision's owner (V13). With neither,
+	 * the owner of the items' organisation. The first one gets the notice's first-screen item.
 	 */
 	private fun recipients(c: Candidate): List<String> {
 		val people = listOf(c.left, c.right).mapNotNull { item ->
 			if (item.kind == "document") {
 				jdbc.sql("select owner_user_id from documents where id = :id").param("id", item.id).query(String::class.java).optional().orElse(null)
 			} else {
-				jdbc.sql("select roles ->> 'driver' from decisions where id = :id").param("id", item.id).query(String::class.java).optional().orElse(null)
+				jdbc.sql(
+					"""
+					select case when exists (select 1 from memberships m where m.org_id = d.org_id and m.user_id = d.roles ->> 'driver')
+					            then d.roles ->> 'driver' else d.owner_user_id end
+					  from decisions d where d.id = :id
+					""".trimIndent(),
+				).param("id", item.id).query(String::class.java).optional().orElse(null)
 			}
-		}.filter { it.matches(Regex("^[A-Za-z0-9_]{1,60}$")) }.distinct()
-		return people.ifEmpty { listOf(SessionService.OWNER) }
+		// Person ids are `usr_<uuidv7>` (dashes included); the pattern keeps the array literal below safe.
+		}.filter { it.matches(Regex("^[A-Za-z0-9_-]{1,80}$")) }.distinct()
+		return people.ifEmpty { listOf(orgOwner(c)) }
 	}
+
+	/** The owner of the organisation the two items belong to. */
+	private fun orgOwner(c: Candidate): String =
+		listOf(c.left, c.right).firstNotNullOfOrNull { item ->
+			jdbc.sql(
+				"select o.owner_user_id from organizations o join ${if (item.kind == "document") "documents" else "decisions"} x on x.org_id = o.id where x.id = :id",
+			).param("id", item.id).query(String::class.java).optional().orElse(null)
+		} ?: jdbc.sql("select owner_user_id from organizations order by created_at, id limit 1").query(String::class.java).single()
 
 	// ---------------------------------------------------------------- reads
 
@@ -251,7 +269,7 @@ class ContradictionController(
 	private val checks: MasterCheckService,
 	private val settings: MasterSettings,
 	private val api: MasterApiSettings,
-	private val people: PersonService,
+	private val permissions: Permissions,
 ) {
 
 	/** `GET /api/contradictions?about=doc_…` (or `dcs_…`): its open candidates and its newest checks. */
@@ -261,9 +279,10 @@ class ContradictionController(
 		@RequestParam about: String,
 		@RequestParam(name = "include_closed", defaultValue = "false") includeClosed: Boolean,
 	): ContradictionsAbout {
-		people.refuseSessionToken(authorization, "read contradiction candidates")
+		val me = permissions.person(authorization, "read contradiction candidates", Act.READ)
 		val id = about.trim()
 		if (!(id.startsWith("doc_") || id.startsWith("dcs_")) || id.length > 100) throw BadRequestException("about must be a document (doc_…) or decision (dcs_…)")
+		permissions.see(me, if (id.startsWith("doc_")) permissions.document(id) else permissions.decision(id))
 		return notices.about(id, includeClosed)
 	}
 
@@ -272,14 +291,14 @@ class ContradictionController(
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@org.springframework.web.bind.annotation.PathVariable id: String,
 	): MasterCheckView {
-		people.refuseSessionToken(authorization, "read a master check")
+		permissions.person(authorization, "read a master check", Act.READ)
 		return notices.check(id)
 	}
 
 	/** The master's limits, today's use and whether the API path is on. Read-only: these are server settings. */
 	@GetMapping("/settings/master")
 	fun settings(@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): MasterSettingsView {
-		people.refuseSessionToken(authorization, "read the master settings")
+		permissions.person(authorization, "read the master settings", Act.READ)
 		return MasterSettingsView(
 			settings.dailyLimit, checks.usedToday(), settings.compareLimit, settings.importLimit, api.enabled(), api.keyEnv,
 			api.screenModel, api.confirmModel,

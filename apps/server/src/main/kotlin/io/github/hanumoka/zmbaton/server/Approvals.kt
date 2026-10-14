@@ -1,37 +1,30 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Requester
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
 import java.time.OffsetDateTime
 
 /**
  * Who approves what (core module 1 "업무 판정: 상태 전이·권한·승인"). This is the one place that
- * names an approver. Stage 1 is a one-person organisation (FN-0104) with no roles or permission
- * checks yet (FN-0101, FN-0103), so the owner approves everything, their own proposals included
- * (G37.3: in a one-person organisation the same person may propose and approve; the approval is
- * still recorded as a person's). When roles arrive, only [approverFor] and [POLICY] change.
+ * names an approver. Stage 1 rule [POLICY]: the organisation's owner approves, their own proposals
+ * included (G37.3: in a one-person organisation the same person may propose and approve; the approval
+ * is still recorded as a person's). Approving also needs the approver role (Permissions, Act
+ * DECISION_APPROVE and DOCUMENT_APPROVE). Choosing other approvers comes with FN-0102 (stage 2);
+ * then only [approverFor] and [POLICY] change. Pure: PermissionFacts.approverFor loads the owner.
  */
 object ApprovalPolicy {
 
 	/** Recorded with every approval, so a later policy can tell which rule chose the approver. */
 	const val POLICY = "stage1.owner_approves"
 
-	/** The person who may approve or reject a target of [targetKind] in [orgId]. */
+	/** The person who may approve or reject a target of [targetKind] in [orgId], whose owner is [orgOwner]. */
 	@Suppress("UNUSED_PARAMETER")
-	fun approverFor(orgId: String, targetKind: String): String = SessionService.OWNER
+	fun approverFor(orgId: String, targetKind: String, orgOwner: String = Requester.STAGE1_PERSON): String = orgOwner
 
 	/** How a person is shown next to an approval until people have names on the server. */
-	fun label(personId: String): String = if (personId == SessionService.OWNER) "소유자($personId)" else personId
-}
-
-/**
- * The person a person action acts for. Until person authentication exists there is one person and
- * the server listens on loopback only (SessionService), so it is the owner; a session token is
- * refused before this is asked (PersonService.refuseSessionToken). Authentication replaces this.
- */
-object Requester {
-	fun person(): String = SessionService.OWNER
+	fun label(personId: String): String = if (personId == Requester.STAGE1_PERSON) "소유자($personId)" else personId
 }
 
 data class ApprovalView(

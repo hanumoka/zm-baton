@@ -272,6 +272,8 @@ data class CheckSubjectRow(
 	@JsonProperty("linked_decisions") val linkedDecisions: List<String> = emptyList(),
 	/** The decision this one replaces: not compared, since it no longer holds. */
 	@JsonProperty("supersedes_id") val supersedesId: String? = null,
+	/** Added with permissions: the organisation it belongs to, whose documents and decisions it is compared with. */
+	@JsonProperty("org_id") val orgId: String? = null,
 )
 
 @Service
@@ -291,7 +293,7 @@ class ContradictionMaterial(private val jdbc: JdbcClient, private val json: Obje
 		jdbc.sql(
 			"""
 			select v.id, v.number, v.body_markdown, d.id, d.title, d.project_id,
-			       coalesce((select string_agg(dd.decision_id, ',') from document_decisions dd where dd.document_id = d.id), '')
+			       coalesce((select string_agg(dd.decision_id, ',') from document_decisions dd where dd.document_id = d.id), ''), d.org_id
 			  from document_versions v join documents d on d.id = v.doc_id where v.id = :id
 			""".trimIndent(),
 		).param("id", versionId).query { rs, _ ->
@@ -299,7 +301,7 @@ class ContradictionMaterial(private val jdbc: JdbcClient, private val json: Obje
 			CheckSubjectRow(
 				"document_version", rs.getString(1), rs.getString(4), rs.getInt(2), null, title,
 				"문서 「${clip(title, 80)}」 판 ${rs.getInt(2)}", rs.getString(3),
-				listOfNotNull(rs.getString(6)), linkedDecisions = split(rs.getString(7)),
+				listOfNotNull(rs.getString(6)), linkedDecisions = split(rs.getString(7)), orgId = rs.getString(8),
 			)
 		}.optional().orElse(null)
 
@@ -309,7 +311,7 @@ class ContradictionMaterial(private val jdbc: JdbcClient, private val json: Obje
 			select d.id, d.external_ref, d.number, d.question, d.choice, d.context, d.options::text, d.chosen_option, d.rationale,
 			       d.review_conditions, d.sections::text, d.supersedes_id,
 			       coalesce((select string_agg(p.project_id, ',') from decision_projects p where p.decision_id = d.id), ''),
-			       coalesce((select string_agg(dd.document_id, ',') from document_decisions dd where dd.decision_id = d.id), '')
+			       coalesce((select string_agg(dd.document_id, ',') from document_decisions dd where dd.decision_id = d.id), ''), d.org_id
 			  from decisions d where d.id = :id
 			""".trimIndent(),
 		).param("id", decisionId).query { rs, _ ->
@@ -318,7 +320,7 @@ class ContradictionMaterial(private val jdbc: JdbcClient, private val json: Obje
 				"decision", rs.getString(1), null, null, ref, rs.getString(4), "결정 ${ref ?: rs.getString(1)}",
 				decisionText(rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7), rs.getString(8), rs.getString(9),
 					rs.getString(10), rs.getString(11)),
-				split(rs.getString(13)), linkedDocuments = split(rs.getString(14)), supersedesId = rs.getString(12),
+				split(rs.getString(13)), linkedDocuments = split(rs.getString(14)), supersedesId = rs.getString(12), orgId = rs.getString(15),
 			)
 		}.optional().orElse(null)
 
@@ -367,7 +369,7 @@ class ContradictionMaterial(private val jdbc: JdbcClient, private val json: Obje
 			 order by p.linked desc, rank desc, p.id
 			 limit :limit
 			""".trimIndent(),
-		).param("query", query).param("org", WorkItemService.ORG).param("scoped", projects.isNotEmpty())
+		).param("query", query).param("org", subjects.firstNotNullOfOrNull { it.orgId } ?: "").param("scoped", projects.isNotEmpty())
 			.param("projects", projects.joinToString(",")).param("linkedDocs", linkedDocs.joinToString(","))
 			.param("linkedDecisions", linkedDecisions.joinToString(",")).param("excludeDocs", excludeDocs.joinToString(","))
 			.param("excludeDecisions", excludeDecisions.joinToString(",")).param("limit", limit)

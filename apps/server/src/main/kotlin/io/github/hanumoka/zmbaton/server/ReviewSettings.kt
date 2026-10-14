@@ -1,6 +1,10 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Requester
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
@@ -80,6 +84,7 @@ class ReviewSettingsService(
 	private val jdbc: JdbcClient,
 	private val json: ObjectMapper,
 	private val sessions: SessionService,
+	private val access: PermissionFacts,
 ) {
 	companion object {
 		const val DEFAULT_PROMOTE_HOURS = 24
@@ -87,8 +92,8 @@ class ReviewSettingsService(
 
 	private val mapType = object : TypeReference<Map<String, Any?>>() {}
 
-	private fun orgSettings(): Map<String, Any?> =
-		jdbc.sql("select settings::text from organizations where id = :org").param("org", WorkItemService.ORG)
+	private fun orgSettings(orgId: String): Map<String, Any?> =
+		jdbc.sql("select settings::text from organizations where id = :org").param("org", orgId)
 			.query(String::class.java).optional().orElse(null)?.let { json.readValue(it, mapType) } ?: emptyMap()
 
 	private fun strings(v: Any?): List<String>? = (v as? List<*>)?.mapNotNull { it as? String }
@@ -96,14 +101,14 @@ class ReviewSettingsService(
 	/** The organisation's own list, or null while it uses the starting list. */
 	private fun orgOwn(settings: Map<String, Any?>): List<String>? = strings(settings["risk_paths"])
 
-	fun orgPatterns(): List<String> = orgOwn(orgSettings()) ?: RiskPaths.ORG_DEFAULT
+	fun orgPatterns(orgId: String): List<String> = orgOwn(orgSettings(orgId)) ?: RiskPaths.ORG_DEFAULT
 
 	// No default arguments on these: Kotlin's default-argument helper would run on the Spring proxy.
-	fun sampleRate(): Double = sampleRateOf(orgSettings())
+	fun sampleRate(orgId: String): Double = sampleRateOf(orgSettings(orgId))
 
-	fun sampleDailyCap(): Int = sampleDailyCapOf(orgSettings())
+	fun sampleDailyCap(orgId: String): Int = sampleDailyCapOf(orgSettings(orgId))
 
-	fun promoteAfterHours(): Int = promoteAfterHoursOf(orgSettings())
+	fun promoteAfterHours(orgId: String): Int = promoteAfterHoursOf(orgSettings(orgId))
 
 	private fun sampleRateOf(settings: Map<String, Any?>): Double =
 		(settings["sample_rate"] as? Number)?.toDouble()?.takeIf { it in 0.0..1.0 } ?: Sampler.DEFAULT_RATE
@@ -126,19 +131,21 @@ class ReviewSettingsService(
 	private fun projectPatterns(entries: List<Map<*, *>>, repoKey: String?): List<String> =
 		entries.filter { it["repo"] == null || it["repo"] == repoKey }.flatMap { strings(it["patterns"]).orEmpty() }.distinct()
 
-	/** The list that applies to a result of [projectId]'s work in [repoKey]. */
-	fun effective(projectId: String?, repoKey: String?): EffectiveRiskPaths {
+	/** The list that applies to a result of [projectId]'s work in [repoKey], in [orgId]. */
+	fun effective(projectId: String?, repoKey: String?, orgId: String = Requester.STAGE1_ORG): EffectiveRiskPaths {
 		val entries = projectId?.let { projectEntries(it) }
 		return if (entries != null) EffectiveRiskPaths(projectPatterns(entries, repoKey), "project")
-		else EffectiveRiskPaths(orgPatterns(), "org")
+		else EffectiveRiskPaths(orgPatterns(orgId), "org")
 	}
 
-	fun view(): ReviewSettingsView {
-		val settings = orgSettings()
+	fun view(orgId: String = Requester.STAGE1_ORG): ReviewSettingsView {
+		val settings = orgSettings(orgId)
 		val own = orgOwn(settings)
 		val orgList = own ?: RiskPaths.ORG_DEFAULT
-		val open = proposals()
-		val projects = jdbc.sql("select id, external_ref, name, (settings -> 'risk_paths')::text from projects order by external_ref nulls last, name")
+		val open = proposals(orgId)
+		val projects = jdbc.sql(
+			"select id, external_ref, name, (settings -> 'risk_paths')::text from projects where org_id = :org order by external_ref nulls last, name",
+		).param("org", orgId)
 			.query { rs, _ ->
 				val ref = ProjectRef(rs.getString(1), rs.getString(2), rs.getString(3))
 				val entries = rs.getString(4)?.let { json.readValue(it, object : TypeReference<List<Map<String, Any?>>>() {}) }
@@ -150,23 +157,25 @@ class ReviewSettingsService(
 		)
 	}
 
-	/** The candidates people put forward and nobody added or dismissed yet, oldest first. */
-	fun proposals(): List<RiskProposal> =
+	/** The candidates people of [orgId] put forward and nobody added or dismissed yet, oldest first. */
+	fun proposals(orgId: String): List<RiskProposal> =
 		jdbc.sql(
 			"""
 			select r.id, r.project_id, r.propose_risk_path, r.work_item_id, w.title, r.note, r.decided_at
 			  from review_items r left join work_items w on w.id = r.work_item_id
-			 where r.proposal_state = 'open' order by r.decided_at, r.id
+			 where r.proposal_state = 'open' and r.org_id = :org order by r.decided_at, r.id
 			""".trimIndent(),
-		).query { rs, _ ->
+		).param("org", orgId).query { rs, _ ->
 			RiskProposal(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6),
 				rs.getObject(7, OffsetDateTime::class.java))
 		}.list()
 
+	/** Changes the settings of [actor]'s organisation. */
 	@Transactional
 	fun setOrg(body: OrgReviewSettingsIn, actor: String): ReviewSettingsView {
 		if (body.riskPaths == null && body.sampleRate == null && body.sampleDailyCap == null) throw BadRequestException("nothing to change")
-		val before = orgSettings()
+		val org = access.orgOf(actor)
+		val before = orgSettings(org)
 		val changes = linkedMapOf<String, Any?>()
 		body.riskPaths?.let { changes["risk_paths"] = RiskPaths.clean(it) }
 		body.sampleRate?.let {
@@ -178,16 +187,16 @@ class ReviewSettingsService(
 			changes["sample_daily_cap"] = it
 		}
 		jdbc.sql("update organizations set settings = settings || cast(:patch as jsonb) where id = :org")
-			.param("patch", json.writeValueAsString(changes)).param("org", WorkItemService.ORG).update()
-		sessions.audit("person", actor, "review_settings.changed", "org", WorkItemService.ORG,
+			.param("patch", json.writeValueAsString(changes)).param("org", org).update()
+		sessions.audit("person", actor, "review_settings.changed", "org", org,
 			changes.mapValues { (k, v) -> mapOf("before" to (before[k] ?: if (k == "risk_paths") "starting list" else null), "after" to v) })
-		return view()
+		return view(org)
 	}
 
 	@Transactional
 	fun setProject(projectId: String, body: ProjectRiskPathsIn, actor: String): ReviewSettingsView {
-		val before = jdbc.sql("select (settings -> 'risk_paths')::text from projects where id = :id for update").param("id", projectId)
-			.query(String::class.java).list()
+		val before = jdbc.sql("select (settings -> 'risk_paths')::text from projects where id = :id and org_id = :org for update")
+			.param("id", projectId).param("org", access.orgOf(actor)).query(String::class.java).list()
 		if (before.isEmpty()) throw NotFoundException("no project $projectId")
 		val patterns = body.patterns?.let { RiskPaths.clean(it) }
 		if (patterns == null) {
@@ -198,7 +207,7 @@ class ReviewSettingsService(
 		}
 		sessions.audit("person", actor, "review_settings.project_risk_paths", "prj", projectId,
 			mapOf("before" to before.single()?.let { json.readValue(it, Any::class.java) }, "after" to patterns, "inherits" to (patterns == null)))
-		return view()
+		return view(access.orgOf(actor))
 	}
 
 	/**
@@ -213,13 +222,14 @@ class ReviewSettingsService(
 			"select project_id, propose_risk_path from review_items where id = :id and proposal_state = 'open' for update",
 		).param("id", reviewId).query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional()
 			.orElseThrow { ConflictException("열린 위험 경로 후보가 아니다. 이미 더했거나 뺐다") }
+		val org = access.orgOf(actor)
 		if (action == "add") {
 			if (projectId == null) {
-				val list = orgPatterns()
+				val list = orgPatterns(org)
 				if (pattern !in list) setOrg(OrgReviewSettingsIn(riskPaths = list + pattern), actor)
 			} else {
 				val entries = projectEntries(projectId)
-				val list = entries?.let { projectPatterns(it, null) } ?: orgPatterns()
+				val list = entries?.let { projectPatterns(it, null) } ?: orgPatterns(org)
 				if (entries == null || pattern !in list) setProject(projectId, ProjectRiskPathsIn(list + pattern), actor)
 			}
 		}
@@ -227,18 +237,18 @@ class ReviewSettingsService(
 			.param("state", if (action == "add") "added" else "dismissed").param("id", reviewId).update()
 		sessions.audit("person", actor, if (action == "add") "review.proposal_added" else "review.proposal_dismissed", "rvw", reviewId,
 			mapOf("pattern" to pattern, "project_id" to projectId))
-		return view()
+		return view(org)
 	}
 }
 
 @RestController
 @RequestMapping("/api")
-class ReviewSettingsController(private val settings: ReviewSettingsService, private val people: PersonService) {
+class ReviewSettingsController(private val settings: ReviewSettingsService, private val permissions: Permissions) {
 
 	@GetMapping("/review-settings")
 	fun view(@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): ReviewSettingsView {
-		people.refuseSessionToken(authorization, "read the review settings")
-		return settings.view()
+		val me = permissions.person(authorization, "read the review settings", Act.READ)
+		return settings.view(me.orgId!!)
 	}
 
 	@PutMapping("/review-settings")
@@ -246,8 +256,8 @@ class ReviewSettingsController(private val settings: ReviewSettingsService, priv
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: OrgReviewSettingsIn,
 	): ReviewSettingsView {
-		people.refuseSessionToken(authorization, "change the review settings")
-		return settings.setOrg(body, Requester.person())
+		val me = permissions.person(authorization, "change the review settings", Act.SETTINGS)
+		return settings.setOrg(body, me.person!!)
 	}
 
 	@PutMapping("/projects/{id}/risk-paths")
@@ -256,8 +266,8 @@ class ReviewSettingsController(private val settings: ReviewSettingsService, priv
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: ProjectRiskPathsIn,
 	): ReviewSettingsView {
-		people.refuseSessionToken(authorization, "change a project's risk paths")
-		return settings.setProject(id, body, Requester.person())
+		val me = permissions.person(authorization, "change a project's risk paths", Act.SETTINGS)
+		return settings.setProject(id, body, me.person!!)
 	}
 
 	@PostMapping("/reviews/{id}/proposal")
@@ -266,7 +276,7 @@ class ReviewSettingsController(private val settings: ReviewSettingsService, priv
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: ProposalIn,
 	): ReviewSettingsView {
-		people.refuseSessionToken(authorization, "add or dismiss a risk path candidate")
-		return settings.decideProposal(id, body, Requester.person())
+		val me = permissions.person(authorization, "add or dismiss a risk path candidate", Act.SETTINGS)
+		return settings.decideProposal(id, body, me.person!!)
 	}
 }

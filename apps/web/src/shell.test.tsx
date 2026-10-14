@@ -38,7 +38,7 @@ describe('screens', () => {
     const inNav = NAV_GROUPS.flatMap((g) => g.items);
     // The groups at the top, then the foot's settings place.
     expect([...inNav, ...FOOT_ITEMS]).toEqual(SCREENS.filter((s) => s.inNav).map((s) => s.id));
-    expect(FOOT_ITEMS).toEqual(['accounts', 'audit']);
+    expect(FOOT_ITEMS).toEqual(['me', 'org', 'accounts', 'audit']);
     expect(inNav).not.toContain('kit');
     expect(TAB_ITEMS.every((id) => inNav.includes(id))).toBe(true);
   });
@@ -71,9 +71,15 @@ describe('sidebar', () => {
     expect(html).not.toContain('accent');
   });
 
-  it('opens the AI accounts from the settings place at the foot, named on hover when folded', () => {
+  it('opens 「나」, 「조직」 and the AI accounts from the settings place at the foot, named on hover when folded', () => {
     const folded = sidebar(false);
-    expect(folded).toMatch(/<div class="side-foot"><ul><li><a class="it tipped" href="#accounts" data-tip="AI 계정">/);
+    expect(folded).toMatch(/<div class="side-foot"><ul><li><a class="it tipped" href="#me" data-tip="나">/);
+    expect(folded).toMatch(/<li><a class="it tipped" href="#org" data-tip="조직">/);
+    expect(folded).toMatch(/<li><a class="it tipped" href="#accounts" data-tip="AI 계정">/);
+    expect(matchScreen('나')?.id).toBe('me');
+    expect(matchScreen('매니저')?.id).toBe('me');
+    expect(matchScreen('조직')?.id).toBe('org');
+    expect(matchScreen('역할')?.id).toBe('org');
     expect(folded).not.toContain('aria-disabled="true"');
     expect(sidebar(true)).toMatch(/<a class="it" href="#accounts"><svg[^>]*>.*<\/svg><span class="nm">AI 계정<\/span><\/a>/);
     expect(matchScreen('설정')?.id).toBe('accounts');

@@ -6,7 +6,7 @@ import type { IconName } from '../icons/Icon';
  * address (#inbox, #work, ...) so a reload stays on the same screen.
  */
 
-export type ScreenId = 'inbox' | 'sessions' | 'work' | 'decisions' | 'documents' | 'risk' | 'runs' | 'accounts' | 'audit' | 'kit';
+export type ScreenId = 'inbox' | 'sessions' | 'work' | 'decisions' | 'documents' | 'risk' | 'runs' | 'me' | 'org' | 'accounts' | 'audit' | 'kit';
 
 export type Screen = {
   id: ScreenId;
@@ -38,6 +38,8 @@ export const SCREENS: Screen[] = [
   { id: 'documents', label: '문서', short: '문서', icon: 'doc', aliases: ['documents', 'docs'], inNav: true },
   { id: 'risk', label: '위험 목록', short: '위험', icon: 'alert', aliases: ['위험 경로', '사람 검토', 'risk'], inNav: true },
   { id: 'runs', label: '실행 시험', short: '실행', icon: 'run', aliases: ['실행', 'runs'], inNav: true },
+  { id: 'me', label: '나', short: '나', icon: 'person', aliases: ['내 기록', '매니저', 'me'], inNav: true },
+  { id: 'org', label: '조직', short: '조직', icon: 'team', aliases: ['팀', '사람', '역할', '저장소', '환경', 'org'], inNav: true },
   { id: 'accounts', label: 'AI 계정', short: '계정', icon: 'key', aliases: ['계정', '설정', '상한', '사용량', 'accounts', 'settings'], inNav: true },
   // The icon set is at its 30-icon limit (DESIGN.md 「정한 것 넷」 2), so the audit log borrows the settings mark of its place.
   { id: 'audit', label: '감사 기록', short: '감사', icon: 'settings', aliases: ['감사', '보존', '내보내기', 'audit', 'export'], inNav: true },
@@ -53,11 +55,12 @@ export const NAV_GROUPS: { id: string; label: string; items: ScreenId[] }[] = [
 ];
 
 /**
- * The screens at the foot of the sidebar, in the settings place (DESIGN.md 「화면 배치」 1: 설정 last).
- * Until a settings screen exists, the AI accounts and the audit log sit there: usage limits and
- * retention are organisation settings (G39.4, G13.1), and a settings screen will hold them as parts.
+ * The screens at the foot of the sidebar, in the settings place (DESIGN.md 「화면 배치」 1: 설정 last):
+ * 「나」 (my manager record, FN-0402), 「조직」 (the organisation's structure and roles, FN-0101), the AI
+ * accounts and the audit log. Usage limits and retention are organisation settings (G39.4, G13.1): a
+ * settings screen will hold the last three as its parts. On narrow screens all four are under 「더 보기」.
  */
-export const FOOT_ITEMS: ScreenId[] = ['accounts', 'audit'];
+export const FOOT_ITEMS: ScreenId[] = ['me', 'org', 'accounts', 'audit'];
 
 /** The four screens in the bottom tab bar; the rest go under 「더 보기」. */
 export const TAB_ITEMS: ScreenId[] = ['inbox', 'sessions', 'work', 'decisions'];

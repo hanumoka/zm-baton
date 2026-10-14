@@ -1,6 +1,10 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Requester
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
@@ -23,8 +27,8 @@ import java.time.OffsetDateTime
 // Handing a work item to an AI (contract v1 "위임", "실행 권리 청구" 1, "실행할 때 넘기는 것"), and
 // the repositories a device's local connector may run in. A person hands a `ready` work item made
 // here to Claude Code on one device and one repository; the server keeps the delegation, makes one
-// requested run with an instruction built from the work item, and makes the owner's manager the
-// executor. The run goes on one AI account (Accounts.kt): its sign-in method and usage limits travel
+// requested run with an instruction built from the work item, and makes the manager of the person who
+// hands it over the executor (FN-0402: one manager record per person). The run goes on one AI account (Accounts.kt): its sign-in method and usage limits travel
 // with the claim, and an account that is stopped now cannot take work. Handing over an `in_progress` work item again continues it:
 // the new run names the run it follows and why (contract "실행 권리 청구" 1-2), and a result in
 // `result_review` goes back with the person's reason in the same request.
@@ -73,9 +77,14 @@ class DelegationService(
 	/** Answered questions a continuing run carries (FN-0210). */
 	private val questions: QuestionService,
 	private val accounts: AccountService,
+	private val access: PermissionFacts,
+	private val org: OrgService,
 ) {
 	companion object {
-		/** The owner's manager (contract "담당"): stage 1 has one person and so one manager. */
+		/**
+		 * The stage-1 person's manager (Ids.managerOf of Requester.STAGE1_PERSON), kept for callers written
+		 * when one manager stood for everyone. The executor of a delegation is the manager of whoever hands it over.
+		 */
 		const val MANAGER = "mgr_owner"
 		val EXECUTORS = setOf("claude_code")
 		/** Tools a delegation may allow. No Bash: commands need their own rules first. */
@@ -98,9 +107,12 @@ class DelegationService(
 
 	// ---------------------------------------------------------------- device repositories
 
-	/** `zm-baton repo add`: the device says it can run in this repository. Adding again refreshes it. */
+	/**
+	 * `zm-baton repo add`: the device says it can run in this repository. Adding again refreshes it. The
+	 * repository becomes one of the device's organisation's too, when it is not yet.
+	 */
 	@Transactional
-	fun addRepository(deviceId: String, body: RepositoryUpsert): DeviceRepositoryView {
+	fun addRepository(deviceId: String, body: RepositoryUpsert, actor: String = Requester.STAGE1_PERSON): DeviceRepositoryView {
 		requireDevice(deviceId)
 		val repoKey = body.repoKey.trim()
 		if (!SessionService.isRepoKey(repoKey)) throw BadRequestException("repo_key is not a repository key")
@@ -117,34 +129,38 @@ class DelegationService(
 			""".trimIndent(),
 		).param("device", deviceId).param("key", repoKey).param("name", name)
 			.param("remote", sessions.cleanRemote(body.remote)).update()
-		sessions.audit("person", SessionService.OWNER, "device.repository_added", "dev", deviceId, mapOf("repo_key" to repoKey, "name" to name))
+		val orgId = jdbc.sql("select org_id from devices where id = :id").param("id", deviceId.trim()).query(String::class.java).single()
+		org.ensureRepository(orgId, repoKey, name, sessions.cleanRemote(body.remote))
+		sessions.audit("person", actor, "device.repository_added", "dev", deviceId, mapOf("repo_key" to repoKey, "name" to name))
 		return repositories(deviceId).first { it.repoKey == repoKey }
 	}
 
 	/** `zm-baton repo remove`. The row stays for the record; new delegations cannot name it. */
 	@Transactional
-	fun removeRepository(deviceId: String, repoKey: String): Boolean {
+	fun removeRepository(deviceId: String, repoKey: String, actor: String = Requester.STAGE1_PERSON): Boolean {
 		requireDevice(deviceId)
 		val removed = jdbc.sql(
 			"update device_repositories set removed_at = now(), updated_at = now() where device_id = :device and repo_key = :key and removed_at is null",
 		).param("device", deviceId).param("key", repoKey.trim()).update() == 1
 		if (removed) {
-			sessions.audit("person", SessionService.OWNER, "device.repository_removed", "dev", deviceId, mapOf("repo_key" to repoKey.trim()))
+			sessions.audit("person", actor, "device.repository_removed", "dev", deviceId, mapOf("repo_key" to repoKey.trim()))
 		}
 		return removed
 	}
 
-	/** The repositories devices can run in now, for the screen that hands work over. */
-	fun repositories(deviceId: String? = null): List<DeviceRepositoryView> {
+	/** The repositories devices (of [orgId] when given) can run in now, for the screen that hands work over. */
+	fun repositories(deviceId: String? = null, orgId: String? = null): List<DeviceRepositoryView> {
 		val stmt = jdbc.sql(
 			"""
 			select r.device_id, d.name as device_name, r.repo_key, r.name, r.remote, r.updated_at
 			  from device_repositories r join devices d on d.id = r.device_id
 			 where r.removed_at is null and d.revoked_at is null${if (deviceId != null) " and r.device_id = :device" else ""}
+			   ${if (orgId != null) " and d.org_id = :org" else ""}
 			 order by r.name, d.name, r.repo_key
 			""".trimIndent(),
 		)
 		if (deviceId != null) stmt.param("device", deviceId)
+		if (orgId != null) stmt.param("org", orgId)
 		return stmt.query { rs, _ ->
 			DeviceRepositoryView(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5),
 				rs.getObject(6, OffsetDateTime::class.java))
@@ -161,14 +177,15 @@ class DelegationService(
 
 	/**
 	 * Hands the work item to an AI: one delegation, one requested run with its instruction, and the
-	 * owner's manager as the executor, in one transaction with the version check. A continuing run
+	 * manager of [actor] (the person handing it over) as the executor, in one transaction with the
+	 * version check. A continuing run
 	 * (Workflow.delegationPlan) follows the newest ended run: it records that run and why it goes on
 	 * (`resume_after_cut` after a cut or cancelled run, `result_rejected` after a result went back),
 	 * and the instruction says so. Handing the work item on means the person looked at what the last
 	 * run left, so `outcome_unknown` and `readiness_failed` come off.
 	 */
 	@Transactional
-	fun delegate(workItemId: String, body: DelegateIn): WorkItemDetail {
+	fun delegate(workItemId: String, body: DelegateIn, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
 		val executor = body.executor.trim()
 		if (executor !in EXECUTORS) throw BadRequestException("executor must be one of $EXECUTORS")
 		val deviceId = body.deviceId.trim()
@@ -182,6 +199,7 @@ class DelegationService(
 		val askedBranch = body.baseBranch?.trim()?.ifEmpty { null }
 		if (askedBranch != null && !isBranchName(askedBranch)) throw BadRequestException("base_branch is not a usable branch name")
 
+		val manager = access.managerOf(actor, access.orgOf(actor)) ?: throw ConflictException("맡기는 사람($actor)의 매니저 기록이 없다")
 		val facts = workItems.lockFacts(workItemId, body.version)
 		val plan = Workflow.delegationPlan(facts)
 		val mode = plan.mode ?: throw ConflictException(plan.refusal ?: "맡길 수 없다")
@@ -198,7 +216,7 @@ class DelegationService(
 		val account = accounts.forDelegation(body.accountId?.trim()?.ifEmpty { null }, deviceId, responsible)
 		if (mode == Workflow.DelegationMode.REJECT_AND_RESUME) {
 			if (note == null) throw BadRequestException("결과를 돌려보내는 이유를 note에 쓴다")
-			workItems.transition(workItemId, TransitionIn("in_progress", body.version, note))
+			workItems.transition(workItemId, TransitionIn("in_progress", body.version, note), actor)
 		}
 		// Answers to questions the earlier runs asked go with a run that continues the work.
 		val answers = if (mode == Workflow.DelegationMode.RESUME) questions.answersToDeliver(workItemId) else emptyList()
@@ -222,14 +240,14 @@ class DelegationService(
 		val dlg = Ids.delegation()
 		val run = Ids.run()
 		val scope = linkedMapOf("executor" to executor, "repo_key" to repoKey, "base_branch" to baseBranch, "allowed_tools" to tools)
-		val callPath = listOf(mapOf("kind" to "person", "id" to SessionService.OWNER), mapOf("kind" to "manager", "id" to MANAGER))
+		val callPath = listOf(mapOf("kind" to "person", "id" to actor), mapOf("kind" to "manager", "id" to manager))
 		jdbc.sql(
 			"""
 			insert into delegations (id, work_item_id, granted_by_user_id, grantee_kind, grantee_id, device_id, account_id, scope, call_path, expires_at)
 			values (:id, :wid, :owner, 'manager', :manager, :device, :account, cast(:scope as jsonb), cast(:path as jsonb),
 			        now() + make_interval(hours => :hours))
 			""".trimIndent(),
-		).param("id", dlg).param("wid", workItemId).param("owner", SessionService.OWNER).param("manager", MANAGER).param("account", account.id)
+		).param("id", dlg).param("wid", workItemId).param("owner", actor).param("manager", manager).param("account", account.id)
 			.param("device", deviceId).param("scope", json.writeValueAsString(scope))
 			.param("path", json.writeValueAsString(callPath)).param("hours", DELEGATION_HOURS).update()
 		try {
@@ -247,7 +265,7 @@ class DelegationService(
 		questions.attachDelivery(answers.map { it.questionId }, run)
 		jdbc.sql(
 			"update work_items set executor_kind = 'manager', executor_id = :manager, version = version + 1, updated_at = now() where id = :id",
-		).param("manager", MANAGER).param("id", workItemId).update()
+		).param("manager", manager).param("id", workItemId).update()
 		workItems.clearWaits(workItemId, CLEARED_BY_HANDOFF)
 		workItems.record(
 			workItemId, "work_item.delegated",
@@ -255,6 +273,7 @@ class DelegationService(
 				"repo_key" to repoKey, "base_branch" to baseBranch, "allowed_tools" to tools, "account_id" to account.id,
 				"continue_reason" to continueReason, "resumed_from_run_id" to previous?.runId, "note" to note,
 				"answers" to answers.map { it.questionId }),
+			actor,
 		)
 		return workItems.detail(workItemId)
 	}
@@ -277,7 +296,7 @@ class DelegationService(
 	 * taken back here; stopping a running executor comes later.
 	 */
 	@Transactional
-	fun withdraw(runId: String, version: Long): WorkItemDetail {
+	fun withdraw(runId: String, version: Long, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
 		// The run first, then the work item: the same lock order as a report (RunService.ingest).
 		val run = jdbc.sql("select work_item_id, delegation_id from runs where id = :id for update")
 			.param("id", runId).query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional()
@@ -296,7 +315,7 @@ class DelegationService(
 		jdbc.sql(
 			"update work_items set executor_kind = null, executor_id = null, version = version + 1, updated_at = now() where id = :id",
 		).param("id", workItemId).update()
-		workItems.record(workItemId, "work_item.delegation_withdrawn", mapOf("delegation_id" to delegationId, "run_id" to runId))
+		workItems.record(workItemId, "work_item.delegation_withdrawn", mapOf("delegation_id" to delegationId, "run_id" to runId), actor)
 		return workItems.detail(workItemId)
 	}
 
@@ -417,7 +436,7 @@ object Instructions {
 
 @RestController
 @RequestMapping("/api")
-class DelegationController(private val delegations: DelegationService, private val people: PersonService) {
+class DelegationController(private val delegations: DelegationService, private val permissions: Permissions) {
 
 	@PostMapping("/work-items/{id}/delegations")
 	@ResponseStatus(HttpStatus.CREATED)
@@ -426,8 +445,9 @@ class DelegationController(private val delegations: DelegationService, private v
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: DelegateIn,
 	): WorkItemDetail {
-		people.refuseSessionToken(authorization, "hand a work item to an AI")
-		return delegations.delegate(id, body)
+		val me = permissions.person(authorization, "hand a work item to an AI")
+		permissions.require(me, Act.WORK_HANDOFF, permissions.workItem(id))
+		return delegations.delegate(id, body, me.person!!)
 	}
 
 	@PostMapping("/runs/{id}/withdraw")
@@ -436,14 +456,15 @@ class DelegationController(private val delegations: DelegationService, private v
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: WithdrawIn,
 	): WorkItemDetail {
-		people.refuseSessionToken(authorization, "take back a delegation")
-		return delegations.withdraw(id, body.version)
+		val me = permissions.person(authorization, "take back a delegation")
+		permissions.require(me, Act.WORK_HANDOFF, permissions.run(id))
+		return delegations.withdraw(id, body.version, me.person!!)
 	}
 
 	@GetMapping("/repositories")
 	fun repositories(@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): List<DeviceRepositoryView> {
-		people.refuseSessionToken(authorization, "list repositories")
-		return delegations.repositories()
+		val me = permissions.person(authorization, "list repositories", Act.READ)
+		return delegations.repositories(orgId = me.orgId)
 	}
 
 	@PostMapping("/devices/{id}/repositories")
@@ -452,8 +473,9 @@ class DelegationController(private val delegations: DelegationService, private v
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: RepositoryUpsert,
 	): DeviceRepositoryView {
-		people.refuseSessionToken(authorization, "add a repository to a device")
-		return delegations.addRepository(id, body)
+		val me = permissions.person(authorization, "add a repository to a device")
+		permissions.require(me, Act.DEVICE, permissions.device(id))
+		return delegations.addRepository(id, body, me.person!!)
 	}
 
 	@DeleteMapping("/devices/{id}/repositories")
@@ -462,7 +484,8 @@ class DelegationController(private val delegations: DelegationService, private v
 		@RequestParam("repo_key") repoKey: String,
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 	): Map<String, Boolean> {
-		people.refuseSessionToken(authorization, "remove a repository from a device")
-		return mapOf("removed" to delegations.removeRepository(id, repoKey))
+		val me = permissions.person(authorization, "remove a repository from a device")
+		permissions.require(me, Act.DEVICE, permissions.device(id))
+		return mapOf("removed" to delegations.removeRepository(id, repoKey, me.person!!))
 	}
 }

@@ -42,6 +42,7 @@ class MasterCheckTests @Autowired constructor(
 	private val material: ContradictionMaterial,
 	private val settings: MasterSettings,
 	transactions: PlatformTransactionManager,
+	private val org: OrgService,
 ) {
 	private val base = "http://localhost:" + env.getRequiredProperty("local.server.port")
 	private val http = HttpClient.newHttpClient()
@@ -132,6 +133,37 @@ class MasterCheckTests @Autowired constructor(
 
 	private val first = "# 실행 안내\n\n마스터는 서버에서 API 키로 돈다.\n크레딧이 바닥나면 소유자 PC의 연결 프로그램이 돈다."
 	private val second = "# 마스터 운영\n\n마스터는 개인 구독으로 서버에서 돈다.\n크레딧 이야기는 없다."
+
+	@Test
+	fun `the master's work is the organisation owner's through the owner's manager, and a notice goes to the records' owners`() {
+		device()
+		val p = project()
+		val a = approvedDocument("소유자 문서", first, p)
+		val other = org.addPerson("usr_owner", PersonIn("문서 주인", listOf("requester", "assignee")))
+		val d = ok("POST", "/api/documents", mapOf("title" to "다른 사람 문서", "source_of_truth" to "product", "project_id" to p, "body_markdown" to second))
+		val b = (d["document"] as Map<*, *>)["id"] as String
+		jdbc.sql("update documents set owner_user_id = :o where id = :id").param("o", other).param("id", b).update()
+		ok("POST", "/api/documents/$b/versions/1/approvals", mapOf("decision" to "approved"))
+		val check = checkFor(versionId(b))
+		val work = jdbc.sql("select org_id, responsible_user_id, executor_kind, executor_id from work_items where id = :id")
+			.param("id", check["work_item_id"]).query { rs, _ -> listOf(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4)) }.single()
+		assertEquals(listOf("org_owner", "usr_owner", "manager", "mgr_owner"), work)
+		val delegation = jdbc.sql("select granted_by_user_id, grantee_id from delegations where work_item_id = :id").param("id", check["work_item_id"])
+			.query { rs, _ -> rs.getString(1) to rs.getString(2) }.single()
+		assertEquals("usr_owner" to "mgr_owner", delegation)
+		assertEquals("org_owner", jdbc.sql("select org_id from master_checks where id = :id").param("id", check["id"]).query(String::class.java).single())
+
+		answer(check["run_id"] as String, """
+			{"candidates":[{"left":"S1","left_quote":"마스터는 개인 구독으로 서버에서 돈다.","right":"C1","right_quote":"마스터는 서버에서 API 키로 돈다.","reason":"다르다"}]}
+		""".trimIndent())
+		checks.sweep()
+		val notice = ((checkFor(versionId(b))["outcome"] as Map<*, *>)["notice_ids"] as List<*>).single() as String
+		val recipients = jdbc.sql("select array_to_string(recipients, ',') from notices where id = :id").param("id", notice).query(String::class.java).single()
+		assertEquals(setOf(other, "usr_owner"), recipients.split(',').toSet(), "the owners of both documents")
+		assertEquals(other, jdbc.sql("select user_id from inbox_items where source_id = :id").param("id", notice).query(String::class.java).single(),
+			"the first-screen item goes to the subject's owner")
+		assertTrue(a.isNotEmpty())
+	}
 
 	@Test
 	fun `an approved version becomes the owner's master run, and its checked answer a notice a person judges`() {

@@ -1,0 +1,62 @@
+/*
+ * The 「나」 screen: one page, not a list and a detail. The head and the sections reuse the detail's
+ * parts (ui/panes.css: .dt, .dt-facts, .dt-grid, .dt-sec, .dt-aside); here are the status card block,
+ * my work and session rows, the notes and the work record. Every value is a token.
+ */
+
+main.me-page { max-width: none; min-height: calc(100dvh - var(--h-tool, var(--h-cmd))); padding: 0; background: var(--c-paper); }
+.me .dt-title { margin-top: var(--s-4); }
+
+/* Section heads: the detail's small heads, at h2 because the page has its own h1 */
+.me-h { display: flex; align-items: baseline; gap: var(--s-2); margin: 0 0 var(--s-2); font-size: var(--fs-sm); font-weight: var(--fw-semi); line-height: var(--lh-row); color: var(--c-ink-2); }
+.me-h .n { font-weight: var(--fw-regular); }
+.me-note { max-width: var(--w-text); margin: 0 0 var(--s-2); font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+
+/* The card exactly as a session gets it: monospace, lines kept, wrapping inside the column */
+.me-card {
+  max-width: var(--w-text);
+  margin: 0;
+  padding: var(--s-3);
+  border: var(--rule) solid var(--c-rule);
+  border-radius: var(--r-sm);
+  background: var(--c-canvas);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Work and session rows: like a list row, as links to their screens */
+.me-rows { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.me-row { display: flex; flex-direction: column; gap: var(--s-0); padding: var(--s-2) 0; border-top: var(--rule) solid var(--c-rule-soft); color: var(--c-ink); text-decoration: none; }
+.me-rows li:first-child .me-row { border-top: 0; }
+.me-row:hover .me-title { text-decoration: underline; text-underline-offset: var(--underline-gap); }
+.me-row:focus-visible { outline: var(--ring) solid var(--c-accent); outline-offset: var(--ring); }
+.me-l1 { display: flex; align-items: center; gap: var(--s-2); min-width: 0; line-height: var(--lh-row); }
+.me-state { flex: none; font-size: var(--fs-xs); font-weight: var(--fw-semi); }
+.me-title { flex: 1; min-width: 0; font-weight: var(--fw-medium); overflow-wrap: anywhere; }
+.me-sub { display: -webkit-box; padding-left: calc(var(--icon) + var(--s-2)); overflow: hidden; font-size: var(--fs-xs); line-height: var(--lh-row); color: var(--c-ink-2); overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+.me-more { margin-top: var(--s-2); }
+.me-more > summary { min-height: var(--h-btn-sm); padding: var(--s-1) 0; font-size: var(--fs-sm); color: var(--c-ink-2); cursor: pointer; }
+.me-more > summary:focus-visible { outline: var(--ring) solid var(--c-accent); outline-offset: var(--ring); }
+.me-private { margin-right: var(--s-2); padding: 0 var(--s-1); border: var(--rule) solid var(--c-rule-strong); border-radius: var(--r-xs); color: var(--c-ink); }
+
+/* Notes: mine alone, said beside a lock */
+.me-aside { display: flex; flex-direction: column; gap: var(--s-6); }
+.me-private-line { display: flex; align-items: flex-start; gap: var(--s-2); }
+.me-private-line .ico { flex: none; margin-top: var(--s-0); }
+.me-add { display: flex; flex-direction: column; gap: var(--s-2); margin: 0 0 var(--s-3); }
+.me-add .field,
+.me-note-item .field { width: 100%; }
+.me-note-list { display: flex; flex-direction: column; gap: var(--s-3); margin: 0; padding: 0; list-style: none; }
+.me-note-item { padding-top: var(--s-3); border-top: var(--rule) solid var(--c-rule-soft); }
+.me-note-item form { display: flex; flex-direction: column; gap: var(--s-2); margin: 0; }
+.me-note-body { margin: 0; font-size: var(--fs-md); line-height: var(--lh-body); white-space: pre-wrap; overflow-wrap: anywhere; }
+.me-note-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-1) var(--s-2); margin: var(--s-1) 0 0; font-size: var(--fs-xs); color: var(--c-ink-2); }
+.me-note-meta .btn { min-height: var(--h-btn-sm); padding: 0 var(--s-2); font-size: var(--fs-xs); }
+
+/* The work record: what I or my sessions did, with the record it touched */
+.me-activity .wd-hist a { color: var(--c-ink-2); }
+.me-activity code { font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.me-by { color: var(--c-ink-2); }

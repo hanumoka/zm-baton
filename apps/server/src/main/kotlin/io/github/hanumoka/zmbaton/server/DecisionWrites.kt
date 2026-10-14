@@ -1,5 +1,9 @@
 package io.github.hanumoka.zmbaton.server
 
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.Permissions
+import io.github.hanumoka.zmbaton.server.permission.Visibility
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
@@ -37,6 +41,7 @@ class DecisionWriteService(
 	private val decisions: DecisionService,
 	private val approvals: ApprovalService,
 	private val sessions: SessionService,
+	private val access: PermissionFacts,
 	private val events: ApplicationEventPublisher,
 ) {
 	companion object {
@@ -91,9 +96,11 @@ class DecisionWriteService(
 
 	// ---------------------------------------------------------------- propose and edit
 
-	/** A new proposal, numbered `DCS-NNNN`. */
+	/** A new proposal, numbered `DCS-NNNN`, in [actor]'s organisation and owned by them. */
 	@Transactional
-	fun propose(body: Map<String, Any?>, actor: String): DecisionDetail {
+	fun propose(proposal: Map<String, Any?>, actor: String): DecisionDetail {
+		val visibility = visibility(proposal["visibility"]) ?: Visibility.ORG
+		val body = proposal - "visibility"
 		unknownFields(body.keys)
 		if (body["question"] == null) throw BadRequestException("question is required")
 		val empty = Draft("", null, emptyList(), null, null, null, null, DecisionRoles(driver = actor), emptyList(), emptyList(), null)
@@ -103,11 +110,12 @@ class DecisionWriteService(
 		jdbc.sql(
 			"""
 			insert into decisions (id, org_id, number, question, status, source_of_truth, context, options, chosen_option,
-			                       choice, rationale, review_conditions, roles, supersedes_id)
+			                       choice, rationale, review_conditions, roles, supersedes_id, owner_user_id, visibility)
 			values (:id, :org, :number, :question, 'proposed', 'product', :context, cast(:options as jsonb), :chosen,
-			        :choice, :rationale, :review, cast(:roles as jsonb), :supersedes)
+			        :choice, :rationale, :review, cast(:roles as jsonb), :supersedes, :owner, :visibility)
 			""".trimIndent(),
-		).param("id", id).param("org", WorkItemService.ORG).param("number", number).also { bind(it, draft) }.update()
+		).param("id", id).param("org", access.orgOf(actor)).param("number", number).param("owner", actor)
+			.param("visibility", visibility.wire).also { bind(it, draft) }.update()
 		writeLinks(id, draft)
 		audit(actor, "decision.proposed", id, mapOf("ref" to DecisionService.refOf(number), "question" to draft.question))
 		return decisions.detail(id, actor)
@@ -118,14 +126,23 @@ class DecisionWriteService(
 	 * clears the field; `question` cannot be cleared. `version` must be the version the person saw.
 	 */
 	@Transactional
-	fun update(id: String, patch: Map<String, Any?>, actor: String): DecisionDetail {
+	fun update(id: String, changes: Map<String, Any?>, actor: String): DecisionDetail {
+		val visibility = if ("visibility" in changes) visibility(changes["visibility"]) ?: throw BadRequestException("visibility cannot be cleared") else null
+		val patch = changes - "visibility"
 		val version = (patch["version"] as? Number)?.toLong() ?: throw BadRequestException("version is required")
 		unknownFields(patch.keys - "version")
 		val row = lock(id, version)
 		allow(row, actor, DecisionRules.EDIT)
 		val before = current(id)
 		val after = overlay(before, patch - "version", actor, selfId = id)
-		val changed = FIELDS.filter { it in patch && before.value(it) != after.value(it) }
+		val changed = FIELDS.filter { it in patch && before.value(it) != after.value(it) }.toMutableList()
+		if (visibility != null) {
+			val now = jdbc.sql("select visibility from decisions where id = :id").param("id", id).query(String::class.java).single()
+			if (now != visibility.wire) {
+				jdbc.sql("update decisions set visibility = :v where id = :id").param("v", visibility.wire).param("id", id).update()
+				changed += "visibility"
+			}
+		}
 		if (changed.isEmpty()) throw BadRequestException("nothing to change")
 		jdbc.sql(
 			"""
@@ -265,7 +282,7 @@ class DecisionWriteService(
 		if ("supersedes_id" in fields) d = d.copy(supersedesId = supersedes(fields["supersedes_id"], actor, selfId))
 		val chosen = d.chosenOption
 		if (chosen != null && d.options.none { it.key == chosen }) throw BadRequestException("chosen_option $chosen is not one of the options")
-		return d.copy(roles = d.roles.copy(approver = ApprovalPolicy.approverFor(WorkItemService.ORG, "decision")))
+		return d.copy(roles = d.roles.copy(approver = access.approverFor(access.orgOf(actor), "decision")))
 	}
 
 	private fun unknownFields(keys: Set<String>) {
@@ -307,10 +324,10 @@ class DecisionWriteService(
 		val m = raw as? Map<*, *> ?: throw BadRequestException("roles must be an object")
 		val unknown = m.keys.map { it.toString() } - setOf("driver", "approver", "contributors", "informed")
 		if (unknown.isNotEmpty()) throw BadRequestException("unknown roles $unknown")
-		val approver = ApprovalPolicy.approverFor(WorkItemService.ORG, "decision")
+		val approver = access.approverFor(access.orgOf(actor), "decision")
 		val asked = text(m["approver"], "approver", NAME_MAX)
 		if (asked != null && asked != approver) {
-			throw BadRequestException("1단계의 승인자는 ${ApprovalPolicy.label(approver)} 한 명이다. 다른 승인자는 권한 판정이 생긴 뒤에 고른다")
+			throw BadRequestException("1단계의 승인자는 조직 소유자 ${ApprovalPolicy.label(approver)} 한 명이다. 다른 승인자는 역할과 책임자(FN-0102)가 생긴 뒤에 고른다")
 		}
 		return DecisionRoles(
 			driver = text(m["driver"], "driver", NAME_MAX) ?: actor,
@@ -372,11 +389,17 @@ class DecisionWriteService(
 
 	private fun audit(actor: String, action: String, id: String, details: Map<String, Any?>) =
 		sessions.audit("person", actor, action, "dcs", id, details)
+
+	/** A sharing scope from input; null when absent. */
+	private fun visibility(raw: Any?): Visibility? {
+		val t = (raw as? String)?.trim()?.ifEmpty { null } ?: return null
+		return Visibility.parse(t) ?: throw BadRequestException("visibility must be one of ${Visibility.entries.map { it.wire }}")
+	}
 }
 
 @RestController
 @RequestMapping("/api")
-class DecisionWriteController(private val writes: DecisionWriteService, private val people: PersonService) {
+class DecisionWriteController(private val writes: DecisionWriteService, private val permissions: Permissions) {
 
 	/** A new proposal. The body has the same fields as a change, without `version`. */
 	@PostMapping("/decisions")
@@ -385,8 +408,8 @@ class DecisionWriteController(private val writes: DecisionWriteService, private 
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: Map<String, Any?>,
 	): DecisionDetail {
-		people.refuseSessionToken(authorization, "propose a decision")
-		return writes.propose(body, Requester.person())
+		val me = permissions.person(authorization, "propose a decision", Act.DECISION_WRITE)
+		return writes.propose(body, me.person!!)
 	}
 
 	/** Changes only the fields present in the body; `version` is required. */
@@ -396,8 +419,11 @@ class DecisionWriteController(private val writes: DecisionWriteService, private 
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody patch: Map<String, Any?>,
 	): DecisionDetail {
-		people.refuseSessionToken(authorization, "change a decision")
-		return writes.update(id, patch, Requester.person())
+		val me = permissions.person(authorization, "change a decision")
+		val target = permissions.decision(id)
+		permissions.require(me, Act.DECISION_WRITE, target)
+		if ("visibility" in patch) permissions.require(me, Act.SHARE, target)
+		return writes.update(id, patch, me.person!!)
 	}
 
 	/** Accept (`approved`) or reject (`rejected`) a proposal (data model "approvals"). */
@@ -407,7 +433,8 @@ class DecisionWriteController(private val writes: DecisionWriteService, private 
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: ApprovalIn,
 	): DecisionDetail {
-		people.refuseSessionToken(authorization, "accept or reject a decision")
-		return writes.approve(id, body, Requester.person())
+		val me = permissions.person(authorization, "accept or reject a decision")
+		permissions.require(me, Act.DECISION_APPROVE, permissions.decision(id))
+		return writes.approve(id, body, me.person!!)
 	}
 }

@@ -6,6 +6,7 @@ import { StageGlyph } from '../icons/StageGlyph';
 import { RowSkeleton } from '../ui/Group';
 import { OpenContradictions } from '../ui/OpenContradictions';
 import { Prose } from '../ui/Prose';
+import { visibilityLabel } from '../ui/visibility';
 import { isBlocked } from '../work/workView';
 import { at, decisionStatusLabel, stageLabel } from '../workModel';
 import { workHref } from '../decisions/decisionView';
@@ -84,6 +85,10 @@ export function DocumentDetailView({ doc, detail, actions, error = null, titleRe
           <dd>
             <code>{it.owner_user_id}</code>
           </dd>
+        </div>
+        <div>
+          <dt>공유 범위</dt>
+          <dd>{visibilityLabel(it.visibility)}</dd>
         </div>
       </dl>
       {git && (

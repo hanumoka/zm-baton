@@ -10,6 +10,7 @@
 - 맡긴 AI 실행의 결과는 스냅샷 커밋으로 고정하고, 위험 경로에 걸린 것과 표본만 「나를 기다리는 것」으로 보내 사람이 승인·반려한다. 나머지는 「사람 미확인」으로 남는다. 쓰는 방법은 [docs/stage1/human-review.md](docs/stage1/human-review.md)에 있다.
 - 작업에 질문을 남기면 원문 책임자의 「나를 기다리는 것」으로 가고, 답이 올 때까지 작업에 「질문 답 대기」가 붙는다. AI 실행이 물은 것은 답을 다음 실행의 지시에 넣어 이어 간다. 쓰는 방법은 [docs/stage1/questions.md](docs/stage1/questions.md)에 있다.
 - 문서마다 정본 위치(제품 안 / Git)를 하나로 정하고, 제품 안 문서는 판을 쌓아 승인한다. 쓰는 방법은 [docs/stage1/documents.md](docs/stage1/documents.md)에 있다.
+- 조직(사람·역할·팀·제품·프로젝트·저장소·환경)을 서버에 두고, 「누가 무엇을 해도 되나」를 서버의 한 판정기가 역할과 공유 범위(개인·제한·팀·조직·공개)로 정한다. 사람마다 매니저 기록(상태 카드·작업·세션·개인 메모)이 있다. 사람 인증 전이라 요청한 사람은 늘 소유자다. 쓰는 방법은 [docs/stage1/org-and-permissions.md](docs/stage1/org-and-permissions.md)에 있다.
 - 데이터베이스는 매일 백업되고, 손으로 백업·복원하고 백업을 먼저 뜬 뒤 업데이트하는 스크립트가 있다([docs/stage1/backup-restore-update.md](docs/stage1/backup-restore-update.md)). 감사 기록·보존 규칙·내보내기는 [docs/stage1/audit-retention-export.md](docs/stage1/audit-retention-export.md)에 있다.
 - 변경은 PR로 들어온다. 모든 PR에 CI가 돈다. 검토 기준은 [docs/review-standard.md](docs/review-standard.md)에 있다.
 

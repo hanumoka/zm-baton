@@ -1,6 +1,8 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
@@ -207,7 +209,7 @@ class AuditService(private val jdbc: JdbcClient, private val json: ObjectMapper)
 
 @RestController
 @RequestMapping("/api")
-class AuditController(private val audit: AuditService, private val people: PersonService) {
+class AuditController(private val audit: AuditService, private val permissions: Permissions) {
 
 	/** `GET /api/audit?target_kind=wrk&target_id=wrk_…&limit=50`; the next page passes `before=<last id>`. */
 	@GetMapping("/audit")
@@ -223,7 +225,7 @@ class AuditController(private val audit: AuditService, private val people: Perso
 		@RequestParam(name = "actor_class", required = false) actorClass: String?,
 		@RequestParam(required = false) after: String?,
 	): List<AuditEntry> {
-		people.refuseSessionToken(authorization, "read the audit log")
+		permissions.person(authorization, "read the audit log", Act.AUDIT_READ)
 		return audit.list(AuditQuery(targetKind, targetId, actorKind, actorId, action, before, limit, actorClass, after))
 	}
 
@@ -236,13 +238,13 @@ class AuditController(private val audit: AuditService, private val people: Perso
 		@RequestParam(name = "actor_class", required = false) actorClass: String?,
 		@RequestParam(required = false) after: String?,
 	): AuditFacets {
-		people.refuseSessionToken(authorization, "read the audit log")
+		permissions.person(authorization, "read the audit log", Act.AUDIT_READ)
 		return audit.facets(AuditQuery(targetKind = targetKind, targetId = targetId, actorClass = actorClass, after = after))
 	}
 
 	@GetMapping("/audit/{id}")
 	fun one(@PathVariable id: String, @RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): AuditEntry {
-		people.refuseSessionToken(authorization, "read the audit log")
+		permissions.person(authorization, "read the audit log", Act.AUDIT_READ)
 		return audit.one(id)
 	}
 }

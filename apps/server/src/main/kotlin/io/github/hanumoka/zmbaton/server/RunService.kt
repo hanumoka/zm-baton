@@ -1,5 +1,6 @@
 package io.github.hanumoka.zmbaton.server
 
+import io.github.hanumoka.zmbaton.server.auth.Requester
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -74,9 +75,9 @@ class RunService(
 	fun createWorkItem(title: String, responsibleUserId: String): WorkItemCreated =
 		workItems.create(CreateWorkItem(title, responsibleUserId))
 
-	/** The compat test's run: no delegation, any connector may claim it. */
+	/** The compat test's run: no delegation, any connector may claim it. [actor] asked for it. */
 	@Transactional
-	fun createRun(workItemId: String, executor: String): RunCreated {
+	fun createRun(workItemId: String, executor: String, actor: String = Requester.STAGE1_PERSON): RunCreated {
 		val id = Ids.run()
 		val inserted = try {
 			jdbc.sql(
@@ -89,7 +90,7 @@ class RunService(
 			throw ConflictException("work item $workItemId already has a live run")
 		}
 		if (inserted == 0) throw NotFoundException("no ready work item $workItemId")
-		sessions.audit("person", SessionService.OWNER, "run.requested", "run", id, mapOf("work_item_id" to workItemId, "executor" to executor))
+		sessions.audit("person", actor, "run.requested", "run", id, mapOf("work_item_id" to workItemId, "executor" to executor))
 		return RunCreated(id, workItemId, "requested")
 	}
 

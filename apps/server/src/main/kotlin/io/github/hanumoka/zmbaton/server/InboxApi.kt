@@ -1,6 +1,10 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Requester
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Actor
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -23,8 +27,8 @@ import java.time.OffsetDateTime
 
 // The person's side: the first screen ("나를 기다리는 것", contract v1 "첫 화면"), the session
 // list and the judgement of a conflict notice. These are person actions, so a session token is
-// refused here and the refusal is audited (contract "등록과 세션 토큰" 6). There is no person
-// authentication yet; the server listens on loopback only.
+// refused here and the refusal is audited (contract "등록과 세션 토큰" 6; Requester). There is no
+// person authentication yet; the server listens on loopback only.
 
 data class SessionView(
 	val id: String,
@@ -87,22 +91,15 @@ class PersonService(
 	private val listType = object : TypeReference<List<String>>() {}
 
 	/**
-	 * Person actions do not accept a session token. Not transactional on purpose: the audit
-	 * row of a refusal must survive the refusal.
+	 * The organisation's session board: every session of [viewer]'s organisation (all without one).
+	 * What a session works on shows only when it is shared with the organisation; a person sees their
+	 * own unshared summaries in their manager record, not here.
 	 */
-	fun refuseSessionToken(authorization: String?, action: String) {
-		val token = SessionTokens.bearer(authorization) ?: return
-		val sessionId = jdbc.sql("select id from agent_sessions where token_hash = :hash")
-			.param("hash", SessionTokens.hash(token)).query(String::class.java).optional().orElse("unknown")
-		sessions.audit("session", sessionId, "person_action.refused", "api", action, mapOf("reason" to "session token"))
-		throw ForbiddenException("$action is a person action; a session token cannot do it")
-	}
-
-	fun sessions(includeEnded: Boolean, limit: Int): List<SessionView> =
+	fun sessions(includeEnded: Boolean, limit: Int, viewer: Actor? = null): List<SessionView> =
 		jdbc.sql(
 			"""
 			select a.id, a.executor, a.executor_version, d.name as device_name, a.repository::text as repository, a.repo_key,
-			       a.current_work, a.share_current_work, a.current_work_at, a.created_at, a.last_seen_at,
+			       a.current_work, a.current_work_visibility, a.current_work_at, a.created_at, a.last_seen_at,
 			       case when a.deregistered_at is not null then 'deregistered'
 			            when a.ended_at is not null then 'ended'
 			            when a.token_expires_at <= now() then 'expired'
@@ -115,12 +112,13 @@ class PersonService(
 			          where n.status in ('open', 'acknowledged')
 			            and n.evidence -> 'sessions' @> jsonb_build_array(jsonb_build_object('session_id', a.id))), '[]') as conflicted
 			  from agent_sessions a join devices d on d.id = a.device_id
-			 where cast(:all as boolean) or (a.ended_at is null and a.deregistered_at is null and a.token_expires_at > now())
+			 where (cast(:all as boolean) or (a.ended_at is null and a.deregistered_at is null and a.token_expires_at > now()))
+			   and (cast(:org as text) is null or a.org_id = :org)
 			 order by a.last_seen_at desc
 			 limit :limit
 			""".trimIndent(),
-		).param("all", includeEnded).param("limit", limit).query { rs, _ ->
-			val shared = rs.getBoolean("share_current_work")
+		).param("all", includeEnded).param("limit", limit).param("org", viewer?.orgId).query { rs, _ ->
+			val shared = rs.getString("current_work_visibility") != "personal"
 			SessionView(
 				id = rs.getString("id"),
 				executor = rs.getString("executor"),
@@ -145,7 +143,7 @@ class PersonService(
 	 * [RelayService.RECENT_MINUTES] after it closed, so the person sees whether the answer reached the
 	 * executor; those come after the open ones of their bucket.
 	 */
-	fun inbox(): List<InboxItemView> =
+	fun inbox(person: String = Requester.STAGE1_PERSON): List<InboxItemView> =
 		jdbc.sql(
 			"""
 			select id, bucket, kind, source_kind, source_id, summary, detail::text as detail, wait_kind, repeat_count,
@@ -159,7 +157,7 @@ class PersonService(
 			                 or (relay_deadline is not null and closed_at > now() - make_interval(mins => :recent)))))
 			 order by case when promoted_at is null then bucket else 1 end, state not in ('open', 'answered'), waiting_since, id
 			""".trimIndent(),
-		).param("user", SessionService.OWNER).param("recent", RelayService.RECENT_MINUTES).query { rs, _ ->
+		).param("user", person).param("recent", RelayService.RECENT_MINUTES).query { rs, _ ->
 			InboxItemView(
 				id = rs.getString("id"),
 				bucket = rs.getInt("bucket"),
@@ -188,7 +186,7 @@ class PersonService(
 	 * off the first screen in the same transaction; "not a conflict" needs a reason.
 	 */
 	@Transactional
-	fun judgeNotice(noticeId: String, body: NoticeStatusIn): NoticeStatusOut {
+	fun judgeNotice(noticeId: String, body: NoticeStatusIn, actor: String = Requester.STAGE1_PERSON): NoticeStatusOut {
 		val status = body.status.trim()
 		if (status !in setOf("acknowledged", "not_a_conflict", "resolved")) {
 			throw BadRequestException("status must be acknowledged, not_a_conflict or resolved")
@@ -200,7 +198,7 @@ class PersonService(
 			update notices set status = :status, status_by = :user, status_at = now(), status_note = :note
 			 where id = :id
 			""".trimIndent(),
-		).param("status", status).param("user", SessionService.OWNER).param("note", note).param("id", noticeId).update()
+		).param("status", status).param("user", actor).param("note", note).param("id", noticeId).update()
 		if (updated == 0) throw NotFoundException("no notice $noticeId")
 		jdbc.sql(
 			"""
@@ -208,14 +206,14 @@ class PersonService(
 			 where source_kind = 'ntc' and source_id = :id and state = 'open'
 			""".trimIndent(),
 		).param("id", noticeId).update()
-		sessions.audit("person", SessionService.OWNER, "notice.$status", "ntc", noticeId, mapOf("note" to note))
+		sessions.audit("person", actor, "notice.$status", "ntc", noticeId, mapOf("note" to note))
 		return NoticeStatusOut(noticeId, status)
 	}
 }
 
 @RestController
 @RequestMapping("/api")
-class PersonController(private val people: PersonService) {
+class PersonController(private val people: PersonService, private val permissions: Permissions) {
 
 	@GetMapping("/sessions")
 	fun sessions(
@@ -223,14 +221,15 @@ class PersonController(private val people: PersonService) {
 		@RequestParam(name = "include_ended", defaultValue = "false") includeEnded: Boolean,
 		@RequestParam(defaultValue = "50") limit: Int,
 	): List<SessionView> {
-		people.refuseSessionToken(authorization, "list sessions")
-		return people.sessions(includeEnded, limit.coerceIn(1, 200))
+		val me = permissions.person(authorization, "list sessions", Act.READ)
+		return people.sessions(includeEnded, limit.coerceIn(1, 200), me)
 	}
 
+	/** My first screen: only what waits for me. */
 	@GetMapping("/inbox")
 	fun inbox(@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): List<InboxItemView> {
-		people.refuseSessionToken(authorization, "read the first screen")
-		return people.inbox()
+		val me = permissions.person(authorization, "read the first screen", Act.READ)
+		return people.inbox(me.person!!)
 	}
 
 	@PostMapping("/notices/{id}/status")
@@ -239,8 +238,9 @@ class PersonController(private val people: PersonService) {
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: NoticeStatusIn,
 	): NoticeStatusOut {
-		people.refuseSessionToken(authorization, "judge a notice")
-		return people.judgeNotice(id, body)
+		val me = permissions.person(authorization, "judge a notice")
+		permissions.require(me, Act.NOTICE_JUDGE, permissions.notice(id))
+		return people.judgeNotice(id, body, me.person!!)
 	}
 }
 

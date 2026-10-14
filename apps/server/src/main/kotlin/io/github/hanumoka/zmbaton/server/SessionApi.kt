@@ -1,6 +1,7 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.web.bind.annotation.GetMapping
@@ -106,12 +107,18 @@ object SessionTokens {
 
 @RestController
 @RequestMapping("/api")
-class SessionController(private val sessions: SessionService) {
+class SessionController(private val sessions: SessionService, private val permissions: Permissions) {
 
-	/** `zm-baton login`: one record per device. No person authentication yet (loopback only). */
+	/**
+	 * `zm-baton login`: one record per device, of the person who logs in (Requester; no person
+	 * authentication yet, loopback only). A session token is refused: a device is a person's.
+	 */
 	@PostMapping("/devices")
 	@ResponseStatus(HttpStatus.CREATED)
-	fun registerDevice(@RequestBody body: RegisterDevice): DeviceRegistered = sessions.registerDevice(body)
+	fun registerDevice(
+		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
+		@RequestBody body: RegisterDevice,
+	): DeviceRegistered = sessions.registerDevice(body, permissions.person(authorization, "register a device").person!!)
 
 	/** The start hook of a directly opened session (`zm-baton session register`). */
 	@PostMapping("/sessions")

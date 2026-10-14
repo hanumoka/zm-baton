@@ -1,6 +1,8 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Configuration
@@ -213,12 +215,12 @@ class RetentionJob(private val retention: RetentionService) {
 
 @RestController
 @RequestMapping("/api")
-class RetentionController(private val retention: RetentionService, private val people: PersonService) {
+class RetentionController(private val retention: RetentionService, private val permissions: Permissions) {
 
 	/** The retention period of each kind (null: kept forever) and the last run. Read-only: periods are settings. */
 	@GetMapping("/settings/retention")
 	fun view(@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): RetentionView {
-		people.refuseSessionToken(authorization, "read the retention setting")
+		permissions.person(authorization, "read the retention setting", Act.READ)
 		return retention.view()
 	}
 }
