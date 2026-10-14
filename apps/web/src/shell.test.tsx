@@ -38,7 +38,7 @@ describe('screens', () => {
     const inNav = NAV_GROUPS.flatMap((g) => g.items);
     // The groups at the top, then the foot's settings place.
     expect([...inNav, ...FOOT_ITEMS]).toEqual(SCREENS.filter((s) => s.inNav).map((s) => s.id));
-    expect(FOOT_ITEMS).toEqual(['accounts']);
+    expect(FOOT_ITEMS).toEqual(['accounts', 'audit']);
     expect(inNav).not.toContain('kit');
     expect(TAB_ITEMS.every((id) => inNav.includes(id))).toBe(true);
   });
