@@ -86,6 +86,8 @@ export function moveLabel(move: Move, from: Stage): string {
 }
 
 /** One line for an entry of a work item's history. */
+const REVIEW_REASONS: Record<string, string> = { risk_path: '위험 경로', extra_billing: '추가 과금', sample: '표본' };
+
 export function historyLine(h: HistoryEntry): string {
   const d = h.details;
   switch (h.action) {
@@ -122,6 +124,26 @@ export function historyLine(h: HistoryEntry): string {
       return `대기 사유 붙임: ${waitLabel(String(d.reason ?? ''))}${d.note ? ` — ${String(d.note)}` : ''}`;
     case 'work_item.wait_removed':
       return `대기 사유 뗌: ${waitLabel(String(d.reason ?? ''))}`;
+    // Added with human review picking (FN-0411).
+    case 'review.raised':
+      return `결과를 사람 검토로 보냄: ${REVIEW_REASONS[String(d.reason ?? '')] ?? String(d.reason ?? '')}`;
+    case 'review.approved':
+      return `사람 검토 승인${d.effect === 'released' ? ', 완료로 넘어감' : ''}${d.note ? ` — ${String(d.note)}` : ''}`;
+    case 'review.rejected':
+      return `사람 검토 반려${d.effect === 'fix_created' ? ', 고침 작업을 만듦' : d.effect === 'recorded' ? ', 기록만 함' : ''}${d.note ? ` — ${String(d.note)}` : ''}`;
+    case 'work_item.fixes':
+      return '표본 반려로 만든 고침 작업';
+    // Added with questions (FN-0210).
+    case 'question.asked':
+      return `${d.asked_by === 'run' ? 'AI 실행의 질문을 남김' : '질문을 남김'} — ${String(d.body ?? '')}`;
+    case 'question.answered':
+      return `질문에 답함 — ${String(d.answer ?? '')}`;
+    case 'question.doc_changed':
+      return `질문의 문서 반영을 기록함 (${String(d.doc_change_ref ?? '')})`;
+    case 'question.withdrawn':
+      return '질문을 거둠';
+    case 'question.closed_with_work':
+      return `작업 취소로 질문 ${String(d.count ?? '')}개를 닫음`;
     default:
       return h.action;
   }

@@ -2,7 +2,7 @@
  * What failed on the Web screen, one entry per source. A source's entry goes only when that
  * same source succeeds, so a working first-screen poll does not hide a failing session list.
  */
-export type Source = 'inbox' | 'sessions' | 'judge' | 'work' | 'decisions' | 'documents' | 'accounts' | 'audit';
+export type Source = 'inbox' | 'sessions' | 'judge' | 'work' | 'decisions' | 'documents' | 'risk' | 'accounts' | 'audit';
 export type Problems = Partial<Record<Source, string>>;
 
 const LABELS: Record<Source, string> = {
@@ -12,6 +12,7 @@ const LABELS: Record<Source, string> = {
   work: '「작업」을 읽거나 바꾸지 못했다',
   decisions: '「결정」을 읽지 못했다',
   documents: '「문서」를 읽거나 바꾸지 못했다',
+  risk: '「위험 목록」을 읽거나 바꾸지 못했다',
   accounts: '「AI 계정」을 읽거나 바꾸지 못했다',
   audit: '「감사 기록」을 읽지 못했다',
 };

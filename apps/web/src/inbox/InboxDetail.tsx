@@ -2,6 +2,9 @@ import { useId, useState, type Ref } from 'react';
 import { Icon } from '../icons/Icon';
 import { BUCKETS, executorLabel, sessionHref, shortId, since, waited } from '../inboxModel';
 import type { InboxItem, NoticeStatus, SessionView } from '../sessionsApi';
+import { QuestionDetail } from '../question/QuestionDetail';
+import { ReviewDetail } from '../review/ReviewDetail';
+import { outcomeText } from '../review/reviewModel';
 import { at } from '../workModel';
 import { ContradictionEvidence } from './ContradictionDetail';
 import {
@@ -40,6 +43,8 @@ type Props = {
   inSheet?: boolean;
   /** For tests: what sends a judgement. */
   send?: Send;
+  /** A review verdict (FN-0411) or an answer (FN-0210) went through: what happened; without it, [onJudged] hears it. */
+  onDone?: (id: string, text: string, href: string | null) => void;
   /** A relay's answer went through: read the list again. The item stays and shows how it went. */
   onAnswered?: () => void;
   /** For tests: what sends a relay's answer. */
@@ -51,8 +56,24 @@ type Props = {
  * names, and what I can do here. A conflict is judged here (확인, 충돌 아님 with a reason, 해결);
  * a waiting session is answered in its own terminal, which closes the item by itself.
  */
-export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, inSheet = false, send, onAnswered = () => {}, relaySend }: Props) {
+export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, inSheet = false, send, onDone, onAnswered = () => {}, relaySend }: Props) {
   const titleId = useId();
+  const done = (text: string, href: string | null) => (onDone ? onDone(item.id, text, href) : onJudged(item.id));
+  if (item.kind === 'run_question') {
+    return <QuestionDetail item={item} now={now} onDone={(_q, text, href) => done(text, href)} onError={onError} titleRef={titleRef} inSheet={inSheet} />;
+  }
+  if (item.kind === 'risk_review' || item.kind === 'sample_review') {
+    return (
+      <ReviewDetail
+        item={item}
+        now={now}
+        onDecided={(_review, effect, href) => done(outcomeText(effect), href)}
+        onError={onError}
+        titleRef={titleRef}
+        inSheet={inSheet}
+      />
+    );
+  }
   const kind = kindOf(item);
   const path = filePath(item);
   const message = waitMessage(item);

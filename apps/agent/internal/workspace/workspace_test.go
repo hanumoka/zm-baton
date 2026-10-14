@@ -301,3 +301,79 @@ func TestRepoKeyIsTheSmallestRootCommit(t *testing.T) {
 		t.Fatal("run id rule")
 	}
 }
+
+func TestSnapshotPinsTheResultWithoutTouchingTheWorktree(t *testing.T) {
+	ctx := context.Background()
+	root := newRepo(t)
+	write(t, filepath.Join(root, ".gitignore"), "*.log\n")
+	gitT(t, root, "add", ".gitignore")
+	gitT(t, root, "commit", "--quiet", "-m", "ignore logs")
+	w, err := Create(ctx, root, filepath.Join(filepath.Dir(root), "runs"), "git:abc", runA, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tip := gitT(t, w.Path, "rev-parse", "HEAD")
+
+	// Nothing left uncommitted: the snapshot is the branch tip itself.
+	clean, err := w.Snapshot(ctx)
+	if err != nil || clean != tip {
+		t.Fatalf("clean snapshot %q %v, want the tip %s", clean, err, tip)
+	}
+
+	// The run commits one file, edits another without staging, stages a third and adds new files.
+	write(t, filepath.Join(w.Path, "a.txt"), "a by the run\n")
+	gitT(t, w.Path, "commit", "--quiet", "-am", "run commit")
+	tip = gitT(t, w.Path, "rev-parse", "HEAD")
+	write(t, filepath.Join(w.Path, "README.md"), "unstaged by the run\n")
+	write(t, filepath.Join(w.Path, "b.txt"), "staged by the run\n")
+	gitT(t, w.Path, "add", "b.txt")
+	write(t, filepath.Join(w.Path, "docs", "new.txt"), "untracked\n")
+	write(t, filepath.Join(w.Path, "debug.log"), "ignored\n")
+	statusBefore := gitT(t, w.Path, "status", "--porcelain")
+	stagedBefore := gitT(t, w.Path, "diff", "--cached", "--name-only")
+
+	end, err := w.Changes(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snap, _ := end["snapshot"].(string)
+	if len(snap) != 40 || snap == tip {
+		t.Fatalf("snapshot %q (tip %s)", snap, tip)
+	}
+	// The snapshot holds every change since the base, the ignored file excepted, on top of the tip.
+	if got := strings.Fields(gitT(t, w.Path, "diff", "--name-only", w.BaseCommit, snap)); !slices.Equal(got, []string{"README.md", "a.txt", "b.txt", "docs/new.txt"}) {
+		t.Fatalf("snapshot files %v", got)
+	}
+	if parent := gitT(t, w.Path, "rev-parse", snap+"^"); parent != tip {
+		t.Fatalf("snapshot parent %s, want the tip %s", parent, tip)
+	}
+	if got := gitT(t, w.Path, "show", snap+":README.md"); got != "unstaged by the run" {
+		t.Fatalf("snapshot README %q", got)
+	}
+	if ref := gitT(t, root, "rev-parse", SnapshotRef+runA); ref != snap {
+		t.Fatalf("ref %s, want %s", ref, snap)
+	}
+	// The worktree's branch, index and files are as the run left them.
+	if gitT(t, w.Path, "rev-parse", "HEAD") != tip || gitT(t, w.Path, "rev-parse", "--abbrev-ref", "HEAD") != w.Branch {
+		t.Fatal("the snapshot moved the run's branch")
+	}
+	if gitT(t, w.Path, "status", "--porcelain") != statusBefore || gitT(t, w.Path, "diff", "--cached", "--name-only") != stagedBefore {
+		t.Fatal("the snapshot changed the worktree or its index")
+	}
+	// The person's checkout is untouched too.
+	if gitT(t, root, "status", "--porcelain") != "" || gitT(t, root, "rev-parse", "--abbrev-ref", "HEAD") != "main" {
+		t.Fatal("the snapshot changed the person's checkout")
+	}
+	// The same state gives the same snapshot; a running list does not take one.
+	again, err := w.Snapshot(ctx)
+	if err != nil || gitT(t, w.Path, "rev-parse", again+"^{tree}") != gitT(t, w.Path, "rev-parse", snap+"^{tree}") {
+		t.Fatalf("second snapshot %q %v", again, err)
+	}
+	mid, err := w.Changes(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := mid["snapshot"]; ok {
+		t.Fatal("a running change list carries a snapshot")
+	}
+}

@@ -50,16 +50,28 @@ data class ApprovalView(
 @Service
 class ApprovalService(private val jdbc: JdbcClient) {
 
-	fun record(targetKind: String, targetId: String, targetVersion: Long, approverId: String, decision: String, note: String?): String {
+	/**
+	 * [targetRef] is what the verdict was given on when the target has no version of its own, e.g.
+	 * `run_snapshot:<sha>` for a review request; `unpinned:` there says the target was not pinned.
+	 */
+	fun record(
+		targetKind: String,
+		targetId: String,
+		targetVersion: Long,
+		approverId: String,
+		decision: String,
+		note: String?,
+		targetRef: String? = null,
+	): String {
 		val id = Ids.approval()
 		jdbc.sql(
 			"""
-			insert into approvals (id, target_kind, target_id, target_version, policy_ref, approver_kind, approver_id, decision, note)
-			values (:id, :kind, :target, :version, :policy, 'human', :approver, :decision, :note)
+			insert into approvals (id, target_kind, target_id, target_version, policy_ref, approver_kind, approver_id, decision, note, target_ref)
+			values (:id, :kind, :target, :version, :policy, 'human', :approver, :decision, :note, :ref)
 			""".trimIndent(),
 		).param("id", id).param("kind", targetKind).param("target", targetId).param("version", targetVersion)
 			.param("policy", ApprovalPolicy.POLICY).param("approver", approverId).param("decision", decision).param("note", note)
-			.update()
+			.param("ref", targetRef).update()
 		return id
 	}
 

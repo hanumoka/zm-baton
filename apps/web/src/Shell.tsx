@@ -8,6 +8,7 @@ import { BUCKETS, inboxHref, newImmediate, waitingItems } from './inboxModel';
 import { Inbox } from './inbox/Inbox';
 import { isRelay, relayed } from './inbox/relayView';
 import { Kit } from './kit/Kit';
+import { RiskRules } from './review/RiskRules';
 import { clear, fail, lines, type Problems, type Source } from './problems';
 import { Sessions } from './sessions/Sessions';
 import { sessionsApi, type InboxItem, type MeView, type SessionView } from './sessionsApi';
@@ -74,6 +75,7 @@ export function Shell() {
       if (next !== 'work') cleared('work');
       if (next !== 'decisions') cleared('decisions');
       if (next !== 'documents') cleared('documents');
+      if (next !== 'risk') cleared('risk');
       if (next !== 'accounts') cleared('accounts');
       if (next !== 'audit') cleared('audit');
     };
@@ -290,6 +292,7 @@ export function Shell() {
               onClearQuery={() => setFindQ('')}
             />
           )}
+          {screen === 'risk' && <RiskRules onError={failed('risk')} onRead={() => cleared('risk')} />}
           {screen === 'accounts' && <Accounts onError={failed('accounts')} onRead={() => cleared('accounts')} />}
           {screen === 'audit' && <Audit onError={failed('audit')} onRead={() => cleared('audit')} chipHost={chipHost} />}
           {screen === 'runs' && <RunTest />}

@@ -6,6 +6,8 @@ import { RowSkeleton } from '../ui/Group';
 import { ReadOnly } from '../ui/ReadOnly';
 import type { HandoffChoice, Move, Project, Stage, WorkItem, WorkItemDetail } from '../workApi';
 import { at, historyLine, moveParts, STAGES, waitLabel } from '../workModel';
+import { Questions } from '../question/Questions';
+import type { AskBody } from '../questionsApi';
 import { Handoff } from './Handoff';
 import { isBlocked, isClosed } from './workView';
 
@@ -20,6 +22,8 @@ export type DetailActions = {
   withdraw: (runId: string) => Promise<void>;
   /** Stops a claimed or running run (FN-0410); the server says when it may not. */
   cancel?: (runId: string) => Promise<void>;
+  /** Leaves a question on the work item, or records a run's (FN-0210). */
+  ask?: (body: AskBody) => Promise<void>;
 };
 
 type Props = {
@@ -104,7 +108,8 @@ export function WorkDetail({ item, detail, projects, skipped, actions, error, ti
             )}
             <Fields detail={d} editable={editable} onRemoveWait={actions.removeWait} />
             {d.moves.length > 0 && <Moves moves={d.moves} from={it.stage} onMove={actions.move} />}
-            <Handoff detail={d} onDelegate={actions.delegate} onWithdraw={actions.withdraw} onCancel={actions.cancel} />
+            <Questions detail={d} onAsk={actions.ask ?? (async () => {})} />
+            <Handoff detail={d} onDelegate={actions.delegate} onWithdraw={actions.withdraw} onCancel={actions.cancel} onAsk={actions.ask} />
             {editable && !isClosed(it) && <WaitControls reasons={it.wait_reasons} onAdd={actions.addWait} />}
             {editable && <EditFields key={`${it.id}:${it.version}`} detail={d} projects={projects} onSave={actions.update} />}
           </div>

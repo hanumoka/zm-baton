@@ -156,3 +156,16 @@
 .ib-opt-d { grid-column: 2; font-size: var(--fs-sm); color: var(--c-ink-2); }
 .ib-opts.is-read li { display: flex; flex-direction: column; padding: var(--s-1) 0; }
 .ib-opts.is-read .ib-opt-d { font-size: var(--fs-sm); }
+/* What the last review verdict did, above the groups until the next one */
+.ib-done {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  margin: var(--s-2) var(--s-3);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-sm);
+  background: var(--c-accent-tint);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-row);
+}
+.ib-done .ico { margin-top: var(--s-0); color: var(--c-accent); }

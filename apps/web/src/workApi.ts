@@ -4,6 +4,7 @@
 // it is written for a person.
 
 import type { Run, RunEvent } from './api';
+import type { AutoCheckState, HumanReviewState, RunReview } from './reviewsApi';
 
 export type Stage = 'draft' | 'plan_review' | 'ready' | 'in_progress' | 'result_review' | 'done' | 'cancelled';
 
@@ -52,6 +53,8 @@ export type WorkItemDetail = {
   history: HistoryEntry[];
   /** Whether the work item can be handed to an AI now, and why not (third stage-1 slice). */
   delegation?: DelegationAvailability;
+  /** Whether a question can be left on the work item now, and why not (FN-0210); an older server leaves it out. */
+  question?: { allowed: boolean; reason: string | null };
 };
 
 /** How the next run starts: a work item's first run, or one that continues an earlier run. */
@@ -77,6 +80,8 @@ export type DelegationAvailability = {
   /** Sending a result back needs a reason. */
   needs_note?: boolean;
   resume_from?: PreviousRun | null;
+  /** Answered questions of earlier runs that the next run carries (`answer_arrived`). */
+  answers_ready?: number;
 };
 
 /** A repository a device's connector can run in (`zm-baton repo add`). Never a path on the device. */
@@ -154,6 +159,12 @@ export type ItemRun = Run & {
   capabilities?: Record<string, unknown> | null;
   inputs?: RunInput[];
   actions?: RunActions | null;
+  // Added with human review picking (FN-0411); an older server leaves them out.
+  result_snapshot_sha?: string | null;
+  human_review_state?: HumanReviewState | null;
+  auto_check_state?: AutoCheckState | null;
+  review_basis?: Record<string, unknown> | null;
+  reviews?: RunReview[];
   // Added with AI accounts and usage limits; an older server leaves them out.
   account?: { id: string; name: string; auth_kind: string } | null;
   /** What the adapter says the executor signed in with. */

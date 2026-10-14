@@ -54,6 +54,8 @@ export function Inbox({ items, error, sessions, now, onChanged, onError, onReloa
   const root = useRef<HTMLElement>(null);
   /** Where the focus goes once the next item is selected after a judgement. */
   const afterJudge = useRef<'title' | 'row' | null>(null);
+  /** What the last review verdict or answer did, until the next one. */
+  const [done, setDone] = useState<{ text: string; href: string | null } | null>(null);
   const { selected } = view;
 
   const visible = items === null ? null : visibleItems(items).filter((i) => !judged.has(i.id));
@@ -99,6 +101,11 @@ export function Inbox({ items, error, sessions, now, onChanged, onError, onReloa
     onChanged();
   }
 
+  function onDone(id: string, text: string, href: string | null) {
+    setDone({ text, href });
+    onJudged(id);
+  }
+
   const detail = current ? (
     <InboxDetail
       key={current.id}
@@ -106,6 +113,7 @@ export function Inbox({ items, error, sessions, now, onChanged, onError, onReloa
       sessions={sessions}
       now={now}
       onJudged={onJudged}
+      onDone={onDone}
       onError={onError}
       titleRef={titleRef}
       inSheet={narrow}
@@ -141,6 +149,7 @@ export function Inbox({ items, error, sessions, now, onChanged, onError, onReloa
         onPick={narrow ? open : choose}
         onOpen={open}
         onReload={onReload}
+        done={done}
       />
       <DetailPane narrow={narrow} open={sheet.open} label="기다리는 것 상세" sheetTitle={sheetTitle} onClose={sheet.hide} onBack={() => focusRow(root.current, selected)}>
         {detail}
