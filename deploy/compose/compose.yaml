@@ -46,6 +46,11 @@ services:
       ZM_BATON_RETENTION_CLOSED_INBOX_ITEMS_DAYS: ${ZM_BATON_RETENTION_CLOSED_INBOX_ITEMS_DAYS:-}
       ZM_BATON_RETENTION_CLOSED_NOTICES_DAYS: ${ZM_BATON_RETENTION_CLOSED_NOTICES_DAYS:-}
       ZM_BATON_RETENTION_ENDED_RUN_EVENTS_DAYS: ${ZM_BATON_RETENTION_ENDED_RUN_EVENTS_DAYS:-}
+      # Relaying a session's permission requests and questions to the first screen: off (the
+      # default) or on. Read docs/stage1/sessions.md before turning it on: with no person
+      # authentication yet, any program on this PC, an AI session with a shell included, can
+      # answer a relayed permission request (docs/hardening-backlog.md H-21).
+      ZM_BATON_RELAY: ${ZM_BATON_RELAY:-off}
     ports:
       - "127.0.0.1:${ZM_BATON_HTTP_PORT:-18081}:18081"
     depends_on:

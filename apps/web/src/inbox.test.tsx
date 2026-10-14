@@ -120,14 +120,14 @@ describe('buckets', () => {
     expect(rowOrder(groups)).toEqual(['inb_w', 'old', 'new']);
   });
 
-  it('says a bucket the server does not fill yet is not relayed, and a clear bucket that it is clear', () => {
+  it('says a bucket the server does not fill yet is not made, and a clear bucket that it is clear', () => {
     const notes = inboxGroups([]).map(groupNote);
-    expect(notes).toEqual(['아직 중계하지 않는다', '기다리는 세션이 없다', '겹친 파일이 없다', '서버가 아직 만들지 않는다', '서버가 아직 만들지 않는다']);
+    expect(notes).toEqual(['권한 요청이 없다', '기다리는 세션이 없다', '겹친 파일이 없다', '서버가 아직 만들지 않는다', '서버가 아직 만들지 않는다']);
   });
 
   it('draws an empty bucket as one line in its head, not a box, and a full one with its rows', () => {
     const html = list({ kind: 'rows' }, [conflict()]);
-    expect(html).toMatch(/권한 요청 <span class="n num">0<\/span><span class="grp-r">아직 중계하지 않는다<\/span>/);
+    expect(html).toMatch(/권한 요청 <span class="n num">0<\/span><span class="grp-r">권한 요청이 없다<\/span>/);
     expect(html).toMatch(/내 작업과 겹친 충돌 <span class="n num">1<\/span><\/h3>/);
     expect(html).not.toContain('empty-state');
     expect(html).toContain('급한 순서로 묶음');
@@ -142,7 +142,7 @@ describe('rows', () => {
     expect(kindOf(waiting({ wait_kind: 'something_new', detail: null }))).toEqual({ mark: 'wait', label: '입력 기다림' });
     const html = list({ kind: 'rows' }, [conflict()], 'inb_c');
     expect(html).toContain('<span class="lrow-state">충돌</span><span class="lrow-title ib-file">.session/context.md</span>');
-    expect(html).toMatch(/data-row="inb_c" data-kind="notice" aria-current="true" tabindex="0"/);
+    expect(html).toMatch(/data-row="inb_c" data-kind="notice" data-state="open" aria-current="true" tabindex="0"/);
   });
 
   it('titles a waiting session by the words it sent, else what it works on, else what it waits for', () => {
@@ -194,7 +194,7 @@ describe('empty states', () => {
     const empty = list({ kind: 'empty' });
     expect(empty).toContain('empty-state is-empty');
     expect(empty).toContain('지금 나를 기다리는 것이 없다');
-    expect(empty).toContain('터미널에서 입력을 기다리거나, 두 세션이 같은 파일을 고치면 여기에 쌓인다');
+    expect(empty).toContain('권한을 묻거나 선택형 질문을 내거나 터미널에서 입력을 기다리면, 또는 두 세션이 같은 파일을 고치면 여기에 쌓인다');
     expect(empty).toContain('href="#sessions"');
 
     const error = list({ kind: 'error', message: 'HTTP 503: database is not reachable' });

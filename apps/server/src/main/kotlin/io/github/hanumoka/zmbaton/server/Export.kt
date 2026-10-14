@@ -55,6 +55,8 @@ class ExportService(
 		/** Collection name, table, order. The names are the export's, the tables the database's. */
 		val COLLECTIONS: List<Triple<String, String, String>> = listOf(
 			Triple("organizations", "organizations", "id"),
+			// The person's own settings: focus mode, digest times and the first screen's visibility.
+			Triple("users", "users", "id"),
 			Triple("projects", "projects", "external_ref nulls last, id"),
 			Triple("work_items", "work_items", "created_at, id"),
 			Triple("decisions", "decisions", "decided_on nulls last, external_ref nulls last, id"),
