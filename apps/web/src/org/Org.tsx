@@ -33,14 +33,14 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
  */
 export function Org({ onError, onRead }: Props) {
   const narrow = useNarrow();
-  const [view, setView] = useAddress('org', readView, writeView);
+  const [view, setView, , navigation] = useAddress('org', readView, writeView);
   const [org, setOrg] = useState<OrgView | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [pane, setPane] = useState<Pane>({ kind: 'detail' });
   const [refusal, setRefusal] = useState<Refusal>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const sheet = useSheet(view.selected);
+  const sheet = useSheet(view.selected, navigation);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const root = useRef<HTMLElement>(null);
   const { selected } = view;

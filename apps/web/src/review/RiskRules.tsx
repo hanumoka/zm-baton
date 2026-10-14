@@ -63,11 +63,11 @@ type Props = { onError: (e: unknown) => void; onRead: () => void; api?: typeof r
 
 export function RiskRules({ onError, onRead, api = reviewsApi }: Props) {
   const narrow = useNarrow();
-  const [view, setView] = useAddress('risk', readView, writeView);
+  const [view, setView, , navigation] = useAddress('risk', readView, writeView);
   const [settings, setSettings] = useState<ReviewSettings | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const sheet = useSheet();
+  const sheet = useSheet(view.selected, navigation);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const root = useRef<HTMLElement>(null);
 

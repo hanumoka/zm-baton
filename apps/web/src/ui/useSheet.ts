@@ -4,22 +4,24 @@ import { useRef, useState } from 'react';
  * The narrow screen's sheet (shell/Sheet.tsx): open remembers what had the focus, close gives it
  * back, so a keyboard user lands on the row they opened.
  */
-export function useSheet(selected: string | null = null) {
-  // A direct link/reload starts open. A new selection from Back/Forward opens again, while
-  // closing the same selection stays closed across polling renders. Unaddressed forms can
-  // still call show() without selecting a row.
-  const [state, setState] = useState({ selected, open: selected !== null });
-  if (state.selected !== selected) setState({ selected, open: selected !== null });
+export function useSheet(selected: string | null = null, navigation = 0) {
+  // Direct links/reloads and address navigation open the detail. Selection from arrow keys,
+  // initial wide layout or polling never opens a closed sheet; a tap/Enter calls show().
+  const [state, setState] = useState({ navigation, open: selected !== null });
   const opener = useRef<HTMLElement | null>(null);
+  if (state.navigation !== navigation) {
+    opener.current = null;
+    setState({ navigation, open: selected !== null });
+  }
   return {
-    open: state.selected === selected ? state.open : selected !== null,
+    open: state.navigation === navigation ? state.open : selected !== null,
     show() {
       opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      setState({ selected, open: true });
+      setState({ navigation, open: true });
     },
     hide() {
-      setState({ selected, open: false });
-      const back = opener.current;
+      setState({ navigation, open: false });
+      const back = opener.current ?? (selected === null ? null : document.querySelector<HTMLElement>(`[data-row="${CSS.escape(selected)}"]`));
       requestAnimationFrame(() => back?.focus());
     },
   };

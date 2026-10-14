@@ -49,7 +49,7 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
  */
 export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) {
   const narrow = useNarrow();
-  const [view, setView] = useAddress('work', readView, writeView);
+  const [view, setView, , navigation] = useAddress('work', readView, writeView);
   /** The last list the server returned, with the server-side filters it answered. */
   const [loaded, setLoaded] = useState<{ key: string; list: WorkItem[] } | null>(null);
   const [closedExist, setClosedExist] = useState<boolean | null>(null);
@@ -60,7 +60,7 @@ export function Work({ onError, onRead, chipHost, query, onClearQuery }: Props) 
   const [detail, setDetail] = useState<WorkItemDetail | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [pane, setPane] = useState<'detail' | 'new'>('detail');
-  const sheet = useSheet(view.selected);
+  const sheet = useSheet(view.selected, navigation);
   const [refresh, setRefresh] = useState(0);
   const q = useSettled(query.trim(), 200);
   const titleRef = useRef<HTMLHeadingElement>(null);

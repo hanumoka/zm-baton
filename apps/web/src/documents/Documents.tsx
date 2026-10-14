@@ -55,7 +55,7 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
  */
 export function Documents({ onError, onRead, chipHost, query, onClearQuery }: Props) {
   const narrow = useNarrow();
-  const [view, setView, pushView] = useAddress('documents', readView, writeView);
+  const [view, setView, pushView, navigation] = useAddress('documents', readView, writeView);
   const [loaded, setLoaded] = useState<{ key: string; list: Doc[] } | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -64,7 +64,7 @@ export function Documents({ onError, onRead, chipHost, query, onClearQuery }: Pr
   /** Work and decisions a form can link; read when a form opens. */
   const [links, setLinks] = useState<{ work: WorkItem[]; decisions: Decision[] } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const sheet = useSheet(view.selected);
+  const sheet = useSheet(view.selected, navigation);
   const [refresh, setRefresh] = useState(0);
   const q = useSettled(query.trim(), 200);
   const titleRef = useRef<HTMLHeadingElement>(null);

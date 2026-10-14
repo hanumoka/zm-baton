@@ -30,7 +30,7 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
  */
 export function Audit({ onError, onRead, chipHost }: Props) {
   const narrow = useNarrow();
-  const [view, setView] = useAddress('audit', readView, writeView);
+  const [view, setView, , navigation] = useAddress('audit', readView, writeView);
   const [loaded, setLoaded] = useState<{ key: string; list: AuditEntry[] } | null>(null);
   const [facets, setFacets] = useState<AuditFacets | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -39,7 +39,7 @@ export function Audit({ onError, onRead, chipHost }: Props) {
   const [retention, setRetention] = useState<RetentionView | null>(null);
   const [retentionError, setRetentionError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const sheet = useSheet(view.selected);
+  const sheet = useSheet(view.selected, navigation);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const root = useRef<HTMLElement>(null);
   const { selected } = view;

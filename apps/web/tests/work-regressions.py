@@ -23,6 +23,7 @@ def main():
     args = parser.parse_args()
     output = args.output or Path(tempfile.mkdtemp(prefix="zm-baton-web-regressions-"))
     output.mkdir(parents=True, exist_ok=True)
+    (output / "result.json").unlink(missing_ok=True)
     dist = Path(__file__).resolve().parents[1] / "dist"
     if not (dist / "index.html").is_file():
         raise SystemExit("Build apps/web with npm run build first.")
@@ -41,6 +42,12 @@ def main():
                 closed_at=None, updated_at="2026-10-14T01:00:00Z")
     other = {**item, "id": "wrk_b", "title": "다른 작업을 확인한다"}
     items = {row["id"]: row for row in [item, other]}
+    notices = [dict(id=f"inb_{key}", bucket=3, kind="notice", source_kind="ntc",
+                    source_id=f"ntc_{key}", summary=f"두 세션이 같은 파일을 고침: {key}.md",
+                    detail=dict(path=f"{key}.md", source="file_touch", sessions=[]),
+                    wait_kind=None, repeat_count=0, waiting_since="2026-10-14T00:00:00Z",
+                    notify="immediate") for key in ["a", "b"]]
+    inbox = list(notices)
     updates, questions, errors, checks = [], [], [], []
     reject_update = True
     reject_question = True
@@ -61,6 +68,11 @@ def main():
         if path == "/api/me/first-screen":
             r.fulfill(json=dict(user_id="usr_owner", focus_on=False, first_screen_visible=False,
                                 relay_wait_seconds=30))
+            return
+        if req.method == "POST" and path == "/api/notices/ntc_a/status":
+            assert req.post_data_json == {"status": "acknowledged"}
+            inbox[:] = [row for row in inbox if row["id"] != "inb_a"]
+            r.fulfill(json={})
             return
         if req.method == "PATCH" and path == "/api/work-items/wrk_a":
             body = req.post_data_json
@@ -95,6 +107,12 @@ def main():
             data = detail(items[path.rsplit("/", 1)[-1]])
         elif path == "/api/settings/workflow":
             data = dict(skipped_stages=[])
+        elif path == "/api/inbox":
+            data = inbox
+        elif path == "/api/review-settings":
+            data = dict(org=dict(patterns=[], customized=False), default_patterns=[],
+                        sample_rate=0, sample_daily_cap=0, promote_after_hours=24,
+                        projects=[], proposals=[])
         else:
             data = []
         r.fulfill(json=data)
@@ -182,6 +200,7 @@ def main():
 
             dialog.get_by_role("button", name="닫기", exact=True).click()
             expect(dialog).to_have_count(0)
+            expect(page.locator('[data-row="wrk_a"]')).to_be_focused()
             page.wait_for_timeout(5500)
             expect(dialog).to_have_count(0)
             page.locator('[data-row="wrk_a"]').click()
@@ -213,6 +232,59 @@ def main():
             merge.scroll_into_view_if_needed()
             page.screenshot(path=str(output / "draft-after-poll-390.png"), full_page=True)
             checks.append("mobile_draft_conflict_fits_without_horizontal_scroll")
+
+            # Selection within a list is not navigation into a detail sheet.
+            page.goto(base + "#work")
+            page.reload()
+            first, second = page.locator('[data-row="wrk_a"]'), page.locator('[data-row="wrk_b"]')
+            expect(first).to_be_visible()
+            first.focus()
+            page.keyboard.press("ArrowDown")
+            expect(second).to_be_focused()
+            expect(second).to_have_attribute("aria-current", "true")
+            expect(dialog).to_have_count(0)
+            page.keyboard.press("Enter")
+            expect(dialog.get_by_role("heading", name=other["title"], exact=True)).to_be_visible()
+            checks.append("mobile_arrow_selects_without_opening_and_enter_opens")
+
+            page.set_viewport_size({"width": 1440, "height": 900})
+            page.goto(base + "#work")
+            page.reload()
+            expect(first).to_have_attribute("aria-current", "true")
+            page.set_viewport_size({"width": 390, "height": 844})
+            expect(dialog).to_have_count(0)
+            checks.append("wide_auto_selection_does_not_open_sheet_after_resize")
+
+            page.goto(base + "#inbox?item=inb_a")
+            expect(dialog).to_be_visible()
+            dialog.get_by_role("button", name=re.compile(r"^확인")).click()
+            expect(dialog).to_have_count(0)
+            expect(page.locator('[data-row="inb_b"]')).to_be_focused()
+            page.wait_for_timeout(5500)
+            expect(dialog).to_have_count(0)
+            page.screenshot(path=str(output / "inbox-after-judgement-390.png"), full_page=True)
+            checks.append("mobile_inbox_judgement_closes_and_focuses_next_row")
+
+            inbox[:] = notices
+            page.goto(base + "#inbox?item=inb_a")
+            page.reload()
+            expect(dialog).to_be_visible()
+            dialog.get_by_role("button", name="닫기", exact=True).click()
+            expect(page.locator('[data-row="inb_a"]')).to_be_focused()
+            inbox[:] = [notices[1]]
+            expect(page.locator('[data-row="inb_a"]')).to_have_count(0, timeout=8000)
+            expect(page.locator('[data-row="inb_b"]')).to_have_attribute("aria-current", "true")
+            expect(dialog).to_have_count(0)
+            checks.append("mobile_inbox_closed_sheet_stays_closed_when_item_leaves_on_poll")
+
+            page.goto(base + "#risk?item=org")
+            expect(dialog.locator(".dt-title")).to_have_text("조직 기본")
+            expect(dialog.locator(".dt-title")).to_be_visible()
+            page.reload()
+            expect(dialog.locator(".dt-title")).to_have_text("조직 기본")
+            expect(dialog.locator(".dt-title")).to_be_visible()
+            page.screenshot(path=str(output / "risk-direct-link-390.png"), full_page=True)
+            checks.append("mobile_risk_direct_link_and_reload_restore_detail")
             assert not errors, errors
             browser.close()
         result = {"passed": checks, "page_errors": errors}

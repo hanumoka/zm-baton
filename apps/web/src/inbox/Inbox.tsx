@@ -46,10 +46,10 @@ type Props = {
  */
 export function Inbox({ items, error, sessions, now, onChanged, onError, onReload, send, focusOn = false, relayOn = null, relaySend }: Props) {
   const narrow = useNarrow();
-  const [view, setView] = useAddress('inbox', readView, writeView);
+  const [view, setView, , navigation] = useAddress('inbox', readView, writeView);
   /** Items judged here, hidden until the server's list no longer has them. */
   const [judged, setJudged] = useState<ReadonlySet<string>>(() => new Set());
-  const sheet = useSheet(view.selected);
+  const sheet = useSheet(view.selected, navigation);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const root = useRef<HTMLElement>(null);
   /** Where the focus goes once the next item is selected after a judgement. */
