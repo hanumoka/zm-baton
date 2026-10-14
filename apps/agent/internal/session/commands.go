@@ -21,6 +21,13 @@ var ErrTurnedOff = errors.New("this session's reporting is turned off (zm-baton 
 // related work or documents, sharing on by default and switchable per session). share changes
 // the session's choice; nil keeps it. Every summary states the choice it was sent with.
 func SendCurrentWork(ctx context.Context, dir, executor, executorSessionID, summary string, refs []string, share *bool) (Result, error) {
+	return sendCurrentWork(ctx, dir, executor, executorSessionID, summary, refs, share, true)
+}
+
+// sendCurrentWork sends the summary. When the server no longer takes the registration as live
+// (HTTP 401: its token lapsed after 12 hours without events), the session registers again, as a
+// hook would, and the summary goes once more (registerAgain false).
+func sendCurrentWork(ctx context.Context, dir, executor, executorSessionID, summary string, refs []string, share *bool, registerAgain bool) (Result, error) {
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
 		return Result{}, errors.New("summary is empty")
@@ -55,7 +62,18 @@ func SendCurrentWork(ctx context.Context, dir, executor, executorSessionID, summ
 	if err != nil {
 		return Result{}, err
 	}
-	return client.Send(ctx, st.SessionID, st.Token, []Event{e})
+	res, err := client.Send(ctx, st.SessionID, st.Token, []Event{e})
+	var status *StatusError
+	if registerAgain && errors.As(err, &status) && status.Status == http.StatusUnauthorized {
+		h := &Hooks{Dir: dir, Executor: executor}
+		if _, registered, rerr := h.register(ctx, HookInput{SessionID: executorSessionID, Cwd: st.RepoRoot}); rerr != nil {
+			return res, fmt.Errorf("%w; registering again failed: %v", err, rerr)
+		} else if !registered {
+			return res, ErrTurnedOff
+		}
+		return sendCurrentWork(ctx, dir, executor, executorSessionID, summary, refs, share, false)
+	}
+	return res, err
 }
 
 // OffOutcome says how `zm-baton session off` ended.

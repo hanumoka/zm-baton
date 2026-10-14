@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,10 +29,11 @@ type HookInput struct {
 	ToolInput        json.RawMessage `json:"tool_input"`
 	NotificationType string          `json:"notification_type"`
 	Message          string          `json:"message"`
+	PermissionMode   string          `json:"permission_mode"`
 }
 
 // HookEvents are the arguments of `zm-baton hook <event>`.
-var HookEvents = []string{"session-start", "prompt-submit", "post-tool-use", "notification", "session-end"}
+var HookEvents = []string{"session-start", "prompt-submit", "post-tool-use", "notification", "session-end", "permission-request", "pre-tool-use"}
 
 // fileTools change files; their paths become file_touch events. NotebookEdit names its file notebook_path.
 var fileTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true}
@@ -53,6 +55,9 @@ var hookTimeouts = map[string]time.Duration{
 	"post-tool-use": 3 * time.Second,
 	"notification":  3 * time.Second,
 	"session-end":   1 * time.Second,
+	// A relay waits for a person on the first screen (contract relay 1): longer than the server's deadline.
+	"permission-request": relayLimit,
+	"pre-tool-use":       relayLimit,
 }
 
 // HookTimeout is the time limit of one hook event; ok is false for an unknown event.
@@ -120,44 +125,69 @@ func (h *Hooks) Run(ctx context.Context, event string, stdin io.Reader) error {
 		})
 	case "session-end":
 		return h.sessionEnd(ctx, in)
+	case "permission-request":
+		return h.relay(ctx, in, "permission_request")
+	case "pre-tool-use":
+		// The plugin matches AskUserQuestion only; any other tool is none of the relay's business.
+		if in.ToolName != "AskUserQuestion" {
+			return nil
+		}
+		return h.relay(ctx, in, "session_question")
 	}
 	return nil
 }
 
 func (h *Hooks) sessionStart(ctx context.Context, in HookInput) error {
+	reg, registered, err := h.register(ctx, in)
+	if err != nil || !registered {
+		return err
+	}
+	// Plain stdout of a SessionStart hook is added to the model's context.
+	_, err = io.WriteString(h.Stdout, reg.StatusCard+"\n")
+	return err
+}
+
+// register registers the executor session (or renews a live registration) and keeps the token.
+// registered is false when the session is turned off, including an off that finished while the
+// registration was on its way; that registration is turned off at once.
+func (h *Hooks) register(ctx context.Context, in HookInput) (reg Registered, registered bool, err error) {
 	cfg, err := LoadConfig(h.Dir)
 	if err != nil {
-		return fmt.Errorf("not logged in: %w", err)
+		return reg, false, fmt.Errorf("not logged in: %w", err)
 	}
 	st, _, err := LoadState(h.Dir, h.Executor, in.SessionID)
 	if err != nil {
-		return err
+		return reg, false, err
 	}
 	if st.Off {
-		return nil
+		return reg, false, nil
 	}
 	var repoInfo *RepositoryInfo
 	var repo *Repo
-	if in.Cwd != "" {
-		if r, err := RepoAt(ctx, in.Cwd); err == nil {
+	dir := in.Cwd
+	if dir == "" {
+		dir = st.RepoRoot
+	}
+	if dir != "" {
+		if r, err := RepoAt(ctx, dir); err == nil {
 			repo = r
 			repoInfo = &RepositoryInfo{RepoKey: r.Key, Remote: r.Remote, Prefix: r.Prefix, Branch: r.Branch}
 		}
 	}
 	client, err := NewClient(cfg.Server, 3*time.Second)
 	if err != nil {
-		return err
+		return reg, false, err
 	}
 	// No executor_version: neither the hook input nor its environment says which Claude Code
 	// runs this session, and an inherited CLAUDE_CODE_VERSION names a parent's, not this one.
-	reg, err := client.Register(ctx, RegisterRequest{
+	reg, err = client.Register(ctx, RegisterRequest{
 		DeviceID:          cfg.DeviceID,
 		Executor:          h.Executor,
 		ExecutorSessionID: in.SessionID,
 		Repository:        repoInfo,
 	})
 	if err != nil {
-		return err
+		return reg, false, err
 	}
 	turnedOff := false
 	err = Update(ctx, h.Dir, h.Executor, in.SessionID, 2*time.Second, func(st *State, exists bool) (bool, error) {
@@ -186,15 +216,13 @@ func (h *Hooks) sessionStart(ctx context.Context, in HookInput) error {
 		return false, nil
 	})
 	if err != nil {
-		return err
+		return reg, false, err
 	}
 	if turnedOff {
 		_, err := deliverOff(ctx, h.Dir, h.Executor, in.SessionID)
-		return err
+		return reg, false, err
 	}
-	// Plain stdout of a SessionStart hook is added to the model's context.
-	_, err = io.WriteString(h.Stdout, reg.StatusCard+"\n")
-	return err
+	return reg, true, nil
 }
 
 func (h *Hooks) postToolUse(ctx context.Context, in HookInput) error {
@@ -235,7 +263,7 @@ func (h *Hooks) postToolUse(ctx context.Context, in HookInput) error {
 }
 
 func (h *Hooks) sessionEnd(ctx context.Context, in HookInput) error {
-	err := h.send(ctx, in, func(st *State) []Event {
+	err := h.sendEvents(ctx, in, false, func(st *State) []Event {
 		return []Event{{Kind: "ended", Payload: map[string]any{}}}
 	})
 	// The state goes even when the server could not be told: its token is useless after the end.
@@ -250,7 +278,16 @@ func (h *Hooks) sessionEnd(ctx context.Context, in HookInput) error {
 
 // send picks events under the state lock (local_seq and the waiting flag change only there),
 // then sends them without holding the lock. Nothing is sent for an unregistered or turned-off session.
+//
+// A session the server no longer takes as live (HTTP 401) is registered again and the events go
+// once more: the executor session is evidently still running, since its hook fires. The token
+// lapses after 12 hours without events (a session left open overnight), and before this only the
+// start hook registered, so such a session stayed unregistered until its next start or compaction.
 func (h *Hooks) send(ctx context.Context, in HookInput, pick func(st *State) []Event) error {
+	return h.sendEvents(ctx, in, true, pick)
+}
+
+func (h *Hooks) sendEvents(ctx context.Context, in HookInput, registerAgain bool, pick func(st *State) []Event) error {
 	var events []Event
 	var session State
 	err := Update(ctx, h.Dir, h.Executor, in.SessionID, 2*time.Second, func(st *State, exists bool) (bool, error) {
@@ -280,6 +317,12 @@ func (h *Hooks) send(ctx context.Context, in HookInput, pick func(st *State) []E
 		return err
 	}
 	res, err := client.Send(ctx, session.SessionID, session.Token, events)
+	var status *StatusError
+	if registerAgain && errors.As(err, &status) && status.Status == http.StatusUnauthorized {
+		if _, registered, rerr := h.register(ctx, in); rerr == nil && registered {
+			return h.sendEvents(ctx, in, false, pick)
+		}
+	}
 	if err != nil {
 		h.keepWaiting(ctx, in.SessionID, session.SessionID, events)
 		return err
