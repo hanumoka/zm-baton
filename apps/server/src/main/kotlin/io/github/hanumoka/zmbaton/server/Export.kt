@@ -86,6 +86,9 @@ class ExportService(
 			// Instructions a person sent to a running executor: the person's own words, no secret by contract.
 			Triple("run_inputs", "run_inputs", "created_at, id"),
 			Triple("run_events", "run_events", "received_at, event_id"),
+			// Who had to see which result and what they decided; the evidence holds patterns, paths and draws.
+			Triple("review_items", "review_items", "created_at, id"),
+			Triple("work_item_links", "work_item_links", "created_at, from_id, to_id"),
 			// What executors said runs used and the provider's limit signals: counts, ratios and estimates, no secret.
 			Triple("usage_signals", "usage_signals", "received_at, id"),
 			Triple("audit_log", "audit_log", "at, id"),

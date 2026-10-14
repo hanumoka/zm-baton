@@ -3,15 +3,16 @@ import type { InboxItem, SessionView } from './sessionsApi';
 /**
  * The five buckets of the first screen, in the contract's order (contract v1 "항목과 순서").
  * [raised] is whether the server has a path that puts items there yet: relayed permission requests
- * (1), questions and waiting sessions (2) and file conflicts between sessions (3). The others have
- * kinds in the contract and none in the server, so the screen says so instead of showing an empty box.
+ * (1), questions and waiting sessions (2), file conflicts between sessions (3), and review requests
+ * for AI results (4 risk; 5 samples, with the other notices such as usage alerts). A bucket the
+ * server does not fill would say so instead of showing an empty box.
  */
 export const BUCKETS: { bucket: InboxItem['bucket']; label: string; raised: boolean }[] = [
   { bucket: 1, label: '권한 요청', raised: true },
   { bucket: 2, label: '멈춘 AI의 질문', raised: true },
   { bucket: 3, label: '내 작업과 겹친 충돌', raised: true },
-  { bucket: 4, label: '위험 목록 검토', raised: false },
-  { bucket: 5, label: '표본 검토와 나머지 알림', raised: false },
+  { bucket: 4, label: '위험 목록 검토', raised: true },
+  { bucket: 5, label: '표본 검토와 나머지 알림', raised: true },
 ];
 
 /** Waiting for me now: open, or a relay's answer on its way. A relay that ended only reports how. */
@@ -19,11 +20,12 @@ const stillWaiting = (i: InboxItem) => i.state === undefined || i.state === 'ope
 
 /**
  * Items per bucket. Within a bucket, whoever waited longest comes first, and relays that already
- * ended (shown for a while so the person sees how) come after the ones still waiting.
+ * ended (shown for a while so the person sees how) come after the ones still waiting. A review open
+ * longer than the organisation's hours is raised to bucket 1 (contract "항목과 순서" 2).
  */
 export function groupByBucket(items: InboxItem[]): Map<number, InboxItem[]> {
   const groups = new Map<number, InboxItem[]>(BUCKETS.map((b) => [b.bucket, []]));
-  for (const item of items) groups.get(item.bucket)?.push(item);
+  for (const item of items) groups.get(item.promoted_at ? 1 : item.bucket)?.push(item);
   for (const list of groups.values()) {
     list.sort(
       (a, b) => Number(!stillWaiting(a)) - Number(!stillWaiting(b)) || a.waiting_since.localeCompare(b.waiting_since) || a.id.localeCompare(b.id),

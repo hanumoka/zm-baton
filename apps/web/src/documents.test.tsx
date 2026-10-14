@@ -299,7 +299,7 @@ describe('writing', () => {
 
 describe('the screen', () => {
   it('sits in the sidebar after 결정 and lays out the list and the detail', () => {
-    expect(NAV_GROUPS[0].items).toEqual(['inbox', 'sessions', 'work', 'decisions', 'documents', 'runs']);
+    expect(NAV_GROUPS[0].items).toEqual(['inbox', 'sessions', 'work', 'decisions', 'documents', 'risk', 'runs']);
     expect(matchScreen('문서')?.id).toBe('documents');
     const html = renderToStaticMarkup(<Documents onError={() => {}} onRead={() => {}} chipHost={null} query="" onClearQuery={() => {}} />);
     expect(html).toMatch(/^<main class="panes doc"><h1 class="sr">문서<\/h1><section class="pane-list"/);

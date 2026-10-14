@@ -3,6 +3,8 @@ import { Icon } from '../icons/Icon';
 import type { RunEvent } from '../api';
 import { reportStatus, statusLabel, summary } from '../runState';
 import { tokensLine } from '../accounts/accountView';
+import { inboxHref } from '../inboxModel';
+import { autoLabel, humanLabel, notSentWhy, reasonLabel } from '../review/reviewModel';
 import type { ItemRun, RunInput } from '../workApi';
 import { at } from '../workModel';
 import { billingLine, limitsLine, methodLabel, stopLine, usageLine } from './runUsage';
@@ -188,6 +190,7 @@ export function RunRow({ run, events, now, outcomeUnknown, onWithdraw, onCancel,
         </p>
       )}
       {run.usage && <p className="hr-branch num">토큰: {tokensLine(run.usage)}</p>}
+      <ReviewLine run={run} />
       {run.state === 'requested' && d && !d.revoked_at && (
         <div className="hr-wait">
           <p className="dt-none">연결 프로그램이 아직 가져가지 않았다. 그 PC에서 <code>zm-baton agent</code>가 떠 있는지 본다.</p>
@@ -314,6 +317,33 @@ export function RunRow({ run, events, now, outcomeUnknown, onWithdraw, onCancel,
         </details>
       )}
     </li>
+  );
+}
+
+/**
+ * Who has looked at a submitted result (FN-0411): the person's review and the automatic check,
+ * apart, so a result nobody looked at never reads as passed (contract 「사람 미확인 · 자동 검사 안 함」).
+ * An open request links to its item on the first screen.
+ */
+function ReviewLine({ run }: { run: ItemRun }) {
+  const reviews = run.reviews ?? [];
+  const human = humanLabel(run.human_review_state, reviews);
+  if (human === null) return null;
+  const open = reviews.find((r) => r.state === 'open' && r.inbox_item_id);
+  const waiting = run.human_review_state === 'required' || run.human_review_state === 'sampled';
+  const replaced = run.human_review_state === 'not_reviewed' && reviews.some((r) => r.state === 'superseded');
+  const why = run.human_review_state === 'not_reviewed' && !replaced ? notSentWhy(run.review_basis) : null;
+  const auto = autoLabel(run.auto_check_state);
+  return (
+    <p className="hr-review" data-testid="run-review">
+      <span>
+        사람 검토 <strong className={waiting ? 'is-wait' : run.human_review_state === 'not_reviewed' ? 'is-none' : undefined}>{human}</strong>
+      </span>
+      {auto && <span>{auto}</span>}
+      {open && <a href={inboxHref(open.inbox_item_id!)}>나를 기다리는 것에서 {reasonLabel(open.reason)} 검토 열기</a>}
+      {replaced && <span className="hr-dim">검토 요청은 다음 실행의 결과로 대체됐다</span>}
+      {why && <span className="hr-dim">{why}</span>}
+    </p>
   );
 }
 

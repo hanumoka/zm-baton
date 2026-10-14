@@ -2,6 +2,8 @@ import { useId, useState, type Ref } from 'react';
 import { Icon } from '../icons/Icon';
 import { BUCKETS, executorLabel, sessionHref, shortId, since, waited } from '../inboxModel';
 import type { InboxItem, NoticeStatus, SessionView } from '../sessionsApi';
+import { ReviewDetail } from '../review/ReviewDetail';
+import type { ReviewOutcome } from '../reviewsApi';
 import { at } from '../workModel';
 import {
   detailTitle,
@@ -38,6 +40,8 @@ type Props = {
   inSheet?: boolean;
   /** For tests: what sends a judgement. */
   send?: Send;
+  /** A review request's verdict went through (FN-0411); without it, [onJudged] hears it. */
+  onDecided?: (id: string, effect: ReviewOutcome, href: string | null) => void;
   /** A relay's answer went through: read the list again. The item stays and shows how it went. */
   onAnswered?: () => void;
   /** For tests: what sends a relay's answer. */
@@ -49,8 +53,20 @@ type Props = {
  * names, and what I can do here. A conflict is judged here (확인, 충돌 아님 with a reason, 해결);
  * a waiting session is answered in its own terminal, which closes the item by itself.
  */
-export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, inSheet = false, send, onAnswered = () => {}, relaySend }: Props) {
+export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, inSheet = false, send, onDecided, onAnswered = () => {}, relaySend }: Props) {
   const titleId = useId();
+  if (item.kind === 'risk_review' || item.kind === 'sample_review') {
+    return (
+      <ReviewDetail
+        item={item}
+        now={now}
+        onDecided={(_review, effect, href) => (onDecided ? onDecided(item.id, effect, href) : onJudged(item.id))}
+        onError={onError}
+        titleRef={titleRef}
+        inSheet={inSheet}
+      />
+    );
+  }
   const kind = kindOf(item);
   const path = filePath(item);
   const message = waitMessage(item);

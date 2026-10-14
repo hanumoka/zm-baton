@@ -4,6 +4,7 @@
 // it is written for a person.
 
 import type { Run, RunEvent } from './api';
+import type { AutoCheckState, HumanReviewState, RunReview } from './reviewsApi';
 
 export type Stage = 'draft' | 'plan_review' | 'ready' | 'in_progress' | 'result_review' | 'done' | 'cancelled';
 
@@ -154,6 +155,12 @@ export type ItemRun = Run & {
   capabilities?: Record<string, unknown> | null;
   inputs?: RunInput[];
   actions?: RunActions | null;
+  // Added with human review picking (FN-0411); an older server leaves them out.
+  result_snapshot_sha?: string | null;
+  human_review_state?: HumanReviewState | null;
+  auto_check_state?: AutoCheckState | null;
+  review_basis?: Record<string, unknown> | null;
+  reviews?: RunReview[];
   // Added with AI accounts and usage limits; an older server leaves them out.
   account?: { id: string; name: string; auth_kind: string } | null;
   /** What the adapter says the executor signed in with. */

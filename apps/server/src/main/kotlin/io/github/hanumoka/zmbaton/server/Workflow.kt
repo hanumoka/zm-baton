@@ -10,7 +10,8 @@ package io.github.hanumoka.zmbaton.server
  * `version` (checked by the caller), no move into `in_progress` for an AI executor except by an
  * accepted run, and no cancelling while a run is alive. A delegated run moves its work item on its
  * own (WorkItemService.followRun): started into `in_progress`, submitted on to `result_review`.
- * Handing a work item to an AI again continues it: [delegationPlan].
+ * Handing a work item to an AI again continues it: [delegationPlan]. A result with an open risk
+ * review request stays in `result_review` until a person decides it ([Facts.resultHeld]).
  */
 object Workflow {
 
@@ -65,6 +66,12 @@ object Workflow {
 		val readOnlyReason: String? = null,
 		/** How the newest delegated run of this work item ended; null when no AI ran it yet. */
 		val lastRunEnd: String? = null,
+		/**
+		 * Added with human review picking: the newest result has an open risk review request. The
+		 * result is not accepted until a person decides it, so result review is not passed through
+		 * and done is refused (contract "반려하면 작업이 어떻게 되나" 4).
+		 */
+		val resultHeld: Boolean = false,
 	)
 
 	/**
@@ -87,7 +94,7 @@ object Workflow {
 
 	/** The move to [target], or a not-allowed move when [target] is not reachable from here. */
 	fun move(facts: Facts, target: String): Move {
-		val path = path(target, facts.skippedStages)
+		val path = path(target, if (facts.resultHeld) facts.skippedStages - "result_review" else facts.skippedStages)
 		val needsNote = facts.stage == "result_review" && target == "in_progress" ||
 			facts.stage in setOf("in_progress", "result_review") && target == "plan_review"
 		val reason = when {
@@ -97,6 +104,8 @@ object Workflow {
 			target == "in_progress" && facts.stage == "ready" && facts.executorKind !in setOf(null, "human") ->
 				"AI가 실행 담당이면 실행 시도가 수락될 때 수행으로 넘어간다"
 			target == "cancelled" && facts.hasLiveRun -> "살아 있는 실행 시도를 먼저 멈춘다. 실행 기록의 「실행 취소」로 멈춘 뒤 취소한다"
+			target == "done" && facts.resultHeld ->
+				"마지막 결과에 열린 위험 목록 검토가 있다. 나를 기다리는 것에서 승인하거나 반려한 뒤에 완료한다"
 			else -> null
 		}
 		return Move(target, path, reason == null, reason, needsNote)
