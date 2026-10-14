@@ -1,4 +1,5 @@
 import { useId, useState, type Ref } from 'react';
+import { LinkedDecisions } from '../decisions/LinkedDecisions';
 import { Icon } from '../icons/Icon';
 import { StageGlyph } from '../icons/StageGlyph';
 import { RowSkeleton } from '../ui/Group';
@@ -100,6 +101,7 @@ export function WorkDetail({ item, detail, projects, skipped, actions, error, ti
             {editable && <EditFields key={`${it.id}:${it.version}`} detail={d} projects={projects} onSave={actions.update} />}
           </div>
           <aside className="dt-aside" aria-labelledby={`${titleId}-h`}>
+            <LinkedDecisions workItemId={it.id} />
             <h3 id={`${titleId}-h`}>이력</h3>
             {d.history.length === 0 ? (
               <p className="dt-none">아직 남은 이력이 없다.</p>
