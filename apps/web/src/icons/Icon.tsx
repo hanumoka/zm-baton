@@ -30,6 +30,7 @@ export type IconName =
   | 'git-file'
   | 'lock'
   | 'bell'
+  | 'focus'
   | 'alert'
   | 'conflict'
   | 'chevron-down'
@@ -151,6 +152,13 @@ const SHAPES: Record<IconName, ReactNode> = {
       <path d="M6.75 14.25h2.5" />
     </>
   ),
+  // Focus mode: the bell crossed out, as alerts wait until it ends.
+  focus: (
+    <>
+      <path d="M3.5 12h9l-1-1.5V7.25a3.5 3.5 0 0 0-7 0v3.25z" />
+      <path d="M6.75 14.25h2.5M2.75 2.75l10.5 10.5" />
+    </>
+  ),
   alert: (
     <>
       <circle cx="8" cy="8" r="6" />
@@ -201,6 +209,7 @@ export const ICONS: { name: IconName; label: string }[] = [
   { name: 'git-file', label: 'Git 파일' },
   { name: 'lock', label: '잠김' },
   { name: 'bell', label: '브라우저 알림' },
+  { name: 'focus', label: '집중 모드' },
   { name: 'alert', label: '오류' },
   { name: 'conflict', label: '겹침(충돌)' },
   { name: 'chevron-down', label: '펼쳐 고르기' },
