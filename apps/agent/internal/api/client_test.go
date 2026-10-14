@@ -114,3 +114,38 @@ func TestStatusErrorPermanence(t *testing.T) {
 		}
 	}
 }
+
+func TestRenewSaysStopGoneOrNoLeases(t *testing.T) {
+	status := http.StatusOK
+	var got map[string]any
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/runs/{id}/lease", func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&got)
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		io.WriteString(w, `{"state":"stopping","lease_seconds":45,"stop":"cancel","inputs":[{"id":"inp_1","text":"멈춰"}]}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c, _ := NewClient(srv.URL)
+	lease, err := c.Renew(context.Background(), "run_1", "dev_a", 4, nil)
+	if err != nil || lease.Stop != "cancel" || len(lease.Inputs) != 1 || lease.Inputs[0].Text != "멈춰" {
+		t.Fatalf("lease %+v %v", lease, err)
+	}
+	if got["device_id"] != "dev_a" || got["generation"] != 4.0 || got["inputs"] == nil {
+		t.Fatalf("request %v", got)
+	}
+	for s, want := range map[int]error{http.StatusConflict: ErrGone, http.StatusNotFound: ErrNoLeases, http.StatusMethodNotAllowed: ErrNoLeases} {
+		status = s
+		if _, err := c.Renew(context.Background(), "run_1", "dev_a", 4, []InputReport{{ID: "inp_1", State: "sent"}}); !errors.Is(err, want) {
+			t.Fatalf("HTTP %d gave %v", s, err)
+		}
+	}
+	status = http.StatusInternalServerError
+	var se *StatusError
+	if _, err := c.Renew(context.Background(), "run_1", "dev_a", 4, nil); !errors.As(err, &se) || se.Permanent() {
+		t.Fatalf("HTTP 500 gave %v", err)
+	}
+}

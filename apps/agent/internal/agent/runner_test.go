@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,86 +28,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func fakeClaude(mode string, args []string) int {
-	session := ""
-	for i, a := range args {
-		if a == "--session-id" && i+1 < len(args) {
-			session = args[i+1]
-		}
-	}
-	n := len(args)
-	if session == "" || n < 2 || args[0] != "-p" || args[n-2] != "--" {
-		fmt.Fprintln(os.Stderr, "fake claude: unexpected arguments")
-		return 9
-	}
-	emit := func(v map[string]any) {
-		v["session_id"] = session
-		line, _ := json.Marshal(v)
-		fmt.Println(string(line))
-	}
-	blocks := func(role string, b ...map[string]any) map[string]any {
-		list := make([]any, len(b))
-		for i := range b {
-			list[i] = b[i]
-		}
-		return map[string]any{"type": role, "message": map[string]any{"content": list}}
-	}
-	emit(map[string]any{"type": "system", "subtype": "init", "cwd": "/fake/should-not-leak"})
-	switch mode {
-	case "success":
-		emit(blocks("assistant", map[string]any{"type": "thinking", "thinking": "plan"}))
-		emit(blocks("assistant", map[string]any{"type": "tool_use", "id": "toolu_1", "name": "Read",
-			"input": map[string]any{"file_path": "a.txt"}}))
-		emit(blocks("user", map[string]any{"type": "tool_result", "tool_use_id": "toolu_1", "content": "text"}))
-		emit(blocks("assistant", map[string]any{"type": "text", "text": "echo: " + args[n-1]}))
-		emit(map[string]any{"type": "rate_limit_event", "rate_limit_info": map[string]any{"status": "allowed"}})
-		emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": "done",
-			"usage": map[string]any{"output_tokens": 3}})
-		return 0
-	case "noresult":
-		emit(blocks("assistant", map[string]any{"type": "text", "text": "partial"}))
-		return 3
-	case "hang":
-		time.Sleep(60 * time.Second)
-		return 0
-	case "edit":
-		// A delegated run: it must run with zm-baton's own hooks off, then change files in its folder.
-		if os.Getenv("ZM_BATON_OFF") != "1" {
-			fmt.Fprintln(os.Stderr, "fake claude: ZM_BATON_OFF is not set")
-			return 7
-		}
-		tools, restricted := "", false
-		for i, a := range args {
-			if a == "--allowedTools" && i+1 < n {
-				tools = args[i+1]
-			}
-			restricted = restricted || a == "--restricted"
-		}
-		if !restricted {
-			fmt.Fprintln(os.Stderr, "fake claude: a delegated run must be restricted")
-			return 5
-		}
-		if err := os.WriteFile("README.md", []byte("changed by the run\n"), 0o644); err != nil {
-			return 6
-		}
-		if err := os.WriteFile("made-by-run.txt", []byte("new\n"), 0o644); err != nil {
-			return 6
-		}
-		// Tools report absolute paths; the connector must cut the worktree's out.
-		cwd, _ := os.Getwd()
-		made := filepath.Join(cwd, "made-by-run.txt")
-		emit(blocks("assistant", map[string]any{"type": "tool_use", "id": "toolu_w", "name": "Write",
-			"input": map[string]any{"file_path": made}}))
-		emit(blocks("user", map[string]any{"type": "tool_result", "tool_use_id": "toolu_w",
-			"content": "File created successfully at: " + made + " (also " + filepath.ToSlash(made) + ")"}))
-		emit(blocks("assistant", map[string]any{"type": "text", "text": "tools: " + tools + "; prompt: " + args[n-1]}))
-		emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": "done"})
-		return 0
-	}
-	return 8
-}
-
-// fakeServer mimics the three server endpoints the agent uses.
+// fakeServer mimics the server endpoints the agent uses.
 type fakeServer struct {
 	mu      sync.Mutex
 	pending []api.PendingRun
@@ -121,12 +41,63 @@ type fakeServer struct {
 
 	answers map[string]api.Claim // a claim answer per run id; others get a compat-test claim
 	queries []string             // the raw query of every poll
+
+	// Lease renewals: leaseStatus, if set, answers every renewal (409 gone, 404 an old server);
+	// stop makes the answer ask for a stop; inputs wait until a report moves them on.
+	leaseStatus int
+	stop        bool
+	inputs      []api.Input
+	renewals    map[string]int
+	reports     []api.InputReport
+}
+
+// renewed counts the lease renewals of a run.
+func (f *fakeServer) renewed(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.renewals[id]
+}
+
+func (f *fakeServer) set(fn func(f *fakeServer)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(f)
 }
 
 func newFakeServer(t *testing.T) (*fakeServer, *api.Client) {
 	t.Helper()
-	f := &fakeServer{taken: map[string]bool{}, events: map[string][]api.Event{}, answers: map[string]api.Claim{}}
+	f := &fakeServer{taken: map[string]bool{}, events: map[string][]api.Event{}, answers: map[string]api.Claim{}, renewals: map[string]int{}}
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/runs/{id}/lease", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			DeviceID   string            `json:"device_id"`
+			Generation int64             `json:"generation"`
+			Inputs     []api.InputReport `json:"inputs"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.DeviceID == "" || body.Inputs == nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.renewals[r.PathValue("id")]++
+		if f.leaseStatus != 0 {
+			w.WriteHeader(f.leaseStatus)
+			return
+		}
+		f.reports = append(f.reports, body.Inputs...)
+		var waiting []api.Input
+		for _, in := range f.inputs {
+			if !slices.ContainsFunc(f.reports, func(rep api.InputReport) bool { return rep.ID == in.ID }) {
+				waiting = append(waiting, in)
+			}
+		}
+		lease := api.Lease{State: "running", LeaseSeconds: 45, Inputs: waiting}
+		if f.stop {
+			lease.State, lease.Stop = "stopping", "cancel"
+		}
+		json.NewEncoder(w).Encode(lease)
+	})
 	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -200,7 +171,7 @@ func newTestRunner(t *testing.T, c *api.Client, mode string, timeout time.Durati
 	r, err := New(Config{
 		Client: c, DeviceID: "dev_test", Workdir: t.TempDir(), Prompt: "say hi",
 		AllowedTools: "Read", ClaudePath: os.Args[0], PollInterval: 20 * time.Millisecond,
-		RunTimeout: timeout, FlushInterval: 20 * time.Millisecond,
+		RunTimeout: timeout, FlushInterval: 20 * time.Millisecond, RenewInterval: 20 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)

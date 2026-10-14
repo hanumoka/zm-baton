@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 )
@@ -51,20 +52,64 @@ type Workspace struct {
 	// BaseRef is the branch the base commit came from: the delegation's base branch, else the
 	// branch checked out in Root when the run began, else "HEAD" (a detached checkout).
 	BaseRef string
+	// Origin says how the worktree came to be: OriginNew, OriginReused or OriginPreviousBranch.
+	Origin string
 	// tipRef is BaseRef spelled so that git reads it as that branch, e.g. refs/heads/main.
 	tipRef string
+	// startPoint is the commit the new worktree checks out: the base commit, or the tip of an
+	// earlier run's branch.
+	startPoint string
+}
+
+// How a run's worktree came to be (reported as workspace.origin).
+const (
+	OriginNew            = "new"             // its own new worktree at the base commit
+	OriginReused         = "reused"          // the earlier run's worktree, continued (contract 6)
+	OriginPreviousBranch = "previous_branch" // its own new worktree at the tip of the earlier run's branch (contract 6.1)
+)
+
+// Previous is what an earlier run reported about its worktree: its branch, base commit and base ref.
+type Previous struct {
+	Branch     string
+	BaseCommit string
+	BaseRef    string
+}
+
+// PreviousFrom reads an earlier run's workspace as the server sent it; ok is false when it lacks a
+// usable branch or base commit.
+func PreviousFrom(ws map[string]any) (Previous, bool) {
+	p := Previous{}
+	p.Branch, _ = ws["branch"].(string)
+	p.BaseCommit, _ = ws["base_commit"].(string)
+	p.BaseRef, _ = ws["base_ref"].(string)
+	if p.BaseRef == "" {
+		p.BaseRef = "HEAD"
+	}
+	ok := IsBranchName(p.Branch) && strings.HasPrefix(p.Branch, BranchPrefix) && commit.MatchString(p.BaseCommit) &&
+		(p.BaseRef == "HEAD" || IsBranchName(p.BaseRef))
+	return p, ok
 }
 
 // Create makes a worktree for runID under worktrees, on a new branch zm-baton/<runID> starting at
 // the tip of baseBranch, or at Root's current commit when baseBranch is empty (contract 1).
 func Create(ctx context.Context, root, worktrees, repoKey, runIDValue, baseBranch string) (*Workspace, error) {
+	w, err := Plan(ctx, root, worktrees, repoKey, runIDValue, baseBranch)
+	if err != nil {
+		return nil, err
+	}
+	return w, w.Make(ctx)
+}
+
+// Plan works out a new worktree for runID without changing anything: the base commit (the tip of
+// baseBranch, or Root's current commit), and that neither its folder nor its branch exists yet.
+func Plan(ctx context.Context, root, worktrees, repoKey, runIDValue, baseBranch string) (*Workspace, error) {
 	if !runID.MatchString(runIDValue) {
 		return nil, fmt.Errorf("run id %q cannot name a branch", runIDValue)
 	}
 	if baseBranch != "" && !IsBranchName(baseBranch) {
 		return nil, fmt.Errorf("base branch %q is not a usable branch name", baseBranch)
 	}
-	w := &Workspace{RepoKey: repoKey, Root: root, Path: filepath.Join(worktrees, runIDValue), Branch: BranchPrefix + runIDValue}
+	w := &Workspace{RepoKey: repoKey, Root: root, Path: filepath.Join(worktrees, runIDValue), Branch: BranchPrefix + runIDValue, Origin: OriginNew}
 	if baseBranch != "" {
 		// A local branch first; a name such as origin/main is taken as it is.
 		w.tipRef = "refs/heads/" + baseBranch
@@ -88,21 +133,124 @@ func Create(ctx context.Context, root, worktrees, repoKey, runIDValue, baseBranc
 			}
 		}
 	}
+	w.startPoint = w.BaseCommit
+	return w, w.checkFree(ctx)
+}
+
+// PlanFrom works out a new worktree for runID on its own branch that starts at the tip of an earlier
+// run's branch and keeps that run's base commit and base ref, so the change list still counts from
+// the original base (contract 6.1). What the earlier run left uncommitted is not on its branch.
+func PlanFrom(ctx context.Context, root, worktrees, repoKey, runIDValue string, prev Previous) (*Workspace, error) {
+	if !runID.MatchString(runIDValue) {
+		return nil, fmt.Errorf("run id %q cannot name a branch", runIDValue)
+	}
+	tip, err := revParse(ctx, root, "refs/heads/"+prev.Branch)
+	if err != nil {
+		return nil, fmt.Errorf("the earlier run's branch %s is not in the repository: %w", prev.Branch, err)
+	}
+	w := &Workspace{
+		RepoKey: repoKey, Root: root, Path: filepath.Join(worktrees, runIDValue), Branch: BranchPrefix + runIDValue,
+		BaseCommit: prev.BaseCommit, BaseRef: prev.BaseRef, Origin: OriginPreviousBranch, startPoint: tip,
+		tipRef: tipRefFor(ctx, root, prev.BaseRef),
+	}
+	return w, w.checkFree(ctx)
+}
+
+// Open takes over an earlier run's worktree at path (contract 6): it must still be a worktree of
+// root, checked out on that run's branch. Nothing in it changes.
+func Open(ctx context.Context, root, path, repoKey string, prev Previous) (*Workspace, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("the earlier run's worktree is gone: %w", err)
+	}
+	head, err := git(ctx, path, true, "symbolic-ref", "--quiet", "HEAD")
+	if err != nil || head != "refs/heads/"+prev.Branch {
+		return nil, fmt.Errorf("the earlier run's worktree is not on its branch %s any more", prev.Branch)
+	}
+	common, err := git(ctx, path, true, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return nil, err
+	}
+	rootCommon, err := git(ctx, root, true, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return nil, err
+	}
+	if !sameDir(common, rootCommon) {
+		return nil, errors.New("the earlier run's worktree belongs to another repository")
+	}
+	if _, err := revParse(ctx, root, prev.BaseCommit); err != nil {
+		return nil, fmt.Errorf("the earlier run's base commit is gone: %w", err)
+	}
+	return &Workspace{
+		RepoKey: repoKey, Root: root, Path: path, Branch: prev.Branch, BaseCommit: prev.BaseCommit, BaseRef: prev.BaseRef,
+		Origin: OriginReused, tipRef: tipRefFor(ctx, root, prev.BaseRef), startPoint: prev.BaseCommit,
+	}, nil
+}
+
+// Make creates the planned worktree and its branch at the start point.
+func (w *Workspace) Make(ctx context.Context) error {
+	if w.Origin == OriginReused {
+		return errors.New("a reused worktree already exists")
+	}
+	if err := os.MkdirAll(filepath.Dir(w.Path), 0o755); err != nil {
+		return err
+	}
+	_, err := git(ctx, w.Root, false, "worktree", "add", "--quiet", "-b", w.Branch, w.Path, w.startPoint)
+	return err
+}
+
+// checkFree refuses a planned worktree whose folder or branch already exists; both are left as they are.
+func (w *Workspace) checkFree(ctx context.Context) error {
 	if _, err := os.Stat(w.Path); err == nil {
-		return nil, fmt.Errorf("worktree folder %s already exists; it is left as it is", w.Path)
+		return fmt.Errorf("worktree folder %s already exists; it is left as it is", w.Path)
 	}
-	if err := os.MkdirAll(worktrees, 0o755); err != nil {
-		return nil, err
+	if _, err := revParse(ctx, w.Root, "refs/heads/"+w.Branch); err == nil {
+		return fmt.Errorf("branch %s already exists; it is left as it is", w.Branch)
 	}
-	if _, err := git(ctx, root, false, "worktree", "add", "--quiet", "-b", w.Branch, w.Path, w.BaseCommit); err != nil {
-		return nil, err
+	return nil
+}
+
+// tipRefFor spells a base ref so that git reads it as that branch: refs/heads/<name> when the
+// local branch exists, else the name as it is, and HEAD for a detached base.
+func tipRefFor(ctx context.Context, root, baseRef string) string {
+	if baseRef == "" || baseRef == "HEAD" {
+		return "HEAD"
 	}
-	return w, nil
+	if _, err := revParse(ctx, root, "refs/heads/"+baseRef); err == nil {
+		return "refs/heads/" + baseRef
+	}
+	return baseRef
+}
+
+// RepoKey is the repository's key as `zm-baton repo add` computes it: "git:" and its smallest root
+// commit. A folder that now holds another repository has another key.
+func RepoKey(ctx context.Context, root string) (string, error) {
+	out, err := git(ctx, root, true, "rev-list", "--max-parents=0", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	roots := strings.Fields(out)
+	if len(roots) == 0 {
+		return "", errors.New("the repository has no commit")
+	}
+	slices.Sort(roots)
+	return "git:" + roots[0], nil
+}
+
+func sameDir(a, b string) bool {
+	ca, cb := filepath.Clean(a), filepath.Clean(b)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(ca, cb)
+	}
+	return ca == cb
 }
 
 // Report is the workspace for the run record (contract 8): no path on this device.
 func (w *Workspace) Report() map[string]any {
-	return map[string]any{"repo_key": w.RepoKey, "base_commit": w.BaseCommit, "branch": w.Branch, "base_ref": w.BaseRef}
+	r := map[string]any{"repo_key": w.RepoKey, "base_commit": w.BaseCommit, "branch": w.Branch, "base_ref": w.BaseRef}
+	if w.Origin != "" {
+		r["origin"] = w.Origin
+	}
+	return r
 }
 
 // Changes is the git_changes payload: the files the run changed since its base commit, committed
@@ -231,3 +379,6 @@ func intersect(files, other []string) []string {
 	}
 	return out
 }
+
+// IsRunID reports whether s is a run id that can name a branch and a folder: run_ and safe characters.
+func IsRunID(s string) bool { return runID.MatchString(s) }

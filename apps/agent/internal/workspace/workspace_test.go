@@ -206,3 +206,98 @@ func TestBranchNameRuleMatchesTheServer(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanChangesNothingAndRefusesATakenBranch(t *testing.T) {
+	root := newRepo(t)
+	trees := filepath.Join(filepath.Dir(root), "runs")
+	w, err := Plan(context.Background(), root, trees, "git:abc", runA, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Origin != OriginNew || w.Report()["origin"] != "new" {
+		t.Fatalf("origin %q", w.Origin)
+	}
+	if _, err := os.Stat(w.Path); err == nil {
+		t.Fatal("Plan made the worktree folder")
+	}
+	gitT(t, root, "branch", "zm-baton/"+runA)
+	if _, err := Plan(context.Background(), root, trees, "git:abc", runA, "main"); err == nil {
+		t.Fatal("a run branch that already exists was planned again")
+	}
+}
+
+func TestAnEarlierRunsWorktreeIsTakenOverOrItsBranchContinued(t *testing.T) {
+	ctx := context.Background()
+	root := newRepo(t)
+	trees := filepath.Join(filepath.Dir(root), "runs")
+	first, err := Create(ctx, root, trees, "git:abc", runA, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(first.Path, "a.txt"), "by the first run\n")
+	gitT(t, first.Path, "commit", "--quiet", "-am", "first run")
+	prev, ok := PreviousFrom(first.Report())
+	if !ok || prev.Branch != first.Branch || prev.BaseCommit != first.BaseCommit || prev.BaseRef != "main" {
+		t.Fatalf("previous %+v %v", prev, ok)
+	}
+
+	again, err := Open(ctx, root, first.Path, "git:abc", prev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Origin != OriginReused || again.Path != first.Path || again.Branch != first.Branch || again.BaseCommit != first.BaseCommit {
+		t.Fatalf("taken over %+v", again)
+	}
+	if _, err := again.Changes(ctx, true); err != nil {
+		t.Fatalf("changes of a taken-over worktree: %v", err)
+	}
+	if err := again.Make(ctx); err == nil {
+		t.Fatal("Make on a taken-over worktree")
+	}
+	// Another run's worktree, or one moved to another branch, is not taken over.
+	other := gitT(t, root, "rev-parse", "HEAD")
+	gitT(t, first.Path, "switch", "--quiet", "-c", "elsewhere")
+	if _, err := Open(ctx, root, first.Path, "git:abc", prev); err == nil {
+		t.Fatal("a worktree on another branch was taken over")
+	}
+	gitT(t, first.Path, "switch", "--quiet", first.Branch)
+	if _, err := Open(ctx, newRepo(t), first.Path, "git:abc", prev); err == nil {
+		t.Fatal("a worktree of another repository was taken over")
+	}
+
+	const runB = "run_0199aaaa-0000-7000-8000-000000000002"
+	next, err := PlanFrom(ctx, root, trees, "git:abc", runB, prev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := next.Make(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if next.Origin != OriginPreviousBranch || next.Branch != "zm-baton/"+runB || next.BaseCommit != first.BaseCommit || next.BaseRef != "main" {
+		t.Fatalf("continued %+v", next)
+	}
+	if gitT(t, next.Path, "rev-parse", "HEAD") != gitT(t, root, "rev-parse", first.Branch) || other != first.BaseCommit {
+		t.Fatal("the new worktree does not start at the earlier branch's tip")
+	}
+	changes, err := next.Changes(ctx, true)
+	if err != nil || !slices.Equal(changes["files"].([]string), []string{"a.txt"}) {
+		t.Fatalf("the change list counts from the original base: %v %v", changes, err)
+	}
+	if _, err := PlanFrom(ctx, root, trees, "git:abc", "run_c", Previous{Branch: "zm-baton/run_gone", BaseCommit: first.BaseCommit, BaseRef: "main"}); err == nil {
+		t.Fatal("a missing earlier branch was continued")
+	}
+	if _, ok := PreviousFrom(map[string]any{"branch": "main", "base_commit": first.BaseCommit}); ok {
+		t.Fatal("a branch that is not a run branch was taken as an earlier run's")
+	}
+}
+
+func TestRepoKeyIsTheSmallestRootCommit(t *testing.T) {
+	root := newRepo(t)
+	key, err := RepoKey(context.Background(), root)
+	if err != nil || key != "git:"+gitT(t, root, "rev-list", "--max-parents=0", "HEAD") {
+		t.Fatalf("key %q %v", key, err)
+	}
+	if !IsRunID(runA) || IsRunID("run_../x") || IsRunID("main") {
+		t.Fatal("run id rule")
+	}
+}

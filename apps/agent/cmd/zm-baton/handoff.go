@@ -255,9 +255,11 @@ func agentCmd(args []string, stderr io.Writer) int {
 		}
 		return out, nil
 	}
+	// Run records (agent/record.go) stay beside repos.json: they say whether an executor this device
+	// started ended with no child left, which a continuing run needs before it reuses a worktree.
 	h, err := agent.NewHandoff(agent.Config{
 		Client: client, DeviceID: cfg.DeviceID, ClaudePath: claudePath, PollInterval: *pollInterval,
-		RunTimeout: *runTimeout, Log: log,
+		RunTimeout: *runTimeout, StateDir: filepath.Join(home, "runs"), Log: log,
 	}, repos, tempDirs())
 	if err != nil {
 		return fail("bad flags", err)

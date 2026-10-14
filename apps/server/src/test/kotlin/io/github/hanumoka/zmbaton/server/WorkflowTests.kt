@@ -15,7 +15,8 @@ class WorkflowTests {
 		liveRun: Boolean = false,
 		skipped: Set<String> = emptySet(),
 		readOnly: String? = null,
-	) = Workflow.Facts(stage, executor, liveRun, skipped, readOnly)
+		lastRunEnd: String? = null,
+	) = Workflow.Facts(stage, executor, liveRun, skipped, readOnly, lastRunEnd)
 
 	@Test
 	fun `every stage offers the contract's moves and closed stages offer none`() {
@@ -71,7 +72,7 @@ class WorkflowTests {
 	fun `a live run blocks cancelling and nothing else`() {
 		val cancel = Workflow.move(facts("in_progress", liveRun = true), "cancelled")
 		assertFalse(cancel.allowed)
-		assertEquals("살아 있는 실행 시도를 먼저 멈춘다", cancel.reason)
+		assertEquals("살아 있는 실행 시도를 먼저 멈춘다. 실행 기록의 「실행 취소」로 멈춘 뒤 취소한다", cancel.reason)
 		assertTrue(Workflow.move(facts("in_progress", liveRun = true), "result_review").allowed)
 	}
 
@@ -104,6 +105,28 @@ class WorkflowTests {
 		assertTrue(Workflow.delegationRefusal(facts("ready", liveRun = true))!!.contains("살아 있는 실행 시도"))
 		val copy = Workflow.delegationRefusal(facts("ready", readOnly = "정본이 Git 파일(registry/tasks.json)이다"))!!
 		assertTrue(copy.startsWith("정본이 Git 파일(registry/tasks.json)이다.") && "새 작업" in copy, copy)
+	}
+
+	@Test
+	fun `an AI run is continued from in_progress, and from result_review only with a reason`() {
+		val first = Workflow.delegationPlan(facts("ready"))
+		assertEquals(Workflow.DelegationMode.FIRST, first.mode)
+		assertFalse(first.needsNote)
+		for (end in listOf("failed", "cancelled", "lost", "submitted")) {
+			assertEquals(Workflow.DelegationMode.RESUME, Workflow.delegationPlan(facts("in_progress", "manager", lastRunEnd = end)).mode, end)
+		}
+		val back = Workflow.delegationPlan(facts("result_review", "manager", lastRunEnd = "submitted"))
+		assertEquals(Workflow.DelegationMode.REJECT_AND_RESUME, back.mode)
+		assertTrue(back.needsNote)
+		assertNull(back.refusal)
+		// Still never while a run lives, for a Git copy or once closed.
+		assertNull(Workflow.delegationPlan(facts("in_progress", "manager", liveRun = true, lastRunEnd = "lost")).mode)
+		assertNull(Workflow.delegationPlan(facts("in_progress", "manager", readOnly = "x", lastRunEnd = "lost")).mode)
+		assertNull(Workflow.delegationPlan(facts("done", "manager", lastRunEnd = "submitted")).mode)
+		// A person's own in_progress work is not taken over.
+		val human = Workflow.delegationPlan(facts("in_progress"))
+		assertNull(human.mode)
+		assertTrue(human.refusal!!.contains("다시 계획하기"))
 	}
 
 	@Test

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -121,47 +122,180 @@ func (h *Handoff) claimNext(ctx context.Context) (*api.Claim, Repo, error) {
 	return nil, Repo{}, nil
 }
 
-// Execute runs one claimed delegated run in a new worktree of repo.
+// Execute runs one claimed delegated run in a worktree of repo. Before the executor starts, the
+// readiness check (readiness.go) looks at the delegation, the executor, the repository, the disk and
+// the worktree; any failure ends the run before the executor. A continuing run reuses the earlier
+// run's worktree and session only as contract v1 "실행마다 별도 작업 트리" 6 allows (workspaceFor).
 func (h *Handoff) Execute(ctx context.Context, c api.Claim, repo Repo) Result {
 	return h.runner.ExecuteJob(ctx, c, func(ctx context.Context, log *slog.Logger) (Job, error) {
+		ready := &Readiness{}
+		job := Job{Readiness: ready}
 		d := c.Delegation
 		if d == nil || d.Executor != claude.Executor || d.RepoKey != repo.Key {
-			return Job{}, errors.New("the claim carries no Claude Code delegation for this repository")
+			return job, ready.Fail("scope", "청구 응답에 이 저장소를 Claude Code에 맡긴 위임이 없다", nil)
 		}
 		if strings.TrimSpace(c.Instruction) == "" {
-			return Job{}, errors.New("the claim carries no instruction")
+			return job, ready.Fail("scope", "청구 응답에 실행 지시가 없다", nil)
 		}
 		tools, err := checkTools(d.AllowedTools)
 		if err != nil {
-			return Job{}, err
+			return job, ready.Fail("scope", "위임의 도구를 실행기에 넘길 수 없다: "+err.Error(), err)
 		}
+		ready.Pass("scope", "도구 "+strings.Join(tools, ", ")+". 명령 실행 도구는 넘기지 않는다")
+
+		version, v, err := claudeVersion(ctx, h.runner.cfg.ClaudePath)
+		if err != nil {
+			return job, ready.Fail("executor", "Claude Code의 판을 읽지 못했다", err)
+		}
+		if !versionAtLeast(v, MinClaudeVersion) {
+			return job, ready.Fail("executor", fmt.Sprintf("Claude Code %s 이상이 필요하다. 이 PC는 %s다", versionString(MinClaudeVersion), version), nil)
+		}
+		ready.Pass("executor", "Claude Code "+version)
+
 		// Neither the repository nor its worktrees may sit under a temp folder (contract "실행할 때 넘기는 것").
 		if _, err := CheckWorkdir(repo.Root, h.tempDirs); err != nil {
-			return Job{}, err
+			return job, ready.Fail("repository", "등록한 저장소 폴더가 없거나 임시 폴더 안에 있다", err)
 		}
+		key, err := workspace.RepoKey(ctx, repo.Root)
+		if err != nil {
+			return job, ready.Fail("repository", "등록한 폴더에서 저장소의 첫 커밋을 읽지 못했다", err)
+		}
+		if key != repo.Key {
+			return job, ready.Fail("repository", "등록한 폴더에 지금은 다른 저장소가 있다. zm-baton repo add로 다시 등록한다", nil)
+		}
+		ready.Pass("repository", "등록한 저장소와 같다")
+
 		if err := os.MkdirAll(repo.Worktrees, 0o755); err != nil {
-			return Job{}, err
+			return job, ready.Fail("worktree_folder", "작업 트리 폴더를 만들 수 없다", err)
 		}
 		if _, err := CheckWorkdir(repo.Worktrees, h.tempDirs); err != nil {
-			return Job{}, err
+			return job, ready.Fail("worktree_folder", "작업 트리 폴더가 임시 폴더 안에 있다", err)
 		}
-		ws, err := workspace.Create(ctx, repo.Root, repo.Worktrees, repo.Key, c.RunID, d.BaseBranch)
+		ready.Pass("worktree_folder", "작업 트리 폴더를 쓸 수 있다")
+		switch free, err := freeBytes(repo.Worktrees); {
+		case err != nil:
+			ready.Pass("disk", "남은 공간을 읽지 못해 확인하지 않았다")
+			log.Warn("could not read the free disk space", "err", err)
+		case free < MinFreeBytes:
+			return job, ready.Fail("disk", fmt.Sprintf("작업 트리 폴더의 디스크에 남은 공간이 %d MB로, %d MB보다 적다", free>>20, MinFreeBytes>>20), nil)
+		default:
+			ready.Pass("disk", fmt.Sprintf("남은 공간 %d MB", free>>20))
+		}
+
+		ws, session, note, err := h.workspaceFor(ctx, c, repo, ready, log)
 		if err != nil {
-			return Job{}, err
+			return job, err // a failed check
 		}
+		job.Workspace = ws.Report()
 		log.Info("worktree ready; it stays after the run for you to review", "path", ws.Path, "branch", ws.Branch,
-			"base_commit", ws.BaseCommit, "base_ref", ws.BaseRef)
-		return Job{
-			Workdir:      ws.Path,
-			Prompt:       c.Instruction,
-			AllowedTools: strings.Join(tools, ","),
-			Workspace:    ws.Report(),
-			Changes:      ws.Changes,
-			Env:          executorEnv,
-			Restricted:   true,
-			HideDir:      ws.Path,
-		}, nil
+			"base_commit", ws.BaseCommit, "base_ref", ws.BaseRef, "origin", ws.Origin, "resume_session", session != "")
+		prompt := c.Instruction
+		if appendix := h.appendix(ctx, c, ws, note, log); appendix != "" {
+			prompt += "\n\n" + appendix
+		}
+		job.Workdir = ws.Path
+		job.Prompt = prompt
+		job.AllowedTools = strings.Join(tools, ",")
+		job.Changes = ws.Changes
+		job.Env = executorEnv
+		job.Restricted = true
+		job.HideDir = ws.Path
+		job.LiveInput = true
+		job.ResumeSession = session
+		return job, nil
 	})
+}
+
+// workspaceFor picks the run's worktree (contract v1 "실행마다 별도 작업 트리" 1, 6):
+//
+//  1. A continuing run on the device that ran the earlier one takes over that worktree and its
+//     executor session, but only when this device saw that executor and its child processes end.
+//  2. Otherwise, on that device, a new worktree on the run's own branch starts at the tip of the
+//     earlier run's branch (6.1). The earlier worktree stays as it is (6.4).
+//  3. A first run, a run on another device (6.2), or one whose earlier branch is gone starts from
+//     the delegation's base.
+//
+// It returns the worktree, the session to continue ("" for a new one) and a note for the executor.
+func (h *Handoff) workspaceFor(ctx context.Context, c api.Claim, repo Repo, ready *Readiness, log *slog.Logger) (*workspace.Workspace, string, string, error) {
+	r := c.Resume
+	note := ""
+	if r != nil && r.SameDevice && workspace.IsRunID(r.RunID) {
+		if prev, ok := workspace.PreviousFrom(r.Workspace); ok {
+			confirmed, why := h.runner.records.endedConfirmed(r.RunID, r.SessionID)
+			if confirmed {
+				ws, err := workspace.Open(ctx, repo.Root, filepath.Join(repo.Worktrees, r.RunID), repo.Key, prev)
+				if err == nil {
+					ready.Pass("resume", why+". 이전 실행의 작업 트리와 세션을 이어 쓴다")
+					return ws, r.SessionID, fmt.Sprintf("이 작업 트리는 이전 실행(%s)이 쓰던 것이고, 같은 세션을 이어 간다.", r.RunID), nil
+				}
+				log.Warn("the earlier run's worktree cannot be taken over", "err", err)
+				why = "이전 실행의 작업 트리를 이어 쓸 수 없다"
+			}
+			ws, err := workspace.PlanFrom(ctx, repo.Root, repo.Worktrees, repo.Key, c.RunID, prev)
+			if err == nil {
+				if err := ws.Make(ctx); err != nil {
+					return nil, "", "", ready.Fail("worktree", "이전 실행의 브랜치에서 새 작업 트리를 만들지 못했다", err)
+				}
+				ready.Pass("resume", why+". 이전 실행의 브랜치 끝에서 새 작업 트리와 새 세션으로 시작한다")
+				return ws, "", fmt.Sprintf("이전 실행(%s)의 작업 트리를 이어 쓰지 않았다. 이유: %s. 그 브랜치 끝에서 새 작업 트리를 만들었으므로 이전 실행이 커밋하지 않은 변경은 여기에 없다.", r.RunID, why), nil
+			}
+			log.Warn("no worktree from the earlier run's branch", "err", err)
+		}
+		note = "이전 실행의 브랜치를 이 기기에서 찾지 못해 기준에서 새로 시작했다. 이전 실행의 결과는 여기에 없다."
+	} else if r != nil {
+		note = "이전 실행은 다른 기기에서 돌았다. 기준에서 새로 시작했으므로 이전 실행의 결과는 여기에 없다."
+	}
+	d := c.Delegation
+	ws, err := workspace.Plan(ctx, repo.Root, repo.Worktrees, repo.Key, c.RunID, d.BaseBranch)
+	if err != nil {
+		if d.BaseBranch != "" && strings.Contains(err.Error(), "base branch") {
+			return nil, "", "", ready.Fail("base_branch", "기준 브랜치 "+d.BaseBranch+"이(가) 이 저장소에 없다", err)
+		}
+		return nil, "", "", ready.Fail("worktree", "이 실행의 작업 트리를 만들 수 없다(같은 이름의 폴더나 브랜치가 이미 있거나 실행 번호가 맞지 않는다)", err)
+	}
+	ready.Pass("base_branch", "기준 "+ws.BaseRef+" "+ws.BaseCommit[:10])
+	if err := ws.Make(ctx); err != nil {
+		return nil, "", "", ready.Fail("worktree", "git worktree add가 실패했다", err)
+	}
+	ready.Pass("worktree", "새 작업 트리와 브랜치 "+ws.Branch)
+	if r != nil {
+		ready.Pass("resume", "이전 실행의 작업 트리와 세션을 쓰지 않는다")
+	}
+	return ws, "", note, nil
+}
+
+// appendix is what the connector adds to the server's instruction for a continuing run: how the
+// worktree came to be and which files it already holds changed (contract "실행이 끊겼을 때" 3: the
+// new run checks the files first). A first run gets nothing.
+func (h *Handoff) appendix(ctx context.Context, c api.Claim, ws *workspace.Workspace, note string, log *slog.Logger) string {
+	if c.Resume == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("zm-baton 연결 프로그램이 덧붙인다:\n")
+	if note != "" {
+		b.WriteString(note + "\n")
+	}
+	p, err := ws.Changes(ctx, false)
+	if err != nil {
+		log.Warn("could not list the worktree's changes for the instruction", "err", err)
+		b.WriteString("이 작업 트리의 바뀐 파일 목록을 만들지 못했다. 직접 확인한다.")
+		return b.String()
+	}
+	files, _ := p["files"].([]string)
+	if len(files) == 0 {
+		b.WriteString("이 작업 트리에는 아직 기준 커밋 대비 바뀐 파일이 없다.")
+		return b.String()
+	}
+	shown := files
+	if len(shown) > 50 {
+		shown = shown[:50]
+	}
+	fmt.Fprintf(&b, "이 작업 트리에서 기준 커밋 대비 이미 바뀐 파일 %d개: %s", len(files), strings.Join(shown, ", "))
+	if len(files) > len(shown) {
+		b.WriteString(" 외")
+	}
+	return b.String()
 }
 
 // checkTools keeps the delegation's tools only when every one is known; an empty list is refused.
