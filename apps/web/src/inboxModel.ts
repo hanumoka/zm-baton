@@ -2,22 +2,26 @@ import type { InboxItem, SessionView } from './sessionsApi';
 
 /**
  * The five buckets of the first screen, in the contract's order (contract v1 "항목과 순서").
- * [raised] is whether the server has a path that puts items there yet: today only waiting sessions
- * (2) and file conflicts between sessions (3). The others have kinds in the contract and none in
- * the server, so the screen says they are not relayed yet instead of showing an empty box.
+ * [raised] is whether the server has a path that puts items there yet: waiting sessions (2), file
+ * conflicts between sessions (3), and review requests for AI results (4 risk, 5 sample). The
+ * permission relay (1) has a kind in the contract and none in the server yet, so the screen says
+ * it is not relayed yet instead of showing an empty box.
  */
 export const BUCKETS: { bucket: InboxItem['bucket']; label: string; raised: boolean }[] = [
   { bucket: 1, label: '권한 요청', raised: false },
   { bucket: 2, label: '멈춘 AI의 질문', raised: true },
   { bucket: 3, label: '내 작업과 겹친 충돌', raised: true },
-  { bucket: 4, label: '위험 목록 검토', raised: false },
-  { bucket: 5, label: '표본 검토와 나머지 알림', raised: false },
+  { bucket: 4, label: '위험 목록 검토', raised: true },
+  { bucket: 5, label: '표본 검토와 나머지 알림', raised: true },
 ];
 
-/** Items per bucket. Within a bucket, whoever waited longest comes first; the server sends that order. */
+/**
+ * Items per bucket. Within a bucket, whoever waited longest comes first; the server sends that order.
+ * A review open longer than the organisation's hours is raised to bucket 1 (contract "항목과 순서" 2).
+ */
 export function groupByBucket(items: InboxItem[]): Map<number, InboxItem[]> {
   const groups = new Map<number, InboxItem[]>(BUCKETS.map((b) => [b.bucket, []]));
-  for (const item of items) groups.get(item.bucket)?.push(item);
+  for (const item of items) groups.get(item.promoted_at ? 1 : item.bucket)?.push(item);
   for (const list of groups.values()) {
     list.sort((a, b) => a.waiting_since.localeCompare(b.waiting_since) || a.id.localeCompare(b.id));
   }

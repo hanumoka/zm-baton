@@ -31,6 +31,8 @@ export type InboxItem = {
   repeat_count: number;
   waiting_since: string;
   notify: 'immediate' | 'digest';
+  /** A review that waited longer than the organisation's hours, raised to bucket 1; an older server leaves it out. */
+  promoted_at?: string | null;
 };
 
 export type NoticeStatus = 'acknowledged' | 'not_a_conflict' | 'resolved';

@@ -5,6 +5,7 @@ import { Documents } from './documents/Documents';
 import { BUCKETS, newImmediate } from './inboxModel';
 import { Inbox } from './inbox/Inbox';
 import { Kit } from './kit/Kit';
+import { RiskRules } from './review/RiskRules';
 import { clear, fail, lines, type Problems, type Source } from './problems';
 import { Sessions } from './sessions/Sessions';
 import { sessionsApi, type InboxItem, type SessionView } from './sessionsApi';
@@ -64,6 +65,7 @@ export function Shell() {
       if (next !== 'work') cleared('work');
       if (next !== 'decisions') cleared('decisions');
       if (next !== 'documents') cleared('documents');
+      if (next !== 'risk') cleared('risk');
     };
     window.addEventListener('hashchange', onHash);
     const clock = setInterval(() => setNow(Date.now()), 15_000);
@@ -209,6 +211,7 @@ export function Shell() {
               onClearQuery={() => setFindQ('')}
             />
           )}
+          {screen === 'risk' && <RiskRules onError={failed('risk')} onRead={() => cleared('risk')} />}
           {screen === 'runs' && <RunTest />}
           {screen === 'kit' && <Kit />}
         </div>

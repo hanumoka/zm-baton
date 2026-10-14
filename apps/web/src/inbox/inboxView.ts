@@ -34,6 +34,8 @@ export const rowOrder = (groups: InboxGroup[]) => groups.flatMap((g) => g.items.
 /** What an empty group says: a group the server fills says it is clear; one it does not fill yet says so. */
 export function groupNote(g: Pick<InboxGroup, 'bucket' | 'raised'>): string {
   if (!g.raised) return g.bucket === 1 ? '아직 중계하지 않는다' : '서버가 아직 만들지 않는다';
+  if (g.bucket === 4) return '사람이 볼 위험 결과가 없다';
+  if (g.bucket === 5) return '고른 표본이 없다';
   return g.bucket === 2 ? '기다리는 세션이 없다' : '겹친 파일이 없다';
 }
 
@@ -105,10 +107,19 @@ export const sharedWork = (s: SessionView | null) => (s && s.shared ? text(s.cur
  */
 export function rowTitle(item: InboxItem, sessions: SessionView[] | null): string {
   if (item.kind === 'notice') return filePath(item) ?? item.summary;
+  // A review request: the work item it is about; its file goes on the second line.
+  if (item.kind === 'risk_review' || item.kind === 'sample_review') return text(item.detail?.title) ?? item.summary;
   if (item.kind === 'session_waiting') {
     return waitMessage(item) ?? sharedWork(liveSession(sessions, item.source_id)) ?? (WAIT_LABELS[waitKind(item)] ?? WAIT_OTHER).long;
   }
   return item.summary;
+}
+
+/** A review request's first caught (or changed) file and how many more, for its second line. */
+export function reviewFiles(item: InboxItem): { first: string; more: number } | null {
+  const files = item.detail?.files;
+  if (!Array.isArray(files) || files.length === 0 || typeof files[0] !== 'string') return null;
+  return { first: files[0], more: files.length - 1 };
 }
 
 /** The detail's title: what waits for me, in one sentence. */
