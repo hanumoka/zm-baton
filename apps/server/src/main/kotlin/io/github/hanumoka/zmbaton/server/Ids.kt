@@ -50,6 +50,26 @@ object Ids {
 	/** A usage signal has no contract prefix; `usg_` keeps it readable. */
 	fun usageSignal(): String = "usg_" + uuidV7()
 
+	/** A person (contract "식별자" `usr_`). */
+	fun user(): String = "usr_" + uuidV7()
+
+	/**
+	 * A person's manager (contract `mgr_`): the person's id with `mgr_` in place of `usr_`, so a person
+	 * and their one manager record are read together (V13 named the owner's `mgr_owner`).
+	 */
+	fun managerOf(userId: String): String = "mgr_" + userId.removePrefix("usr_")
+
+	/** Beyond the contract's prefixes, like `aud_`: a note in a manager record, a team, a product, a repository, an environment. */
+	fun managerNote(): String = "mnt_" + uuidV7()
+
+	fun team(): String = "tem_" + uuidV7()
+
+	fun product(): String = "prd_" + uuidV7()
+
+	fun repository(): String = "rep_" + uuidV7()
+
+	fun environment(): String = "env_" + uuidV7()
+
 	/** Audit rows have no contract prefix; `aud_` keeps them readable next to the others. */
 	fun audit(): String = "aud_" + uuidV7()
 
