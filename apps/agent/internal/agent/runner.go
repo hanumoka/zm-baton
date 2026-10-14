@@ -80,7 +80,9 @@ type Config struct {
 	// ExecutorDir holds one Claude Code configuration folder per API-key account (auth.go). Empty
 	// gives such runs no folder of their own.
 	ExecutorDir string
-	Log         *slog.Logger
+	// MasterDir holds one empty working folder per master run (master.go). Empty refuses master runs.
+	MasterDir string
+	Log       *slog.Logger
 }
 
 // Job is what one claimed run executes. The compat-test loop builds it from its flags; the
@@ -120,6 +122,9 @@ type Job struct {
 	// MaxTurns and MaxBudgetUSD go to Claude Code's own --max-turns and --max-budget-usd (FN-0409).
 	MaxTurns     int
 	MaxBudgetUSD float64
+	// KeepResult sends a submitted run's final answer in the end report (`result`): the master's run
+	// answers with JSON the server reads (master.go). Other runs leave it false.
+	KeepResult bool
 }
 
 // Prepare makes the job after the claim, for example the run's worktree. An error ends the run
@@ -347,6 +352,10 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 	}
 	if auth := authReport(l.mapper, job); auth != nil {
 		endedPayload["auth"] = auth
+	}
+	if job.KeepResult && reason == EndSubmitted {
+		text, cut := l.mapper.ResultText()
+		endedPayload["result"] = map[string]any{"text": text, "truncated": cut}
 	}
 	r.addEndDetails(endedPayload, job, ctl)
 	rep.Add(claude.KindLifecycle, endedPayload)
