@@ -256,7 +256,9 @@ func (w *Workspace) Report() map[string]any {
 // Changes is the git_changes payload: the files the run changed since its base commit, committed
 // or not, tracked or new; those of them that also have uncommitted changes in Root (base_overlap);
 // and when final, those that also changed on the base branch since the base commit
-// (base_branch_overlap, contract 4). Other files of Root are never named.
+// (base_branch_overlap, contract 4) and the snapshot commit that pins the result for review
+// (snapshot, contract "검토 대상을 고정한다"). Other files of Root are never named. A snapshot
+// that cannot be made is left out; the server then marks the result as not pinned.
 func (w *Workspace) Changes(ctx context.Context, final bool) (map[string]any, error) {
 	diff, err := names(ctx, w.Path, false, "diff", "--name-only", "-z", "--no-renames", w.BaseCommit)
 	if err != nil {
@@ -287,6 +289,9 @@ func (w *Workspace) Changes(ctx context.Context, final bool) (map[string]any, er
 			return nil, err
 		}
 		p["base_branch_overlap"] = intersect(files, moved)
+		if sha, err := w.Snapshot(ctx); err == nil {
+			p["snapshot"] = sha
+		}
 	}
 	if len(files) > MaxFiles {
 		files = files[:MaxFiles]
@@ -299,6 +304,64 @@ func (w *Workspace) Changes(ctx context.Context, final bool) (map[string]any, er
 	}
 	p["files"] = files
 	return p, nil
+}
+
+// SnapshotRef is where a run's snapshot commit is kept: refs/zm-baton/snapshots/<run id>.
+const SnapshotRef = "refs/zm-baton/snapshots/"
+
+// Snapshot pins what the run left in its worktree as one commit (contract v1 "검토 대상을
+// 고정한다" 1, 2): committed, staged and unstaged changes and new files (not ignored ones). It
+// builds the commit in a temporary index, so the worktree's files, its index and its branch stay
+// as they are, and keeps it only under refs/zm-baton/snapshots/<run id>, never on a branch. When
+// nothing is left uncommitted the snapshot is the branch tip itself. It returns the commit.
+func (w *Workspace) Snapshot(ctx context.Context) (string, error) {
+	runIDValue := strings.TrimPrefix(w.Branch, BranchPrefix)
+	if !runID.MatchString(runIDValue) {
+		return "", fmt.Errorf("branch %q does not name a run", w.Branch)
+	}
+	head, err := revParse(ctx, w.Path, "HEAD")
+	if err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp("", "zm-baton-snapshot-*.index")
+	if err != nil {
+		return "", err
+	}
+	index := tmp.Name()
+	tmp.Close()
+	_ = os.Remove(index) // git makes it; an empty file is not an index
+	defer os.Remove(index)
+	env := []string{"GIT_INDEX_FILE=" + index}
+	if _, err := gitEnv(ctx, w.Path, env, "read-tree", "HEAD"); err != nil {
+		return "", err
+	}
+	if _, err := gitEnv(ctx, w.Path, env, "add", "--all", "--", "."); err != nil {
+		return "", err
+	}
+	tree, err := gitEnv(ctx, w.Path, env, "write-tree")
+	if err != nil {
+		return "", err
+	}
+	headTree, err := git(ctx, w.Path, true, "rev-parse", "--verify", "--quiet", "--end-of-options", head+"^{tree}")
+	if err != nil {
+		return "", err
+	}
+	sha := head
+	if tree != headTree {
+		// A commit object only: no branch moves. Its author is zm-baton, not the person or the executor.
+		id := []string{"GIT_AUTHOR_NAME=zm-baton", "GIT_AUTHOR_EMAIL=zm-baton@localhost",
+			"GIT_COMMITTER_NAME=zm-baton", "GIT_COMMITTER_EMAIL=zm-baton@localhost"}
+		if sha, err = gitEnv(ctx, w.Path, id, "commit-tree", tree, "-p", head, "-m", "zm-baton snapshot of "+runIDValue); err != nil {
+			return "", err
+		}
+	}
+	if !commit.MatchString(sha) {
+		return "", fmt.Errorf("git commit-tree gave %q", sha)
+	}
+	if _, err := gitEnv(ctx, w.Path, nil, "update-ref", SnapshotRef+runIDValue, sha); err != nil {
+		return "", err
+	}
+	return sha, nil
 }
 
 func revParse(ctx context.Context, dir, rev string) (string, error) {
@@ -332,17 +395,27 @@ func git(ctx context.Context, dir string, readOnly bool, args ...string) (string
 	return strings.TrimSpace(out), err
 }
 
+// gitEnv runs a writing git command with extra environment, e.g. a temporary index.
+func gitEnv(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+	out, err := gitRun(ctx, dir, false, env, args...)
+	return strings.TrimSpace(out), err
+}
+
 var errNoGit = errors.New("git is not available")
 
 // gitRaw runs git without a shell. readOnly commands do not take optional locks, so they never
 // block a person working in the same repository.
 func gitRaw(ctx context.Context, dir string, readOnly bool, args ...string) (string, error) {
+	return gitRun(ctx, dir, readOnly, nil, args...)
+}
+
+func gitRun(ctx context.Context, dir string, readOnly bool, env []string, args ...string) (string, error) {
 	path, err := exec.LookPath("git")
 	if err != nil {
 		return "", errNoGit
 	}
 	cmd := exec.CommandContext(ctx, path, append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0"), env...)
 	if readOnly {
 		cmd.Env = append(cmd.Env, "GIT_OPTIONAL_LOCKS=0")
 	}
