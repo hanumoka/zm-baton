@@ -255,7 +255,7 @@ class QuestionTests @Autowired constructor(
 		assertEquals("resolved", delivered.state)
 		assertEquals("answered", delivered.closeReason)
 		assertEquals("resume", delivered.delivery)
-		assertNotNull(delivered.deliveredAt)
+		assertTrue(delivered.deliveredAt != null)
 	}
 
 	@Test
