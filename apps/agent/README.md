@@ -8,12 +8,14 @@
 2. 청구에 성공하면 실행 시도마다 새 UUIDv4 세션 번호를 만든다. 그 번호로 Claude Code를 셸 없이 직접 띄운다.
 
    ```text
-   claude -p --output-format stream-json --verbose --session-id <UUID> --permission-prompts none --allowedTools <목록> -- <프롬프트>
+   claude -p --output-format stream-json --verbose --session-id <UUID> --permission-prompts none --allowedTools <목록> --restricted --strict-mcp-config -- <프롬프트>
    ```
 
    - 작업 폴더는 `--workdir`이다. 띄운 직후 PID를 기록한다.
    - Windows에서는 실행기를 일시 정지 상태로 띄운다. 그 프로세스의 핸들을 열고, 새 작업 객체(Job Object)에 넣은 뒤에 실행을 재개한다. 그래서 실행기가 보통 방법으로 띄우는 하위 프로세스는 같은 작업 객체에 들어간다. WMI처럼 다른 경로로 띄운 프로세스는 들어가지 않을 수 있다.
    - 프롬프트 앞의 `--`는 프롬프트가 `--allowedTools`의 값이나 옵션으로 읽히지 않게 막는다.
+   - `--restricted`와 `--strict-mcp-config`(Claude Code 2.1.296, 2026-10-14부터)는 이 PC의 사용자·프로젝트 설정(권한 모드 `auto` 등)과 사용자의 MCP 서버가 `--allowed-tools`를 넓히지 못하게 한다. 명령 실행 도구(Bash·PowerShell)는 빠진다.
+   - 청구한 실행 시도의 임대를 5초마다 갱신한다(`POST /api/runs/{id}/lease`). 서버가 중단을 요청하면(`stop: cancel`) 아래 5번 방법으로 실행기를 멈추고 `cancelled`로 끝낸다. 서버가 그 실행을 더는 잡고 있지 않다고 답해도(409) 같다. 갱신 API가 없는 옛 서버면 갱신하지 않고 계속 돈다.
 3. 출력 한 줄을 협업 계약 v1의 사건으로 바꾼다.
    - `thinking`은 `thought`, `tool_use`는 `action`, `tool_result`는 `action_result`, `text`는 `answer`가 된다.
    - `rate_limit_event`와 `result`의 사용량은 `usage`가 된다. 실패한 `result`는 `error`가 된다.
@@ -65,7 +67,7 @@ go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 
 ## 이 시험에서 하지 않는 것
 
-다음은 이 시험이 끝난 뒤 1단계 본작업에서 한다: 임대 갱신, WebSocket 깨우기, 보내지 못한 사건의 디스크 보관, `request_id`, 끊긴 실행의 재개, 질문 경로, 실행기 설정 격리(`CLAUDE_CONFIG_DIR`). 도구 결과 본문은 4,000자로 자르기만 하고 비밀값을 가리지 않는다.
+다음은 이 시험이 끝난 뒤 1단계 본작업에서 한다: WebSocket 깨우기, 보내지 못한 사건의 디스크 보관, `request_id`, 질문 경로, 실행기 설정 격리(`CLAUDE_CONFIG_DIR`). 임대 갱신은 둘째 판에서 이 시험에도 들어왔고, 끊긴 실행의 재개는 아래 `zm-baton agent`에 있다. 도구 결과 본문은 4,000자로 자르기만 하고 비밀값을 가리지 않는다.
 
 ## `zm-baton repo`·`zm-baton agent` — 맡긴 작업을 실행한다
 
@@ -76,7 +78,10 @@ go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 3. 청구한 실행마다 그 저장소에 새 작업 트리(`<작업 트리 폴더>/<실행 시도 번호>`)와 전용 브랜치(`zm-baton/<실행 시도 번호>`)를 만든다. 기준 커밋은 위임의 기준 브랜치 끝, 없으면 저장소의 지금 커밋이다.
 4. 그 작업 트리에서 서버가 만든 지시로 Claude Code를 띄운다. 도구는 위임이 정한 것(알려진 다섯 가지 `Read`·`Glob`·`Grep`·`Edit`·`Write` 안)만 `--allowedTools`로 넘기고, `--restricted`를 더해 사용자 설정의 권한 모드·허용 규칙이 넓히지 못하게 한다. 실행기 환경에 `ZM_BATON_OFF=1`을 넣어 소유자의 zm-baton 훅이 이 실행을 직접 연 세션으로 등록하지 않게 한다.
 5. 시작 보고와 끝 보고에 작업 트리(저장소 키·기준 커밋·브랜치·기준 브랜치)를 싣는다. 실행 중 60초마다와 끝날 때 `git_changes`(바뀐 파일, 원래 체크아웃에도 커밋하지 않은 변경이 있는 파일, 끝날 때 기준 브랜치에서도 바뀐 파일)를 보낸다. 도구가 보고하는 절대 경로에서 작업 트리 경로를 지워 보낸다.
-6. 실행이 끝나도 커밋하거나 작업 트리를 지우지 않는다. 띄우기 전에 실패하면(기준 브랜치 없음, 알 수 없는 도구, 임시 폴더 등) 실행기를 띄우지 않고 `executor_started: false`로 끝을 보고한다.
+6. 실행이 끝나도 커밋하거나 작업 트리를 지우지 않는다.
+7. 실행기를 띄우기 전에 준비 검사를 한다(`internal/agent/readiness.go`): 위임 범위, Claude Code 판(2.1.296 이상), 등록한 폴더의 첫 커밋이 저장소 키와 같은지, 작업 트리 폴더, 디스크(512 MB 이상), 기준 브랜치, 작업 트리. 미달이면 실행기를 띄우지 않고 `executor_started: false`와 끝 보고의 `readiness`(항목마다 통과 여부와 경로 없는 이유)로 끝낸다. 서버는 작업에 `readiness_failed`를 단다.
+8. 맡긴 실행은 지시를 표준 입력(`--input-format stream-json --replay-user-messages`)으로 넣는다. 임대 갱신의 답으로 받은 사람의 지시도 같은 입력에 넣고, Claude Code가 되돌려 보내면 받은 것으로 친다. 결과가 오면 입력을 닫는다. 지시마다의 상태는 다음 갱신과 끝 보고의 `inputs`로 보낸다.
+9. 이어서 맡긴 실행(청구 응답의 `resume`)은 같은 기기이고 `runs/<이전 실행 시도 번호>.json`(설정 폴더)이 이전 실행기와 하위 프로세스가 끝났다고 말할 때만 이전 작업 트리와 세션(`--resume`)을 이어 쓴다. 아니면 이전 실행 브랜치 끝에서 새 작업 트리와 새 세션으로, 다른 기기면 기준에서 시작한다. 어느 쪽인지는 작업 트리 보고의 `origin`과 지시 끝에 덧붙인 문장으로 알린다. Claude Code에 그 세션이 없으면 같은 작업 트리에서 새 세션으로 다시 띄운다.
 
 종료 코드는 실행 시험과 같다: 0 정상(`--once`이면 `submitted`이고 서버가 사건을 다 받음), 1 실패, 2 플래그·설정 오류, 130 Ctrl+C. `--run-timeout` 기본값은 30분이다.
 

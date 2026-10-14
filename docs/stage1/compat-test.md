@@ -15,7 +15,7 @@
    4. 사건 받기는 같은 사건 번호를 한 번만 저장하고, 옛 세대 번호의 보고는 상태를 바꾸지 않는다.
 3. **로컬 연결 프로그램**(`apps/agent`, Go)
    1. 할 일을 조회하고 청구한다.
-   2. `claude -p --output-format stream-json --verbose --session-id <실행 시도마다 만든 UUID>`를 셸 없이 직접 띄우고 PID를 기록한다. 세션 번호가 종료 전 확인용 표식이다. 화면 없는 승인 요청은 거부(`--permission-prompts none`)하고, 허용 도구는 `--allowedTools`로 좁힌다. 작업 폴더는 임시 폴더 밖에 둔다(F02 1차 실험, 협업 계약 v1 「실행할 때 넘기는 것」·「프로세스 관리」).
+   2. `claude -p --output-format stream-json --verbose --session-id <실행 시도마다 만든 UUID>`를 셸 없이 직접 띄우고 PID를 기록한다. 세션 번호가 종료 전 확인용 표식이다. 화면 없는 승인 요청은 거부(`--permission-prompts none`)하고, 허용 도구는 `--allowedTools`로 좁힌다. 작업 폴더는 임시 폴더 밖에 둔다(F02 1차 실험, 협업 계약 v1 「실행할 때 넘기는 것」·「프로세스 관리」). 2026-10-14부터 `--restricted`와 `--strict-mcp-config`(Claude Code 2.1.296)를 함께 넘긴다. 이 PC의 사용자·프로젝트 설정(예: 권한 모드 `auto`)과 사용자의 MCP 서버가 `--allowedTools`를 넓히지 못하게 하기 위해서다. 1단계 셋째 묶음 첫 판의 진짜 실행에서, 이 옵션 없이 띄운 Claude Code가 허용하지 않은 Bash를 실행한 것을 확인했다. 그래서 Claude Code 2.1.296보다 옛 판으로는 이 시험을 돌리지 않는다.
    3. 출력 한 줄을 협업 계약 v1 「보고 한 건의 모양」의 사건 하나로 바꿔 서버에 보낸다. `kind`는 활동 일곱 가지 가운데 하나이거나 시작·종료를 뜻하는 `lifecycle`이다.
    4. 끝났다는 사건을 보내고 실행 시도를 끝낸다.
 
