@@ -5,7 +5,7 @@ import { EmptyState } from '../ui/EmptyState';
 import { GroupHead, GroupSubHead, RowSkeleton } from '../ui/Group';
 import { ListPane, type ListHead } from '../ui/ListPane';
 import { tabStop } from '../ui/rowKeys';
-import { groupAside, itemSessions, kindOf, notifyLabel, rowOrder, rowTitle, type InboxGroup, type ListState } from './inboxView';
+import { filePath, groupAside, itemSessions, kindOf, notifyLabel, rowOrder, rowTitle, type InboxGroup, type ListState } from './inboxView';
 import { RelayState } from './RelayDetail';
 import { isRelay, relayActive } from './relayView';
 
@@ -174,7 +174,7 @@ export function InboxRow({
       <span className="lrow-l1">
         <Icon name={kind.mark} />
         <span className="lrow-state">{kind.label}</span>
-        <span className={item.kind === 'notice' ? 'lrow-title ib-file' : 'lrow-title'}>{rowTitle(item, sessions)}</span>
+        <span className={filePath(item) ? 'lrow-title ib-file' : 'lrow-title'}>{rowTitle(item, sessions)}</span>
       </span>
       <span className="lrow-sub">
         <span className="ib-age num">{waited(item.waiting_since, now)}</span>

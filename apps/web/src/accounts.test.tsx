@@ -18,6 +18,10 @@ import {
   todayLine,
   writeView,
 } from './accounts/accountView';
+import { InboxDetail } from './inbox/InboxDetail';
+import { InboxRow } from './inbox/InboxList';
+import { detailTitle, isUsageAlert, judgementsFor, kindOf, whyMe } from './inbox/inboxView';
+import type { InboxItem } from './sessionsApi';
 import { HandoffForm } from './work/Handoff';
 import { RunRow } from './work/RunRow';
 import { billingLine, limitsLine, stopLine, usageLine } from './work/runUsage';
@@ -291,5 +295,48 @@ describe('a run on an account', () => {
       />,
     );
     for (const absent of ['<dt>계정</dt>', '<dt>상한</dt>', '<dt>사용량</dt>', '<dt>과금 위치</dt>', '토큰:']) expect(html).not.toContain(absent);
+  });
+});
+
+const usageItem = (over: Partial<InboxItem> = {}): InboxItem => ({
+  id: 'inb_u',
+  bucket: 5,
+  kind: 'notice',
+  source_kind: 'ntc',
+  source_id: 'ntc_u',
+  summary: '하루 상한(가격표 환산 $0.05)에 닿아 실행을 멈췄다: 낮은 상한에 닿을 일',
+  detail: { notice_kind: 'usage_alert', cause: 'daily_cost_limit', account_id: 'acc_low', account_name: '낮은 상한', run_id: 'run_1', work_item_id: 'wrk_1' },
+  wait_kind: null,
+  repeat_count: 0,
+  waiting_since: '2026-10-14T01:00:00Z',
+  notify: 'immediate',
+  ...over,
+});
+
+describe('a usage notice on the first screen', () => {
+  it('is a usage notice, not a conflict: its own kind, its summary as the title, and only 확인', () => {
+    const item = usageItem();
+    expect(isUsageAlert(item)).toBe(true);
+    expect(kindOf(item)).toEqual({ mark: 'alert', label: '사용량' });
+    expect(detailTitle(item)).toBe(item.summary);
+    expect(whyMe(item)).toContain('사용량 상한');
+    expect(judgementsFor(item).map((j) => j.label)).toEqual(['확인']);
+    // A conflict keeps its three judgements and its words.
+    const conflict = usageItem({ detail: { path: 'a.txt', sessions: [] } });
+    expect(isUsageAlert(conflict)).toBe(false);
+    expect(kindOf(conflict).label).toBe('충돌');
+    expect(judgementsFor(conflict)).toHaveLength(3);
+  });
+
+  it('draws the row and the detail without conflict words, with links to the work item and the account', () => {
+    const row = renderToStaticMarkup(<InboxRow item={usageItem()} sessions={[]} now={Date.parse('2026-10-14T01:05:00Z')} selected={false} tabbable onPick={() => {}} />);
+    expect(row).toContain('사용량');
+    expect(row).not.toContain('충돌');
+    expect(row).not.toContain('ib-file');
+    const html = renderToStaticMarkup(<InboxDetail item={usageItem()} sessions={[]} now={Date.parse('2026-10-14T01:05:00Z')} onJudged={() => {}} onError={() => {}} />);
+    expect(html).toContain('하루 상한(가격표 환산 $0.05)에 닿아 실행을 멈췄다');
+    expect(html).toContain('href="#work?item=wrk_1"');
+    expect(html).toContain('href="#accounts?item=acc_low"');
+    expect(html).not.toMatch(/충돌 아님|두 세션이 같은 파일/);
   });
 });

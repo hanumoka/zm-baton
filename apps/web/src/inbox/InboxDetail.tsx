@@ -6,9 +6,10 @@ import { at } from '../workModel';
 import {
   detailTitle,
   filePath,
+  isUsageAlert,
   itemSessions,
   judgement,
-  JUDGEMENTS,
+  judgementsFor,
   kindOf,
   liveSession,
   notifyLabel,
@@ -128,6 +129,7 @@ export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, 
               )}
             </section>
           )}
+          {isUsageAlert(item) && <UsageLinks item={item} />}
           {!relay && message && (
             <section className="dt-sec">
               <h3>실행기가 보낸 문구</h3>
@@ -173,6 +175,31 @@ export function InboxDetail({ item, sessions, now, onJudged, onError, titleRef, 
         )}
       </div>
     </article>
+  );
+}
+
+/** Where a usage notice points: the work item whose run stopped and the AI account, each opened on its own screen. */
+function UsageLinks({ item }: { item: InboxItem }) {
+  const work = typeof item.detail?.work_item_id === 'string' ? item.detail.work_item_id : null;
+  const account = typeof item.detail?.account_id === 'string' ? item.detail.account_id : null;
+  const name = typeof item.detail?.account_name === 'string' ? item.detail.account_name : account;
+  if (!work && !account) return null;
+  return (
+    <section className="dt-sec">
+      <h3>멈춘 곳</h3>
+      <ul className="ib-sessions">
+        {work && (
+          <li>
+            <a href={`#work?item=${encodeURIComponent(work)}`}>작업과 실행 기록 열기</a>
+          </li>
+        )}
+        {account && (
+          <li>
+            <a href={`#accounts?item=${encodeURIComponent(account)}`}>AI 계정 {name} 열기</a>
+          </li>
+        )}
+      </ul>
+    </section>
   );
 }
 
@@ -245,7 +272,7 @@ function Judge({ item, onJudged, onError, send }: { item: InboxItem; onJudged: (
   return (
     <>
       <div className="ib-acts" role="group" aria-label="충돌 판정">
-        {JUDGEMENTS.map((j) => (
+        {judgementsFor(item).map((j) => (
           <button
             key={j.status}
             type="button"
