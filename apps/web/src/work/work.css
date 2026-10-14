@@ -180,6 +180,21 @@ textarea.field { height: auto; padding: var(--s-1) var(--s-2); line-height: var(
 .hr-inst summary { font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); cursor: pointer; }
 .hr-inst summary:hover { color: var(--c-ink); }
 .hr-inst .dt-text { margin-top: var(--s-2); padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--c-canvas); font-size: var(--fs-sm); }
+/* Run control (FN-0410): stop and instruct a running run, what was sent, and the readiness check. */
+.hr-ctl { display: flex; flex-direction: column; gap: var(--s-2); }
+.hr-say { display: flex; flex-direction: column; gap: var(--s-1); max-width: var(--w-text); }
+.hr-say label { font-size: var(--fs-sm); font-weight: var(--fw-semi); line-height: var(--lh-row); color: var(--c-ink-2); }
+.hr-say .wd-acts { margin: 0; }
+.hr-inputs { display: flex; flex-direction: column; gap: var(--s-1); margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.hr-inputs li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-1) var(--s-2); }
+.hr-inputs .dt-text { flex: 1 1 var(--w-cell); margin: 0; overflow-wrap: anywhere; }
+.hr-inputs small { font-size: var(--fs-xs); }
+.hr-note { margin: 0; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.hr-tight { margin: 0; }
+.hr-checks { display: flex; flex-direction: column; gap: var(--s-0); margin: var(--s-1) 0 0; padding: 0; list-style: none; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.hr-checks strong { font-weight: var(--fw-semi); }
+.hf-prev { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-1) var(--s-2); margin: 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.hf-prev code { font-size: var(--fs-xs); color: var(--c-ink); overflow-wrap: anywhere; }
 
 @media (max-width: 1180px) {
   .wn { padding: var(--s-4) var(--s-6) var(--s-10); }

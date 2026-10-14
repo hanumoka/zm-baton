@@ -51,7 +51,30 @@ export type WorkItemDetail = {
   moves: Move[];
   history: HistoryEntry[];
   /** Whether the work item can be handed to an AI now, and why not (third stage-1 slice). */
-  delegation?: { allowed: boolean; reason: string | null };
+  delegation?: DelegationAvailability;
+};
+
+/** How the next run starts: a work item's first run, or one that continues an earlier run. */
+export type DelegationMode = 'first' | 'resume' | 'reject_and_resume';
+
+/** The newest ended run of the work item, for a continuing run to offer its repository and tools. */
+export type PreviousRun = {
+  run_id: string;
+  end_reason: string;
+  device_id: string | null;
+  repo_key: string;
+  base_branch: string | null;
+  allowed_tools: string[];
+};
+
+export type DelegationAvailability = {
+  allowed: boolean;
+  reason: string | null;
+  // Added with run control; an older server leaves them out.
+  mode?: DelegationMode | null;
+  /** Sending a result back needs a reason. */
+  needs_note?: boolean;
+  resume_from?: PreviousRun | null;
 };
 
 /** A repository a device's connector can run in (`zm-baton repo add`). Never a path on the device. */
@@ -77,10 +100,36 @@ export type RunDelegation = {
 };
 
 /** A run's own worktree (contract "실행마다 별도 작업 트리" 8): no path on the device. */
-export type RunWorkspace = { repo_key: string; base_commit: string; branch: string; base_ref?: string };
+export type RunWorkspace = {
+  repo_key: string;
+  base_commit: string;
+  branch: string;
+  base_ref?: string;
+  /** new, reused (the earlier run's worktree and session), or previous_branch (a new one from the earlier run's branch). */
+  origin?: 'new' | 'reused' | 'previous_branch';
+};
 
 /** The newest Git change list of a run (contract "보고 한 건의 모양" git_changes). */
 export type GitChanges = { files: string[]; base_overlap?: string[]; base_branch_overlap?: string[]; truncated?: boolean };
+
+/** An instruction a person sent to a running executor, and whether the executor took it. */
+export type RunInput = {
+  id: string;
+  text: string;
+  state: 'pending' | 'sent' | 'delivered' | 'undelivered';
+  created_at: string;
+  sent_at: string | null;
+  delivered_at: string | null;
+};
+
+/** What a person may do with a run that has not ended, with the server's reason when not. */
+export type RunActions = {
+  cancel: { allowed: boolean; reason: string | null };
+  send_input: { allowed: boolean; reason: string | null };
+};
+
+/** What the connector checked before starting the executor. */
+export type Readiness = { ok: boolean; checks: { name: string; ok: boolean; detail?: string | null }[] };
 
 /** A run as the work item's run list has it. A compat-test run has no delegation. */
 export type ItemRun = Run & {
@@ -92,10 +141,21 @@ export type ItemRun = Run & {
   workspace: RunWorkspace | null;
   git_changes: GitChanges | null;
   instruction: string | null;
+  // Added with run control; an older server leaves them out.
+  lease_expires_at?: string | null;
+  /** A live run whose connector stopped renewing its lease; it ends lost at lost_at. */
+  lease_lapsed?: boolean;
+  lost_at?: string | null;
+  continue_reason?: string | null;
+  resumed_from_run_id?: string | null;
+  readiness?: Readiness | null;
+  capabilities?: Record<string, unknown> | null;
+  inputs?: RunInput[];
+  actions?: RunActions | null;
 };
 
-/** What a person picks when handing a work item to Claude Code. */
-export type HandoffChoice = { device_id: string; repo_key: string; base_branch?: string; allowed_tools: string[] };
+/** What a person picks when handing a work item to Claude Code; note is added to the instruction. */
+export type HandoffChoice = { device_id: string; repo_key: string; base_branch?: string; allowed_tools: string[]; note?: string };
 
 export type Project = ProjectRef & { open_work_items: number };
 
@@ -204,4 +264,6 @@ export const workApi = {
   delegate: (id: string, version: number, choice: HandoffChoice) =>
     call<WorkItemDetail>('POST', `/api/work-items/${enc(id)}/delegations`, { executor: 'claude_code', ...choice, version }),
   withdraw: (runId: string, version: number) => call<WorkItemDetail>('POST', `/api/runs/${enc(runId)}/withdraw`, { version }),
+  cancel: (runId: string, version: number) => call<WorkItemDetail>('POST', `/api/runs/${enc(runId)}/cancel`, { version }),
+  sendInput: (runId: string, text: string) => call<RunInput>('POST', `/api/runs/${enc(runId)}/inputs`, { text }),
 };
