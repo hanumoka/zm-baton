@@ -41,7 +41,49 @@ type Claim struct {
 	// Delegation and Instruction are set for a delegated run, nil and empty for a compat-test run.
 	Delegation  *Delegation `json:"delegation,omitempty"`
 	Instruction string      `json:"instruction,omitempty"`
+	// Resume is set when the run continues an earlier one (contract "실행 권리 청구" 1-2).
+	Resume *Resume `json:"resume,omitempty"`
 }
+
+// Resume names the run a continuing run follows. On the device that ran it, the server also sends
+// that run's executor session and worktree; the connector reuses them only after confirming that
+// the earlier executor and its child processes ended (contract "실행마다 별도 작업 트리" 6).
+type Resume struct {
+	RunID          string `json:"run_id"`
+	ContinueReason string `json:"continue_reason"`
+	SameDevice     bool   `json:"same_device"`
+	SessionID      string `json:"session_id,omitempty"`
+	// Workspace holds repo_key, base_commit, branch and base_ref; never a path on the device.
+	Workspace map[string]any `json:"workspace,omitempty"`
+}
+
+// InputReport says what became of one instruction a person sent: sent, delivered or undelivered.
+type InputReport struct {
+	ID    string `json:"id"`
+	State string `json:"state"`
+}
+
+// Input is an instruction a person sent to the running executor.
+type Input struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
+
+// Lease is the server's answer to a lease renewal (contract "실행 권리 청구" 5).
+type Lease struct {
+	State        string `json:"state"`
+	LeaseSeconds int    `json:"lease_seconds"`
+	// Stop is "cancel" when a person asked to stop the run.
+	Stop   string  `json:"stop,omitempty"`
+	Inputs []Input `json:"inputs"`
+}
+
+// ErrGone means the server no longer holds the run for this device: it ended (for example judged
+// lost) or was claimed again. The connector must stop working on it.
+var ErrGone = errors.New("the server no longer holds this run for this device")
+
+// ErrNoLeases means the server predates lease renewal; the run goes on without renewing.
+var ErrNoLeases = errors.New("the server does not renew leases")
 
 // Delegation is what the connector turns into executor options (contract v1 "실행할 때 넘기는 것").
 type Delegation struct {
@@ -171,6 +213,30 @@ func (c *Client) SendEvents(ctx context.Context, runID string, events []Event) (
 		return EventResult{}, &StatusError{Op: "send events", Status: status}
 	}
 	return result, nil
+}
+
+// Renew renews the lease of a run this device holds and reports what became of the instructions it
+// took. The answer says whether to stop and which instructions wait.
+func (c *Client) Renew(ctx context.Context, runID, deviceID string, generation int64, reports []InputReport) (Lease, error) {
+	if reports == nil {
+		reports = []InputReport{}
+	}
+	body := map[string]any{"device_id": deviceID, "generation": generation, "inputs": reports}
+	var lease Lease
+	status, err := c.do(ctx, http.MethodPost, "/api/runs/"+url.PathEscape(runID)+"/lease", body, &lease)
+	if err != nil {
+		return Lease{}, err
+	}
+	switch status {
+	case http.StatusOK:
+		return lease, nil
+	case http.StatusConflict:
+		return Lease{}, ErrGone
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		return Lease{}, ErrNoLeases
+	default:
+		return Lease{}, &StatusError{Op: "renew lease", Status: status}
+	}
 }
 
 // do sends one request. out is decoded only for 200 answers.

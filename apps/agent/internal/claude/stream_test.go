@@ -50,11 +50,81 @@ func TestRestrictedArgsComeBeforeThePrompt(t *testing.T) {
 		"--session-id", sid,
 		"--permission-prompts", "none",
 		"--allowedTools", "Read,Edit",
-		"--restricted",
+		"--restricted", "--strict-mcp-config",
 		"--", "do it",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("args\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestStreamInputTakesThePromptOnStdinAndResumeKeepsTheMarker(t *testing.T) {
+	got := Args(Options{SessionID: sid, AllowedTools: "Read", Prompt: "never an argument", Restricted: true, StreamInput: true, Resume: true})
+	want := []string{
+		"-p", "--output-format", "stream-json", "--verbose",
+		"--resume", sid,
+		"--permission-prompts", "none",
+		"--allowedTools", "Read",
+		"--restricted", "--strict-mcp-config",
+		"--input-format", "stream-json", "--replay-user-messages",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("args\n got %q\nwant %q", got, want)
+	}
+	line := UserMessage("한 줄\n두 줄 \"따옴표\"")
+	if line[len(line)-1] != '\n' || strings.Count(string(line), "\n") != 1 {
+		t.Fatalf("one message must be one line: %q", line)
+	}
+	var msg struct {
+		Type    string `json:"type"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(line, &msg); err != nil || msg.Type != "user" || msg.Message.Role != "user" || msg.Message.Content != "한 줄\n두 줄 \"따옴표\"" {
+		t.Fatalf("message %+v %v", msg, err)
+	}
+}
+
+func TestEchoedUserMessagesAreConfirmationsNotActivity(t *testing.T) {
+	m := NewMapper()
+	acts := mapAll(t, m,
+		`{"type":"user","message":{"role":"user","content":"the prompt"},"session_id":"`+sid+`","isReplay":true}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]},"session_id":"`+sid+`"}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"사람이 실행 중에 보낸 지시: 멈춰"}]},"isReplay":true}`,
+	)
+	if got := kinds(acts); !slices.Equal(got, []string{KindAnswer}) {
+		t.Fatalf("kinds %v", got)
+	}
+	if got := m.TakeReplays(); !slices.Equal(got, []string{"the prompt", "사람이 실행 중에 보낸 지시: 멈춰"}) {
+		t.Fatalf("replays %q", got)
+	}
+	if got := m.TakeReplays(); len(got) != 0 {
+		t.Fatalf("replays are taken once: %q", got)
+	}
+	if m.Dropped()["user:replay"] != 2 {
+		t.Fatalf("dropped %v", m.Dropped())
+	}
+}
+
+func TestAResumeOfAMissingSessionIsToldApartFromAFailedRun(t *testing.T) {
+	missing := NewMapper()
+	mapAll(t, missing, `{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"errors":["No conversation found with session ID: x"]}`)
+	if !missing.ResumeRefused() || missing.Succeeded() {
+		t.Fatal("a resume Claude Code refused was not recognised")
+	}
+	worked := NewMapper()
+	mapAll(t, worked,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"tried"}]}}`,
+		`{"type":"result","subtype":"error_max_turns","is_error":true,"num_turns":0}`)
+	if worked.ResumeRefused() {
+		t.Fatal("a run with output counted as a refused resume")
+	}
+	ok := NewMapper()
+	mapAll(t, ok, `{"type":"result","subtype":"success","is_error":false,"num_turns":0}`)
+	if ok.ResumeRefused() {
+		t.Fatal("a successful result counted as a refused resume")
 	}
 }
 

@@ -242,3 +242,40 @@ func TestKillRefusesWithTheQueryErrorWhenTheCommandLineCannotBeRead(t *testing.T
 		t.Fatal("a refused Kill stopped a helper")
 	}
 }
+
+// Remaining counts the executor's job: the executor and its child while they run, the orphaned
+// child after the executor exited, nothing once the job was stopped. It only reads.
+func TestRemainingCountsTheJobUntilItIsEmpty(t *testing.T) {
+	marker := newMarker(t)
+	h := startHelper(t, "parent-exits", marker)
+	if err := h.cmd.Wait(); err != nil {
+		t.Fatalf("helper parent: %v", err)
+	}
+	if n, err := h.run.Remaining(); err != nil || n != 1 {
+		t.Fatalf("after the executor exited its child is left: got %d, %v", n, err)
+	}
+	if exitedWithin(t, h.child, 300*time.Millisecond) {
+		t.Fatal("Remaining stopped the orphaned child")
+	}
+
+	busy := startHelper(t, "parent", newMarker(t))
+	if n, err := busy.run.Remaining(); err != nil || n != 2 {
+		t.Fatalf("executor and child: got %d, %v", n, err)
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- busy.cmd.Wait() }()
+	if err := busy.run.Kill(busy.cmd.Args[len(busy.cmd.Args)-1]); err != nil {
+		t.Fatal(err)
+	}
+	<-waited
+	if !exitedWithin(t, busy.child, 15*time.Second) {
+		t.Fatal("child still running after Kill")
+	}
+	if n, err := busy.run.Remaining(); err != nil || n != 0 {
+		t.Fatalf("after Kill the job is empty: got %d, %v", n, err)
+	}
+	busy.run.Close()
+	if _, err := busy.run.Remaining(); !errors.Is(err, errClosed) {
+		t.Fatalf("Remaining after Close: %v", err)
+	}
+}
