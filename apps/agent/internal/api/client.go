@@ -16,14 +16,20 @@ import (
 	"time"
 )
 
-// ProtocolVersion is the report protocol version sent with every event batch.
-const ProtocolVersion = 1
+// ProtocolVersion is the report protocol version sent with every event batch. Version 2 adds the
+// Git change list (`git_changes`) and says in the end report whether the executor started.
+const ProtocolVersion = 2
 
 // PendingRun is one run waiting to be claimed (GET /api/runs?state=requested).
 type PendingRun struct {
 	ID         string `json:"id"`
 	WorkItemID string `json:"work_item_id"`
 	Executor   string `json:"executor"`
+	// Empty for a compat-test run. A delegated run names the one device that may claim it
+	// and the repository it works in.
+	DelegationID string `json:"delegation_id,omitempty"`
+	DeviceID     string `json:"device_id,omitempty"`
+	RepoKey      string `json:"repo_key,omitempty"`
 }
 
 // Claim is the server's answer to a successful claim.
@@ -32,6 +38,18 @@ type Claim struct {
 	WorkItemID   string `json:"work_item_id"`
 	Generation   int64  `json:"generation"`
 	LeaseSeconds int    `json:"lease_seconds"`
+	// Delegation and Instruction are set for a delegated run, nil and empty for a compat-test run.
+	Delegation  *Delegation `json:"delegation,omitempty"`
+	Instruction string      `json:"instruction,omitempty"`
+}
+
+// Delegation is what the connector turns into executor options (contract v1 "실행할 때 넘기는 것").
+type Delegation struct {
+	ID           string   `json:"id"`
+	Executor     string   `json:"executor"`
+	RepoKey      string   `json:"repo_key"`
+	BaseBranch   string   `json:"base_branch,omitempty"`
+	AllowedTools []string `json:"allowed_tools"`
 }
 
 // Event is one report. The run id travels in the URL, not in the event.
@@ -103,8 +121,17 @@ func NewClient(baseURL string) (*Client, error) {
 
 // PendingRuns polls for runs in state requested.
 func (c *Client) PendingRuns(ctx context.Context) ([]PendingRun, error) {
+	return c.PendingRunsFor(ctx, "")
+}
+
+// PendingRunsFor polls for the delegated runs deviceID may claim; "" asks for every requested run.
+func (c *Client) PendingRunsFor(ctx context.Context, deviceID string) ([]PendingRun, error) {
+	path := "/api/runs?state=requested"
+	if deviceID != "" {
+		path += "&device_id=" + url.QueryEscape(deviceID)
+	}
 	var runs []PendingRun
-	status, err := c.do(ctx, http.MethodGet, "/api/runs?state=requested", nil, &runs)
+	status, err := c.do(ctx, http.MethodGet, path, nil, &runs)
 	if err != nil {
 		return nil, err
 	}

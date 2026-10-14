@@ -1,6 +1,9 @@
 // Server API for work items, projects, the workflow setting and decision records (contract v1
-// "작업"; FN-0201, FN-0604). Same origin as the page. The server's own refusals carry a reason
-// in `message`; it is shown as it is, because it is written for a person.
+// "작업"; FN-0201, FN-0604), and handing a work item to an AI (contract "위임"). Same origin as
+// the page. The server's own refusals carry a reason in `message`; it is shown as it is, because
+// it is written for a person.
+
+import type { Run, RunEvent } from './api';
 
 export type Stage = 'draft' | 'plan_review' | 'ready' | 'in_progress' | 'result_review' | 'done' | 'cancelled';
 
@@ -47,7 +50,52 @@ export type WorkItemDetail = {
   read_only_reason: string | null;
   moves: Move[];
   history: HistoryEntry[];
+  /** Whether the work item can be handed to an AI now, and why not (third stage-1 slice). */
+  delegation?: { allowed: boolean; reason: string | null };
 };
+
+/** A repository a device's connector can run in (`zm-baton repo add`). Never a path on the device. */
+export type Repository = {
+  device_id: string;
+  device_name: string;
+  repo_key: string;
+  name: string;
+  remote: string | null;
+  updated_at: string;
+};
+
+export type RunDelegation = {
+  id: string;
+  device_id: string | null;
+  device_name: string | null;
+  repo_key: string | null;
+  repo_name: string | null;
+  base_branch: string | null;
+  allowed_tools: string[];
+  expires_at: string;
+  revoked_at: string | null;
+};
+
+/** A run's own worktree (contract "실행마다 별도 작업 트리" 8): no path on the device. */
+export type RunWorkspace = { repo_key: string; base_commit: string; branch: string; base_ref?: string };
+
+/** The newest Git change list of a run (contract "보고 한 건의 모양" git_changes). */
+export type GitChanges = { files: string[]; base_overlap?: string[]; base_branch_overlap?: string[]; truncated?: boolean };
+
+/** A run as the work item's run list has it. A compat-test run has no delegation. */
+export type ItemRun = Run & {
+  claimed_at: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  last_activity_at: string | null;
+  delegation: RunDelegation | null;
+  workspace: RunWorkspace | null;
+  git_changes: GitChanges | null;
+  instruction: string | null;
+};
+
+/** What a person picks when handing a work item to Claude Code. */
+export type HandoffChoice = { device_id: string; repo_key: string; base_branch?: string; allowed_tools: string[] };
 
 export type Project = ProjectRef & { open_work_items: number };
 
@@ -190,4 +238,11 @@ export const workApi = {
   decisions: (f: { projectId?: string; status?: string; q?: string }, signal?: AbortSignal) =>
     call<Decision[]>('GET', `/api/decisions?${query({ limit: 500, project_id: f.projectId, status: f.status, q: f.q })}`, undefined, signal),
   decision: (id: string, signal?: AbortSignal) => call<DecisionDetail>('GET', `/api/decisions/${enc(id)}`, undefined, signal),
+  repositories: (signal?: AbortSignal) => call<Repository[]>('GET', '/api/repositories', undefined, signal),
+  runs: (id: string, signal?: AbortSignal) => call<ItemRun[]>('GET', `/api/work-items/${enc(id)}/runs?limit=20`, undefined, signal),
+  events: (runId: string, afterSeq: number, signal?: AbortSignal) =>
+    call<RunEvent[]>('GET', `/api/runs/${enc(runId)}/events?after_seq=${afterSeq}&limit=200`, undefined, signal),
+  delegate: (id: string, version: number, choice: HandoffChoice) =>
+    call<WorkItemDetail>('POST', `/api/work-items/${enc(id)}/delegations`, { executor: 'claude_code', ...choice, version }),
+  withdraw: (runId: string, version: number) => call<WorkItemDetail>('POST', `/api/runs/${enc(runId)}/withdraw`, { version }),
 };

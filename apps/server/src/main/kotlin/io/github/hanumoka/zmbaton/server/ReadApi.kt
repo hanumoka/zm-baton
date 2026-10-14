@@ -15,7 +15,8 @@ import java.time.OffsetDateTime
 // Read side for the Web and desktop compat test (docs/stage1/compat-test-ui.md). The work item
 // list moved to WorkItemController with the second stage-1 slice.
 // A run's lifecycle state and end reason are stored (data model "runs") and decided by the
-// server, so the screen reads them here and never re-derives them from events. The report
+// server, so the screen reads them here and never re-derives them from events. A delegated run
+// also carries its delegation, its worktree and its newest Git change list. The report
 // status on screen (contract v1 "보고 상태") is computed from that state and the events.
 
 data class RunView(
@@ -29,6 +30,31 @@ data class RunView(
 	@JsonProperty("late_reports") val lateReports: Boolean,
 	@JsonProperty("created_at") val createdAt: OffsetDateTime,
 	@JsonProperty("last_event_at") val lastEventAt: OffsetDateTime?,
+	// Added with the third stage-1 slice (handing work to an AI).
+	@JsonProperty("claimed_at") val claimedAt: OffsetDateTime? = null,
+	@JsonProperty("started_at") val startedAt: OffsetDateTime? = null,
+	@JsonProperty("ended_at") val endedAt: OffsetDateTime? = null,
+	/** The last executor activity event; lifecycle and Git change lists do not count. */
+	@JsonProperty("last_activity_at") val lastActivityAt: OffsetDateTime? = null,
+	/** Null for a compat-test run. */
+	val delegation: RunDelegationView? = null,
+	/** The run's own worktree: `repo_key`, `base_commit`, `branch`, `base_ref`. Null until the run reports it. */
+	val workspace: Map<String, Any?>? = null,
+	/** The newest `git_changes` report: `files`, `base_overlap`, and at the end `base_branch_overlap`. */
+	@JsonProperty("git_changes") val gitChanges: Map<String, Any?>? = null,
+	val instruction: String? = null,
+)
+
+data class RunDelegationView(
+	val id: String,
+	@JsonProperty("device_id") val deviceId: String?,
+	@JsonProperty("device_name") val deviceName: String?,
+	@JsonProperty("repo_key") val repoKey: String?,
+	@JsonProperty("repo_name") val repoName: String?,
+	@JsonProperty("base_branch") val baseBranch: String?,
+	@JsonProperty("allowed_tools") val allowedTools: List<String>,
+	@JsonProperty("expires_at") val expiresAt: OffsetDateTime,
+	@JsonProperty("revoked_at") val revokedAt: OffsetDateTime?,
 )
 
 data class EventView(
@@ -52,17 +78,39 @@ class ReadService(private val jdbc: JdbcClient, private val json: ObjectMapper) 
 		return jdbc.sql(
 			"""
 			select * from (
-			  select id, work_item_id, state, end_reason, executor, generation, device_id, late_reports,
-			         created_at, last_event_at
-			    from runs where work_item_id = :wid order by created_at desc, id desc limit :limit
+			  select r.id, r.work_item_id, r.state, r.end_reason, r.executor, r.generation, r.device_id, r.late_reports,
+			         r.created_at, r.last_event_at, r.claimed_at, r.started_at, r.ended_at, r.last_activity_at,
+			         r.workspace::text as workspace, r.instruction,
+			         (select e.payload::text from run_events e where e.run_id = r.id and e.kind = 'git_changes'
+			           order by e.seq desc limit 1) as git_changes,
+			         d.id as dlg_id, d.device_id as dlg_device, dv.name as dlg_device_name, d.scope::text as dlg_scope,
+			         dr.name as dlg_repo_name, d.expires_at as dlg_expires, d.revoked_at as dlg_revoked
+			    from runs r
+			    left join delegations d on d.id = r.delegation_id
+			    left join devices dv on dv.id = d.device_id
+			    left join device_repositories dr on dr.device_id = d.device_id and dr.repo_key = d.scope ->> 'repo_key'
+			   where r.work_item_id = :wid order by r.created_at desc, r.id desc limit :limit
 			) newest order by created_at, id
 			""".trimIndent(),
 		).param("wid", workItemId).param("limit", limit).query { rs, _ ->
+			val delegation = rs.getString("dlg_id")?.let { id ->
+				val scope = json.readValue(rs.getString("dlg_scope"), payloadType)
+				RunDelegationView(
+					id, rs.getString("dlg_device"), rs.getString("dlg_device_name"), scope["repo_key"] as String?,
+					rs.getString("dlg_repo_name"), scope["base_branch"] as String?,
+					(scope["allowed_tools"] as? List<*>).orEmpty().map { it.toString() },
+					rs.getObject("dlg_expires", OffsetDateTime::class.java), rs.getObject("dlg_revoked", OffsetDateTime::class.java),
+				)
+			}
 			RunView(
 				rs.getString("id"), rs.getString("work_item_id"), rs.getString("state"), rs.getString("end_reason"),
 				rs.getString("executor"), rs.getObject("generation") as Long?, rs.getString("device_id"),
 				rs.getBoolean("late_reports"), rs.getObject("created_at", OffsetDateTime::class.java),
 				rs.getObject("last_event_at", OffsetDateTime::class.java),
+				rs.getObject("claimed_at", OffsetDateTime::class.java), rs.getObject("started_at", OffsetDateTime::class.java),
+				rs.getObject("ended_at", OffsetDateTime::class.java), rs.getObject("last_activity_at", OffsetDateTime::class.java),
+				delegation, rs.getString("workspace")?.let { json.readValue(it, payloadType) },
+				rs.getString("git_changes")?.let { json.readValue(it, payloadType) }, rs.getString("instruction"),
 			)
 		}.list()
 	}

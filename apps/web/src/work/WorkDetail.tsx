@@ -4,8 +4,9 @@ import { Icon } from '../icons/Icon';
 import { StageGlyph } from '../icons/StageGlyph';
 import { RowSkeleton } from '../ui/Group';
 import { ReadOnly } from '../ui/ReadOnly';
-import type { Move, Project, Stage, WorkItem, WorkItemDetail } from '../workApi';
+import type { HandoffChoice, Move, Project, Stage, WorkItem, WorkItemDetail } from '../workApi';
 import { at, historyLine, moveParts, STAGES, waitLabel } from '../workModel';
+import { Handoff } from './Handoff';
 import { isBlocked, isClosed } from './workView';
 
 export type DetailActions = {
@@ -13,6 +14,10 @@ export type DetailActions = {
   update: (fields: Record<string, string | null>) => Promise<void>;
   addWait: (reason: string, note?: string) => Promise<void>;
   removeWait: (reason: string) => Promise<void>;
+  /** Hands the work item to an AI (contract "위임"); the server checks whether it may. */
+  delegate: (choice: HandoffChoice) => Promise<void>;
+  /** Takes back a delegation whose run no connector has claimed yet. */
+  withdraw: (runId: string) => Promise<void>;
 };
 
 type Props = {
@@ -97,6 +102,7 @@ export function WorkDetail({ item, detail, projects, skipped, actions, error, ti
             )}
             <Fields detail={d} editable={editable} onRemoveWait={actions.removeWait} />
             {d.moves.length > 0 && <Moves moves={d.moves} from={it.stage} onMove={actions.move} />}
+            <Handoff detail={d} onDelegate={actions.delegate} onWithdraw={actions.withdraw} />
             {editable && !isClosed(it) && <WaitControls reasons={it.wait_reasons} onAdd={actions.addWait} />}
             {editable && <EditFields key={`${it.id}:${it.version}`} detail={d} projects={projects} onSave={actions.update} />}
           </div>
