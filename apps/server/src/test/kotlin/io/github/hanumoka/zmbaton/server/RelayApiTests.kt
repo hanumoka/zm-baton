@@ -1,5 +1,6 @@
 package io.github.hanumoka.zmbaton.server
 
+import io.github.hanumoka.zmbaton.server.auth.LoginService
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
@@ -7,44 +8,42 @@ import org.springframework.context.annotation.Import
 import org.springframework.core.env.Environment
 import org.springframework.jdbc.core.simple.JdbcClient
 import tools.jackson.databind.ObjectMapper
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
 import java.util.UUID
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
-/** The relay over real HTTP, as the hook (session token) and the first screen (no token) call it, turned on. */
+/**
+ * The relay over real HTTP, as the hook (session token) and the first screen (the signed-in owner) call
+ * it, turned on. Relays need `required` (H-21), so the owner signs in and the device sends its token.
+ */
 @Import(TestcontainersConfiguration::class)
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = ["zm-baton.relay=on"])
+@SpringBootTest(
+	webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+	properties = ["zm-baton.relay=on", "zm-baton.auth.mode=required", "zm-baton.auth.bcrypt-strength=4"],
+)
 class RelayApiTests @Autowired constructor(
 	env: Environment,
 	private val json: ObjectMapper,
 	private val jdbc: JdbcClient,
+	private val logins: LoginService,
 ) {
-	private val base = "http://localhost:" + env.getRequiredProperty("local.server.port")
-	private val http = HttpClient.newHttpClient()
+	private val web = AuthHttp("http://localhost:" + env.getRequiredProperty("local.server.port"), json)
 
-	private fun call(method: String, path: String, body: String? = null, token: String? = null): Pair<Int, String> {
-		val builder = HttpRequest.newBuilder(URI.create(base + path)).header("Content-Type", "application/json")
-		if (token != null) builder.header("Authorization", "Bearer $token")
-		val request = builder
-			.method(method, body?.let { HttpRequest.BodyPublishers.ofString(it) } ?: HttpRequest.BodyPublishers.noBody())
-			.build()
-		val response = http.send(request, HttpResponse.BodyHandlers.ofString())
-		return response.statusCode() to response.body()
-	}
+	/** A person's call is the signed-in owner's; a call with a session token carries that token alone. */
+	private fun call(method: String, path: String, body: String? = null, token: String? = null): Pair<Int, String> =
+		web.call(method, path, body, bearer = token, signedIn = token == null)
 
 	private fun obj(body: String): Map<*, *> = json.readValue(body, Map::class.java)
 
 	private fun session(): Pair<String, String> {
-		val device = obj(call("POST", "/api/devices", """{"name":"relay-api-pc"}""").second)["device_id"] as String
-		val (status, body) = call(
+		web.signIn(logins)
+		val (device, deviceToken) = web.device("relay-api-pc")
+		val (status, body) = web.call(
 			"POST", "/api/sessions",
 			"""{"protocol_version":2,"device_id":"$device","executor":"claude_code","executor_session_id":"${UUID.randomUUID()}"}""",
+			bearer = deviceToken, signedIn = false,
 		)
 		assertEquals(201, status, body)
 		assertEquals(true, obj(body)["relay_enabled"], "the hook learns at registration that relays are on")

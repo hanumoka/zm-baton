@@ -1,8 +1,11 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Access
+import io.github.hanumoka.zmbaton.server.auth.AccessKind
 import io.github.hanumoka.zmbaton.server.auth.Requester
 import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Actor
 import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
 import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.dao.DuplicateKeyException
@@ -467,25 +470,34 @@ class DelegationController(private val delegations: DelegationService, private v
 		return delegations.repositories(orgId = me.orgId)
 	}
 
+	/** `zm-baton repo add`: a person, or the device itself with its device token. */
+	@Access(AccessKind.PERSON_OR_DEVICE)
 	@PostMapping("/devices/{id}/repositories")
 	fun addRepository(
 		@PathVariable id: String,
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: RepositoryUpsert,
 	): DeviceRepositoryView {
-		val me = permissions.person(authorization, "add a repository to a device")
-		permissions.require(me, Act.DEVICE, permissions.device(id))
+		val me = deviceOwner(authorization, id, "add a repository to a device")
 		return delegations.addRepository(id, body, me.person!!)
 	}
 
+	@Access(AccessKind.PERSON_OR_DEVICE)
 	@DeleteMapping("/devices/{id}/repositories")
 	fun removeRepository(
 		@PathVariable id: String,
 		@RequestParam("repo_key") repoKey: String,
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 	): Map<String, Boolean> {
-		val me = permissions.person(authorization, "remove a repository from a device")
-		permissions.require(me, Act.DEVICE, permissions.device(id))
+		val me = deviceOwner(authorization, id, "remove a repository from a device")
 		return mapOf("removed" to delegations.removeRepository(id, repoKey, me.person!!))
+	}
+
+	/** Who may change a device's repositories: its person (or an operator), and a device only its own. */
+	private fun deviceOwner(authorization: String?, deviceId: String, action: String): Actor {
+		val (me, viaDevice) = permissions.personOrDevice(authorization, action)
+		if (viaDevice != null && viaDevice != deviceId.trim()) throw ForbiddenException("이 기기 토큰으로는 다른 기기의 저장소를 바꿀 수 없다")
+		permissions.require(me, Act.DEVICE, permissions.device(deviceId))
+		return me
 	}
 }

@@ -5,7 +5,8 @@
 #                                 docker compose -f deploy/compose/compose.yaml --profile app up -d --build
 # Backup, restore and update: backup.ps1, restore.ps1 and update.ps1 (or .sh) next to this file,
 # explained in docs/stage1/backup-restore-update.md.
-# Everything is published on 127.0.0.1 only: there is no person authentication yet.
+# Everything is published on 127.0.0.1 only. Opening the server beyond this PC is the owner's decision
+# (docs/stage1/auth.md); this file does not do it.
 #
 # Keep the project name and the volume key `zm-baton-pg` as they are: together they name the
 # Docker volume zm-baton-dev_zm-baton-pg that holds the data. Rebuilding (`up -d --build`) and
@@ -46,10 +47,18 @@ services:
       ZM_BATON_RETENTION_CLOSED_INBOX_ITEMS_DAYS: ${ZM_BATON_RETENTION_CLOSED_INBOX_ITEMS_DAYS:-}
       ZM_BATON_RETENTION_CLOSED_NOTICES_DAYS: ${ZM_BATON_RETENTION_CLOSED_NOTICES_DAYS:-}
       ZM_BATON_RETENTION_ENDED_RUN_EVENTS_DAYS: ${ZM_BATON_RETENTION_ENDED_RUN_EVENTS_DAYS:-}
+      # The server listens on the container's every interface; the `ports` line below publishes it
+      # on this PC's loopback only, and this says so. Without it the server refuses to start in local
+      # mode (docs/stage1/auth.md). Remove it if you ever change the ports line.
+      ZM_BATON_PUBLISHED_ON_LOOPBACK: "on"
+      # Authentication: local (the default; this PC only, every request is the owner's) or required
+      # (people sign in on the Web, devices send a device token). Read docs/stage1/auth.md first.
+      ZM_BATON_AUTH: ${ZM_BATON_AUTH:-local}
+      # In required mode, a person to make a one-time setup token for at start (a forgotten password).
+      ZM_BATON_AUTH_SETUP: ${ZM_BATON_AUTH_SETUP:-}
       # Relaying a session's permission requests and questions to the first screen: off (the
-      # default) or on. Read docs/stage1/sessions.md before turning it on: with no person
-      # authentication yet, any program on this PC, an AI session with a shell included, can
-      # answer a relayed permission request (docs/hardening-backlog.md H-21).
+      # default) or on. It takes effect only with ZM_BATON_AUTH=required, so that only a signed-in
+      # person answers (docs/hardening-backlog.md H-21, docs/stage1/sessions.md).
       ZM_BATON_RELAY: ${ZM_BATON_RELAY:-off}
       # The master's API path for document contradiction candidates (docs/stage1/contradictions.md,
       # DEC-0095 1). Empty (the default) keeps it off: the owner's local connector then runs the

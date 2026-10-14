@@ -1,6 +1,8 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Access
+import io.github.hanumoka.zmbaton.server.auth.AccessKind
 import io.github.hanumoka.zmbaton.server.auth.Requester
 import io.github.hanumoka.zmbaton.server.permission.Act
 import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
@@ -529,13 +531,14 @@ data class DecisionDocument(val front: Map<String, String>, val sections: List<D
 @RequestMapping("/api")
 class ZmDocsImportController(private val imports: ZmDocsImportService, private val permissions: Permissions) {
 
-	/** `zm-baton import zm-docs`: a dry run unless `apply` is true. */
+	/** `zm-baton import zm-docs` (with the device's token, or signed in): a dry run unless `apply` is true. */
+	@Access(AccessKind.PERSON_OR_DEVICE)
 	@PostMapping("/imports/zm-docs")
 	fun import(
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: ZmDocsImportIn,
 	): ZmDocsImportOut {
-		val me = permissions.person(authorization, "import zm-docs", Act.IMPORT)
+		val me = permissions.personOrDevice(authorization, "import zm-docs", Act.IMPORT).first
 		return imports.import(body, me.person!!)
 	}
 }

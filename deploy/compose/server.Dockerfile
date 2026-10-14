@@ -19,7 +19,8 @@ WORKDIR /app
 COPY --from=server /server/build/libs/server-0.0.1-SNAPSHOT.jar app.jar
 COPY --from=web /web/dist/ web/
 # Inside the container the server listens on all interfaces; compose publishes it on the
-# PC's loopback only (127.0.0.1:18081), because there is no person authentication yet.
+# PC's loopback only (127.0.0.1:18081) and says so (ZM_BATON_PUBLISHED_ON_LOOPBACK). Run this image
+# any other way and the server refuses to start unless authentication is required and TLS is set.
 ENV ZM_BATON_WEB_DIR=file:/app/web/ \
     ZM_BATON_SERVER_ADDRESS=0.0.0.0
 # The commit this image was built from, when the builder passes it (update.ps1 does); the export

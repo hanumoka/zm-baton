@@ -1,5 +1,7 @@
 package io.github.hanumoka.zmbaton.server
 
+import io.github.hanumoka.zmbaton.server.auth.Access
+import io.github.hanumoka.zmbaton.server.auth.AccessKind
 import io.github.hanumoka.zmbaton.server.auth.Requester
 import io.github.hanumoka.zmbaton.server.permission.Act
 import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
@@ -51,12 +53,17 @@ class ExportService(
 		const val FORMAT_VERSION = 1
 
 		/** Columns never exported, per table: secrets (G13.3). */
-		val WITHHELD: Map<String, Set<String>> = mapOf("agent_sessions" to setOf("token_hash"))
+		val WITHHELD: Map<String, Set<String>> = mapOf("agent_sessions" to setOf("token_hash"), "devices" to setOf("token_hash"))
 
 		/** Tables not exported, and why. Every other table must be a collection (ExportTests checks it). */
 		val NOT_EXPORTED: Map<String, String> = mapOf(
 			"flyway_schema_history" to "provenance.database.migrations에 적는다",
 			"manager_notes" to "매니저 기록의 개인 메모는 쓴 사람만 본다. 조직 관리자에게도 넘기지 않는다(DEC-0103 2항, G13.3)",
+			// Sign-in (docs/stage1/auth.md): hashes of passwords and tokens, and the logins they opened.
+			"person_passwords" to "비밀번호의 해시다. 비밀값은 내보내지 않는다(G13.3)",
+			"web_logins" to "로그인 쿠키 토큰의 해시와 로그인 기록이다. 비밀값은 내보내지 않는다(G13.3)",
+			"setup_tokens" to "한 번 쓰는 설정 토큰의 해시다. 비밀값은 내보내지 않는다(G13.3)",
+			"device_logins" to "기기 로그인 코드의 해시다. 10분 뒤 쓸모가 없고 비밀값은 내보내지 않는다(G13.3)",
 		)
 
 		/** Rows left out per table: another person's personal records (`:me` is the exporter). */
@@ -246,14 +253,19 @@ class ExportController(
 	private val sessions: SessionService,
 ) {
 
-	/** `zm-baton export --out <file>` and a browser download. A person action, written to the audit log. */
+	/**
+	 * `zm-baton export --out <file>` (with the device's token) and a browser download (signed in). A
+	 * person action, written to the audit log with the device when the CLI sent it.
+	 */
+	@Access(AccessKind.PERSON_OR_DEVICE)
 	@GetMapping("/export", produces = [MediaType.APPLICATION_JSON_VALUE])
 	fun export(@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): ResponseEntity<Map<String, Any?>> {
-		val me = permissions.person(authorization, "export", Act.EXPORT)
+		val (me, viaDevice) = permissions.personOrDevice(authorization, "export", Act.EXPORT)
 		val bundle = exports.export(me.person!!)
 		sessions.audit(
 			"person", me.person!!, "export.downloaded", null, null,
-			mapOf("format_version" to ExportService.FORMAT_VERSION, "counts" to exports.counts(bundle)),
+			mapOf("format_version" to ExportService.FORMAT_VERSION, "counts" to exports.counts(bundle)) +
+				(viaDevice?.let { mapOf("device_id" to it) } ?: emptyMap()),
 		)
 		val disposition = ContentDisposition.attachment().filename(exports.fileName(bundle)).build()
 		return ResponseEntity.ok().header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString()).body(bundle)

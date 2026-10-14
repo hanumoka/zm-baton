@@ -28,6 +28,17 @@ class Permissions(val facts: PermissionFacts, private val requester: Requester, 
 		return actor
 	}
 
+	/**
+	 * A CLI command's person ([Requester.personOrDevice]): the signed-in person, or the person of the
+	 * device whose token came, with that device. Checked against [act] when given.
+	 */
+	fun personOrDevice(authorization: String?, action: String, act: Act? = null): Pair<Actor, String?> {
+		val (person, device) = requester.personOrDevice(authorization, action)
+		val actor = facts.person(person)
+		if (act != null) require(actor, act)
+		return actor to device
+	}
+
 	/** Refuses [act] unless [actor] may do it, on [target] when given. */
 	fun require(actor: Actor, act: Act, target: Target? = null): Actor {
 		val verdict = PermissionRules.check(actor, act, target)

@@ -94,6 +94,12 @@ class RunService(
 		return RunCreated(id, workItemId, "requested")
 	}
 
+	/** A device that sent its device token reports only on a run it holds (docs/stage1/auth.md). */
+	fun requireHeldBy(runId: String, deviceId: String) {
+		val holder = jdbc.sql("select coalesce(device_id, '') from runs where id = :id").param("id", runId).query(String::class.java).optional()
+		if (holder.isPresent && holder.get() != deviceId) throw ForbiddenException("run $runId is not held by device $deviceId")
+	}
+
 	/**
 	 * Runs waiting to be claimed, oldest first. With [deviceId], only the delegated runs that device
 	 * may claim now; without it every requested run, compat-test runs included.

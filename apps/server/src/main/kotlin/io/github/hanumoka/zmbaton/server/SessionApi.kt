@@ -1,6 +1,10 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.auth.Access
+import io.github.hanumoka.zmbaton.server.auth.AccessKind
+import io.github.hanumoka.zmbaton.server.auth.DeviceAuthService
+import io.github.hanumoka.zmbaton.server.auth.Requester
 import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
@@ -23,7 +27,14 @@ import java.util.Base64
 
 data class RegisterDevice(val name: String, val os: String? = null)
 
-data class DeviceRegistered(@JsonProperty("device_id") val deviceId: String)
+data class DeviceRegistered(
+	@JsonProperty("device_id") val deviceId: String,
+	/**
+	 * Added with person and device authentication: the device token, shown this once. The device keeps it
+	 * in its zm-baton config folder; the server keeps its SHA-256 only (docs/stage1/auth.md).
+	 */
+	@JsonProperty("device_token") val deviceToken: String? = null,
+)
 
 data class RepositoryIn(
 	@JsonProperty("repo_key") val repoKey: String? = null,
@@ -107,24 +118,35 @@ object SessionTokens {
 
 @RestController
 @RequestMapping("/api")
-class SessionController(private val sessions: SessionService, private val permissions: Permissions) {
+class SessionController(
+	private val sessions: SessionService,
+	private val permissions: Permissions,
+	private val devices: DeviceAuthService,
+	private val requester: Requester,
+) {
 
 	/**
-	 * `zm-baton login`: one record per device, of the person who logs in (Requester; no person
-	 * authentication yet, loopback only). A session token is refused: a device is a person's.
+	 * `zm-baton login`: one record per device, of the person who logs in (Requester), with its device
+	 * token. A session token is refused: a device is a person's. In `required` mode the CLI comes
+	 * through a device login instead (DeviceAuthController), because it has no Web sign-in.
 	 */
 	@PostMapping("/devices")
 	@ResponseStatus(HttpStatus.CREATED)
 	fun registerDevice(
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@RequestBody body: RegisterDevice,
-	): DeviceRegistered = sessions.registerDevice(body, permissions.person(authorization, "register a device").person!!)
+	): DeviceRegistered = devices.register(body, permissions.person(authorization, "register a device").person!!)
 
-	/** The start hook of a directly opened session (`zm-baton session register`). */
+	/** The start hook of a directly opened session (`zm-baton session register`), with the device's token. */
+	@Access(AccessKind.DEVICE)
 	@PostMapping("/sessions")
 	@ResponseStatus(HttpStatus.CREATED)
-	fun register(@RequestBody body: RegisterSession): SessionRegistered = sessions.register(body)
+	fun register(@RequestBody body: RegisterSession): SessionRegistered {
+		requester.device(body.deviceId)
+		return sessions.register(body)
+	}
 
+	@Access(AccessKind.SESSION)
 	@PostMapping("/sessions/{id}/events")
 	fun events(
 		@PathVariable id: String,
@@ -132,6 +154,7 @@ class SessionController(private val sessions: SessionService, private val permis
 		@RequestBody body: SessionEventBatch,
 	): SessionEventResult = sessions.ingest(id, requireToken(authorization), body)
 
+	@Access(AccessKind.SESSION)
 	@GetMapping("/sessions/{id}/status-card")
 	fun statusCard(
 		@PathVariable id: String,

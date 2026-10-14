@@ -264,6 +264,26 @@ class SessionService(
 		return ended.size
 	}
 
+	/**
+	 * Ends the live registrations of a revoked device and closes their waits and relays, like a session
+	 * that ended (docs/stage1/auth.md "기기 폐기"). Their tokens stop with them.
+	 */
+	@Transactional
+	fun endForDevice(deviceId: String): Int {
+		val ended = jdbc.sql(
+			"""
+			update agent_sessions set ended_at = now()
+			 where device_id = :device and ended_at is null and deregistered_at is null
+			returning id
+			""".trimIndent(),
+		).param("device", deviceId).query(String::class.java).list()
+		for (id in ended) {
+			closeWaits(id!!)
+			audit("system", SYSTEM_ACTOR, "session.ended", "ses", id, mapOf("reason" to "device_revoked", "device_id" to deviceId))
+		}
+		return ended.size
+	}
+
 	private fun apply(session: SessionRow, seq: Long, kind: String, payload: Map<String, Any?>) {
 		when (kind) {
 			// Only a newer summary replaces the current one. Each summary carries its own sharing
