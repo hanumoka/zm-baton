@@ -27,6 +27,9 @@ object Ids {
 
 	fun decision(): String = "dcs_" + uuidV7()
 
+	/** Approvals have no contract prefix either; `apv_` keeps them readable. */
+	fun approval(): String = "apv_" + uuidV7()
+
 	/** Audit rows have no contract prefix; `aud_` keeps them readable next to the others. */
 	fun audit(): String = "aud_" + uuidV7()
 
