@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Accounts } from './accounts/Accounts';
 import { App as RunTest } from './App';
 import { Decisions } from './decisions/Decisions';
 import { Documents } from './documents/Documents';
@@ -64,6 +65,7 @@ export function Shell() {
       if (next !== 'work') cleared('work');
       if (next !== 'decisions') cleared('decisions');
       if (next !== 'documents') cleared('documents');
+      if (next !== 'accounts') cleared('accounts');
     };
     window.addEventListener('hashchange', onHash);
     const clock = setInterval(() => setNow(Date.now()), 15_000);
@@ -209,6 +211,7 @@ export function Shell() {
               onClearQuery={() => setFindQ('')}
             />
           )}
+          {screen === 'accounts' && <Accounts onError={failed('accounts')} onRead={() => cleared('accounts')} />}
           {screen === 'runs' && <RunTest />}
           {screen === 'kit' && <Kit />}
         </div>

@@ -65,6 +65,8 @@ export type PreviousRun = {
   repo_key: string;
   base_branch: string | null;
   allowed_tools: string[];
+  /** The AI account the earlier run went on; an older server leaves it out. */
+  account_id?: string | null;
 };
 
 export type DelegationAvailability = {
@@ -152,10 +154,37 @@ export type ItemRun = Run & {
   capabilities?: Record<string, unknown> | null;
   inputs?: RunInput[];
   actions?: RunActions | null;
+  // Added with AI accounts and usage limits; an older server leaves them out.
+  account?: { id: string; name: string; auth_kind: string } | null;
+  /** What the adapter says the executor signed in with. */
+  auth_method?: string | null;
+  limits?: RunLimits | null;
+  usage?: RunUsage | null;
+  billing_location?: string | null;
+  billing_detection?: string | null;
+  billing_evidence?: { rate_limit?: Record<string, unknown>; windows?: Record<string, { utilization?: number; resetsAt?: number }> } | null;
+  /** The limit or signal that stopped the run. */
+  stopped_by?: string | null;
+};
+
+/** The limits a run got at its claim; an absent one is no limit. */
+export type RunLimits = { max_turns?: number; max_budget_usd?: number; max_minutes?: number; budget_from?: 'run' | 'daily' };
+
+/** What the executor said a run used. The cost is a price-list estimate, not a bill. */
+export type RunUsage = {
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  num_turns: number;
+  duration_ms: number;
+  models?: string[];
+  result_subtype?: string | null;
 };
 
 /** What a person picks when handing a work item to Claude Code; note is added to the instruction. */
-export type HandoffChoice = { device_id: string; repo_key: string; base_branch?: string; allowed_tools: string[]; note?: string };
+export type HandoffChoice = { device_id: string; repo_key: string; base_branch?: string; allowed_tools: string[]; note?: string; account_id?: string };
 
 export type Project = ProjectRef & { open_work_items: number };
 
