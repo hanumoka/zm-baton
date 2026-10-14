@@ -99,7 +99,7 @@ class ZmDocsImportService(
 	private data class Imported(val id: String, val ref: String, val supersedes: String?, val supersededBy: String?)
 
 	/** Imports into [actor]'s organisation; the copies are theirs (responsible person, decision owner). */
-	fun import(req: ZmDocsImportIn, actor: String = Requester.STAGE1_PERSON): ZmDocsImportOut {
+	fun import(req: ZmDocsImportIn, actor: String): ZmDocsImportOut {
 		val repoKey = req.repoKey.trim()
 		if (!SessionService.isRepoKey(repoKey)) throw BadRequestException("repo_key is missing or not a key")
 		if (req.files.size > MAX_FILES) throw BadRequestException("at most $MAX_FILES files")

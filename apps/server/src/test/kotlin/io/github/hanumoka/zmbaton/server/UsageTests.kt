@@ -38,23 +38,23 @@ class UsageTests @Autowired constructor(
 	private data class Setup(val device: String, val repoKey: String)
 
 	private fun setup(): Setup {
-		val device = sessions.registerDevice(RegisterDevice("usage-pc", "windows")).deviceId
+		val device = sessions.registerDevice(RegisterDevice("usage-pc", "windows"), person = SessionService.OWNER).deviceId
 		val key = "git:" + UUID.randomUUID().toString().replace("-", "") + "00000000"
-		delegations.addRepository(device, RepositoryUpsert(key, "demo"))
+		delegations.addRepository(device, RepositoryUpsert(key, "demo"), actor = SessionService.OWNER)
 		return Setup(device, key)
 	}
 
 	private fun account(vararg fields: Pair<String, Any?>): String =
-		accounts.register(mapOf("name" to "시험 계정 ${UUID.randomUUID().toString().take(6)}", "auth_kind" to "personal_subscription") + fields)
+		accounts.register(mapOf("name" to "시험 계정 ${UUID.randomUUID().toString().take(6)}", "auth_kind" to "personal_subscription") + fields, actor = SessionService.OWNER)
 			.account.id
 
 	private fun work(title: String = "사용량 작업") =
-		workItems.create(CreateWorkItem(title, "usr_owner", acceptance = "a.txt", initialStage = "ready", executorKind = "human")).id
+		workItems.create(CreateWorkItem(title, "usr_owner", acceptance = "a.txt", initialStage = "ready", executorKind = "human"), actor = SessionService.OWNER).id
 
 	private fun version(workId: String) = workItems.detail(workId).item.version
 
 	private fun delegate(s: Setup, workId: String, accountId: String?) =
-		delegations.delegate(workId, DelegateIn("claude_code", s.device, s.repoKey, "main", listOf("Read"), version(workId), accountId = accountId))
+		delegations.delegate(workId, DelegateIn("claude_code", s.device, s.repoKey, "main", listOf("Read"), version(workId), accountId = accountId), actor = SessionService.OWNER)
 
 	private fun newestRun(workId: String): String =
 		jdbc.sql("select id from runs where work_item_id = :id order by created_at desc, id desc limit 1").param("id", workId)
@@ -150,16 +150,16 @@ class UsageTests @Autowired constructor(
 	fun `a disabled account takes no work and the absent default never picks an API key`() {
 		val s = setup()
 		val acc = account()
-		val disabled = accounts.disable(acc, accounts.get(acc).version)
+		val disabled = accounts.disable(acc, accounts.get(acc).version, actor = SessionService.OWNER)
 		assertEquals("disabled", disabled.account.status)
 		assertEquals("waiting_account", disabled.account.block!!.waitReason)
 		val e = assertFailsWith<ConflictException> { delegate(s, work(), acc) }
 		assertContains(e.message!!, "비활성화한 AI 계정")
-		accounts.enable(acc, accounts.get(acc).version)
+		accounts.enable(acc, accounts.get(acc).version, actor = SessionService.OWNER)
 		delegate(s, work(), acc)
 
 		// The default for a client that names no account is a subscription login, never a key.
-		val key = accounts.register(mapOf("name" to "키 계정", "auth_kind" to "api_key")).account
+		val key = accounts.register(mapOf("name" to "키 계정", "auth_kind" to "api_key"), actor = SessionService.OWNER).account
 		assertEquals("api_key", key.authMethod)
 		assertEquals("env:ANTHROPIC_API_KEY", key.authSource)
 		val w = work()
@@ -339,7 +339,7 @@ class UsageTests @Autowired constructor(
 
 		ingest(runId, ended(gen, 3, "cancelled", true, false))
 		assertEquals(setOf("billing_stopped", "outcome_unknown"), waits(workId).toSet())
-		accounts.resumeBilling(acc, accounts.get(acc).version)
+		accounts.resumeBilling(acc, accounts.get(acc).version, actor = SessionService.OWNER)
 		assertNull(accounts.get(acc).block)
 		delegate(s, workId, acc)
 		assertTrue(waits(workId).isEmpty())

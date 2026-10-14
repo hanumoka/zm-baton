@@ -153,7 +153,7 @@ class OrgApiTests @Autowired constructor(
 
 	@Test
 	fun `a session token never changes the organisation, and the refusal is audited`() {
-		val device = sessions.registerDevice(RegisterDevice("org-pc")).deviceId
+		val device = sessions.registerDevice(RegisterDevice("org-pc"), person = SessionService.OWNER).deviceId
 		val token = sessions.register(RegisterSession(2, device, "claude_code", null, "org-" + UUID.randomUUID())).token
 		val (status, body) = call("POST", "/api/org/teams", mapOf("name" to "AI가 만든 팀"), token)
 		assertEquals(403, status, body)

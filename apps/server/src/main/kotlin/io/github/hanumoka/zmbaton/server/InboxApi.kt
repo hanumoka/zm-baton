@@ -143,7 +143,7 @@ class PersonService(
 	 * [RelayService.RECENT_MINUTES] after it closed, so the person sees whether the answer reached the
 	 * executor; those come after the open ones of their bucket.
 	 */
-	fun inbox(person: String = Requester.STAGE1_PERSON): List<InboxItemView> =
+	fun inbox(person: String): List<InboxItemView> =
 		jdbc.sql(
 			"""
 			select id, bucket, kind, source_kind, source_id, summary, detail::text as detail, wait_kind, repeat_count,
@@ -186,7 +186,7 @@ class PersonService(
 	 * off the first screen in the same transaction; "not a conflict" needs a reason.
 	 */
 	@Transactional
-	fun judgeNotice(noticeId: String, body: NoticeStatusIn, actor: String = Requester.STAGE1_PERSON): NoticeStatusOut {
+	fun judgeNotice(noticeId: String, body: NoticeStatusIn, actor: String): NoticeStatusOut {
 		val status = body.status.trim()
 		if (status !in setOf("acknowledged", "not_a_conflict", "resolved")) {
 			throw BadRequestException("status must be acknowledged, not_a_conflict or resolved")

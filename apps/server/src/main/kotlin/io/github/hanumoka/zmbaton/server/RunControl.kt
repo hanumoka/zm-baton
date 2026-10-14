@@ -90,12 +90,12 @@ class RunControlService(
 	 * branch stay. The work item keeps its stage; the end report decides `outcome_unknown`.
 	 */
 	@Transactional
-	fun cancel(runId: String, version: Long, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
+	fun cancel(runId: String, version: Long, actor: String): WorkItemDetail {
 		// The run first, then the work item: the same lock order as a report (RunService.ingest).
 		val (workItemId, delegationId, state) = jdbc.sql("select work_item_id, delegation_id, state from runs where id = :id for update")
 			.param("id", runId).query { rs, _ -> Triple(rs.getString(1), rs.getString(2), rs.getString(3)) }.optional()
 			.orElseThrow { NotFoundException("no run $runId") }
-		if (state == "requested") return delegations.withdraw(runId, version)
+		if (state == "requested") return delegations.withdraw(runId, version, actor)
 		val actions = RunActionRules.of(state, delegationId != null, liveInput = false)
 			?: throw ConflictException("이미 끝난 실행이다")
 		if (!actions.cancel.allowed) throw ConflictException(actions.cancel.reason ?: "취소할 수 없다")
@@ -115,7 +115,7 @@ class RunControlService(
 	 * connector's next renewal; whether the executor took it shows as its state.
 	 */
 	@Transactional
-	fun sendInput(runId: String, body: RunInputIn, actor: String = Requester.STAGE1_PERSON): RunInputView {
+	fun sendInput(runId: String, body: RunInputIn, actor: String): RunInputView {
 		val text = body.text.trim()
 		if (text.isEmpty() || text.length > RunActionRules.INPUT_MAX) {
 			throw BadRequestException("text must be 1-${RunActionRules.INPUT_MAX} characters")

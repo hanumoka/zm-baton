@@ -71,13 +71,13 @@ class RunService(
 	 */
 	internal var startedAt: OffsetDateTime = OffsetDateTime.now()
 
-	/** The compat test's work item: `ready`, no executor. */
+	/** The compat test's work item: `ready`, no executor, made by the person responsible for it. */
 	fun createWorkItem(title: String, responsibleUserId: String): WorkItemCreated =
-		workItems.create(CreateWorkItem(title, responsibleUserId))
+		workItems.create(CreateWorkItem(title, responsibleUserId), responsibleUserId)
 
 	/** The compat test's run: no delegation, any connector may claim it. [actor] asked for it. */
 	@Transactional
-	fun createRun(workItemId: String, executor: String, actor: String = Requester.STAGE1_PERSON): RunCreated {
+	fun createRun(workItemId: String, executor: String, actor: String): RunCreated {
 		val id = Ids.run()
 		val inserted = try {
 			jdbc.sql(

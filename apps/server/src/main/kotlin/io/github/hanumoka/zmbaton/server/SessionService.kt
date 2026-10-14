@@ -77,7 +77,7 @@ class SessionService(
 
 	/** `zm-baton login`: a device of [person], in their organisation. */
 	@Transactional
-	fun registerDevice(body: RegisterDevice, person: String = Requester.STAGE1_PERSON): DeviceRegistered {
+	fun registerDevice(body: RegisterDevice, person: String): DeviceRegistered {
 		val name = body.name.trim()
 		if (name.isEmpty() || name.length > 100) throw BadRequestException("name must be 1-100 characters")
 		val os = body.os?.trim()?.take(50)

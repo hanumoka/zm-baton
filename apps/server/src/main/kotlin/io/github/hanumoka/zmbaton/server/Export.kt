@@ -142,7 +142,7 @@ class ExportService(
 
 	/** Everything [exporter]'s organisation keeps, as [exporter] may take it. */
 	@Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-	fun export(exporter: String = Requester.STAGE1_PERSON): Map<String, Any?> {
+	fun export(exporter: String): Map<String, Any?> {
 		// Times in the bundle are UTC whatever the server's zone is.
 		jdbc.sql("set local time zone 'UTC'").update()
 		val exportedAt = jdbc.sql("select now()").query(OffsetDateTime::class.java).single().withOffsetSameInstant(ZoneOffset.UTC)

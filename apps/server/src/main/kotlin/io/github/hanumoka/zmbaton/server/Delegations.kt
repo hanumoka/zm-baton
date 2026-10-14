@@ -115,7 +115,7 @@ class DelegationService(
 	 * repository becomes one of the device's organisation's too, when it is not yet.
 	 */
 	@Transactional
-	fun addRepository(deviceId: String, body: RepositoryUpsert, actor: String = Requester.STAGE1_PERSON): DeviceRepositoryView {
+	fun addRepository(deviceId: String, body: RepositoryUpsert, actor: String): DeviceRepositoryView {
 		requireDevice(deviceId)
 		val repoKey = body.repoKey.trim()
 		if (!SessionService.isRepoKey(repoKey)) throw BadRequestException("repo_key is not a repository key")
@@ -140,7 +140,7 @@ class DelegationService(
 
 	/** `zm-baton repo remove`. The row stays for the record; new delegations cannot name it. */
 	@Transactional
-	fun removeRepository(deviceId: String, repoKey: String, actor: String = Requester.STAGE1_PERSON): Boolean {
+	fun removeRepository(deviceId: String, repoKey: String, actor: String): Boolean {
 		requireDevice(deviceId)
 		val removed = jdbc.sql(
 			"update device_repositories set removed_at = now(), updated_at = now() where device_id = :device and repo_key = :key and removed_at is null",
@@ -188,7 +188,7 @@ class DelegationService(
 	 * run left, so `outcome_unknown` and `readiness_failed` come off.
 	 */
 	@Transactional
-	fun delegate(workItemId: String, body: DelegateIn, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
+	fun delegate(workItemId: String, body: DelegateIn, actor: String): WorkItemDetail {
 		val executor = body.executor.trim()
 		if (executor !in EXECUTORS) throw BadRequestException("executor must be one of $EXECUTORS")
 		val deviceId = body.deviceId.trim()
@@ -299,7 +299,7 @@ class DelegationService(
 	 * taken back here; stopping a running executor comes later.
 	 */
 	@Transactional
-	fun withdraw(runId: String, version: Long, actor: String = Requester.STAGE1_PERSON): WorkItemDetail {
+	fun withdraw(runId: String, version: Long, actor: String): WorkItemDetail {
 		// The run first, then the work item: the same lock order as a report (RunService.ingest).
 		val run = jdbc.sql("select work_item_id, delegation_id from runs where id = :id for update")
 			.param("id", runId).query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional()

@@ -34,7 +34,7 @@ class ReadApiTests @Autowired constructor(
 	@Test
 	fun `a screen can list work items, their runs and new events in seq order`() {
 		val work = service.createWorkItem("read api", "usr_owner")
-		val run = service.createRun(work.id, "claude_code")
+		val run = service.createRun(work.id, "claude_code", actor = SessionService.OWNER)
 		val gen = service.claim(run.id, "dev_read").generation
 		service.ingest(run.id, EventBatch(1, (1L..3L).map { seq ->
 			EventIn("evt_read_${run.id}_$seq", gen, seq, if (seq == 1L) "lifecycle" else "answer",
@@ -74,7 +74,7 @@ class ReadApiTests @Autowired constructor(
 	@Test
 	fun `the run list shows the end reason the server applied`() {
 		val work = service.createWorkItem("end reason", "usr_owner")
-		val run = service.createRun(work.id, "claude_code")
+		val run = service.createRun(work.id, "claude_code", actor = SessionService.OWNER)
 		val gen = service.claim(run.id, "dev_read").generation
 		// Two ended reports in separate batches, the later one with a smaller seq:
 		// the server keeps the first one it applied, and the read API must say so.
@@ -89,7 +89,7 @@ class ReadApiTests @Autowired constructor(
 	fun `the run list is limited to the newest runs, oldest first`() {
 		val work = service.createWorkItem("many runs", "usr_owner")
 		val ids = (1..3).map {
-			val run = service.createRun(work.id, "claude_code")
+			val run = service.createRun(work.id, "claude_code", actor = SessionService.OWNER)
 			val gen = service.claim(run.id, "dev_read").generation
 			service.ingest(run.id, EventBatch(1, listOf(EventIn("evt_lim_${run.id}", gen, 1, "lifecycle", mapOf("phase" to "ended", "end_reason" to "replaced")))))
 			run.id

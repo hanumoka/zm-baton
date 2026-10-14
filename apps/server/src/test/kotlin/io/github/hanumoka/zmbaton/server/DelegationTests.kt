@@ -38,12 +38,13 @@ class DelegationTests @Autowired constructor(
 
 	/** A device with one repository and a `ready` work item made here. */
 	private fun setup(acceptance: String? = "README에 한 줄을 더한다", stage: String = "ready"): Setup {
-		val device = sessions.registerDevice(RegisterDevice("handoff-pc", "windows")).deviceId
+		val device = sessions.registerDevice(RegisterDevice("handoff-pc", "windows"), person = SessionService.OWNER).deviceId
 		val key = repoKey()
-		delegations.addRepository(device, RepositoryUpsert(key, "demo", "https://me:secret@github.com/me/demo.git?x=1"))
+		delegations.addRepository(device, RepositoryUpsert(key, "demo", "https://me:secret@github.com/me/demo.git?x=1"), actor = SessionService.OWNER)
 		val work = workItems.create(
 			CreateWorkItem("데모 작업", "usr_owner", acceptance = acceptance, nextAction = "README를 연다",
 				initialStage = stage, executorKind = "human"),
+			actor = SessionService.OWNER,
 		)
 		return Setup(device, key, work.id)
 	}
@@ -51,7 +52,7 @@ class DelegationTests @Autowired constructor(
 	private fun version(workId: String) = workItems.detail(workId).item.version
 
 	private fun delegate(s: Setup, tools: List<String>? = listOf("Read", "Edit", "Write"), branch: String? = "main") =
-		delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, branch, tools, version(s.workId)))
+		delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, branch, tools, version(s.workId)), actor = SessionService.OWNER)
 
 	private fun runOf(workId: String): String =
 		jdbc.sql("select id from runs where work_item_id = :id order by created_at desc limit 1").param("id", workId)
@@ -77,11 +78,11 @@ class DelegationTests @Autowired constructor(
 
 	private fun <T> withSkipped(stages: List<String>, block: () -> T): T {
 		val before = workItems.workflow().skippedStages
-		workItems.setWorkflow(WorkflowSettings(stages))
+		workItems.setWorkflow(WorkflowSettings(stages), actor = SessionService.OWNER)
 		try {
 			return block()
 		} finally {
-			workItems.setWorkflow(WorkflowSettings(before))
+			workItems.setWorkflow(WorkflowSettings(before), actor = SessionService.OWNER)
 		}
 	}
 
@@ -238,31 +239,31 @@ class DelegationTests @Autowired constructor(
 		val s = setup()
 		val v = version(s.workId)
 		assertFailsWith<BadRequestException> {
-			delegations.delegate(s.workId, DelegateIn("claude_code", s.device, repoKey(), null, null, v))
+			delegations.delegate(s.workId, DelegateIn("claude_code", s.device, repoKey(), null, null, v), actor = SessionService.OWNER)
 		}
 		assertFailsWith<BadRequestException> {
-			delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, null, listOf("Read", "Bash"), v))
+			delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, null, listOf("Read", "Bash"), v), actor = SessionService.OWNER)
 		}
 		assertFailsWith<BadRequestException> {
-			delegations.delegate(s.workId, DelegateIn("codex", s.device, s.repoKey, null, null, v))
+			delegations.delegate(s.workId, DelegateIn("codex", s.device, s.repoKey, null, null, v), actor = SessionService.OWNER)
 		}
 		for (bad in listOf("-x", "a..b", "a b", "/main", "main.lock", "x//y")) {
 			assertFailsWith<BadRequestException>(bad) {
-				delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, bad, null, v))
+				delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, bad, null, v), actor = SessionService.OWNER)
 			}
 		}
 		assertFailsWith<ConflictException> {
-			delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, null, null, v - 1))
+			delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, null, null, v - 1), actor = SessionService.OWNER)
 		}
 		// A removed repository cannot be named any more.
-		assertTrue(delegations.removeRepository(s.device, s.repoKey))
-		assertFalse(delegations.removeRepository(s.device, s.repoKey))
+		assertTrue(delegations.removeRepository(s.device, s.repoKey, actor = SessionService.OWNER))
+		assertFalse(delegations.removeRepository(s.device, s.repoKey, actor = SessionService.OWNER))
 		assertFailsWith<BadRequestException> {
-			delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, null, null, v))
+			delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, null, null, v), actor = SessionService.OWNER)
 		}
 		// Nothing above left a run behind, and absent tools mean Read only.
-		delegations.addRepository(s.device, RepositoryUpsert(s.repoKey, "demo"))
-		delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, null, null, v))
+		delegations.addRepository(s.device, RepositoryUpsert(s.repoKey, "demo"), actor = SessionService.OWNER)
+		delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, null, null, v), actor = SessionService.OWNER)
 		assertEquals(listOf("Read"), reads.runs(s.workId, 10).single().delegation!!.allowedTools)
 	}
 
@@ -271,7 +272,7 @@ class DelegationTests @Autowired constructor(
 		val s = setup()
 		delegate(s)
 		val runId = runOf(s.workId)
-		val back = delegations.withdraw(runId, version(s.workId))
+		val back = delegations.withdraw(runId, version(s.workId), actor = SessionService.OWNER)
 		assertNull(back.item.executorKind)
 		assertFalse(back.liveRun)
 		assertTrue(back.delegation.allowed)
@@ -285,7 +286,7 @@ class DelegationTests @Autowired constructor(
 		delegate(s)
 		val second = runOf(s.workId)
 		runs.claim(second, s.device)
-		assertFailsWith<ConflictException> { delegations.withdraw(second, version(s.workId)) }
+		assertFailsWith<ConflictException> { delegations.withdraw(second, version(s.workId), actor = SessionService.OWNER) }
 
 		val old = setup()
 		delegate(old)

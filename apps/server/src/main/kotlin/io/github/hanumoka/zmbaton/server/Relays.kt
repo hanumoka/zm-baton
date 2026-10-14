@@ -278,7 +278,7 @@ class RelayService(
 	 * deadline and while the session lives. A late answer is refused with what happened instead.
 	 */
 	@Transactional
-	fun answer(itemId: String, body: RelayAnswerIn, person: String = Requester.STAGE1_PERSON): RelayAnswered {
+	fun answer(itemId: String, body: RelayAnswerIn, person: String): RelayAnswered {
 		val (kind, detailText) = jdbc.sql("select kind, detail::text from inbox_items where id = :id and user_id = :user")
 			.param("id", itemId).param("user", person).query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional()
 			.orElseThrow { NotFoundException("no first-screen item $itemId") }
@@ -303,7 +303,7 @@ class RelayService(
 
 	/** A person sends an open relay to the terminal: the hook stops waiting and gives no decision. */
 	@Transactional
-	fun toTerminal(itemId: String, person: String = Requester.STAGE1_PERSON): RelayAnswered {
+	fun toTerminal(itemId: String, person: String): RelayAnswered {
 		val updated = jdbc.sql(
 			"""
 			update inbox_items set state = 'moved_to_terminal', relay_reason = 'person', closed_at = now()
@@ -338,7 +338,7 @@ class RelayService(
 		}
 	}
 
-	fun me(person: String = Requester.STAGE1_PERSON): MeView =
+	fun me(person: String): MeView =
 		jdbc.sql("select focus_on, focus_changed_at, coalesce(first_screen_visible_until > now(), false) from users where id = :user")
 			.param("user", person).query { rs, _ ->
 				MeView(
@@ -349,7 +349,7 @@ class RelayService(
 
 	/** Turns focus mode on or off. Relays already waiting keep their deadline (relay 7). */
 	@Transactional
-	fun setFocus(on: Boolean, person: String = Requester.STAGE1_PERSON): MeView {
+	fun setFocus(on: Boolean, person: String): MeView {
 		val changed = jdbc.sql("update users set focus_on = :on, focus_changed_at = now() where id = :user and focus_on <> :on")
 			.param("on", on).param("user", person).update()
 		if (changed == 1) sessions.audit("person", person, "focus.changed", "usr", person, mapOf("on" to on))
@@ -358,7 +358,7 @@ class RelayService(
 
 	/** The first screen says whether its tab is visible (relay 12); the signal lasts [VISIBLE_SECONDS]. */
 	@Transactional
-	fun setFirstScreen(visible: Boolean, person: String = Requester.STAGE1_PERSON): MeView {
+	fun setFirstScreen(visible: Boolean, person: String): MeView {
 		jdbc.sql(
 			"""
 			update users set first_screen_visible_until = case when :visible then now() + make_interval(secs => :secs) end

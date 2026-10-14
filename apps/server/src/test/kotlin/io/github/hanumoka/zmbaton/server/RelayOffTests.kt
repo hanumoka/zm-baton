@@ -26,7 +26,7 @@ class RelayOffTests @Autowired constructor(
 	private val fp = "ef".repeat(32)
 
 	private fun register(): SessionRegistered {
-		val device = sessions.registerDevice(RegisterDevice("relay-off-pc", "windows")).deviceId
+		val device = sessions.registerDevice(RegisterDevice("relay-off-pc", "windows"), person = SessionService.OWNER).deviceId
 		return sessions.register(RegisterSession(2, device, "claude_code", null, UUID.randomUUID().toString()))
 	}
 
@@ -34,7 +34,7 @@ class RelayOffTests @Autowired constructor(
 	fun `by default the registration says relays are off and a relay request makes nothing`() {
 		val s = register()
 		assertFalse(s.relayEnabled, "the hook learns at registration that relays are off and does not ask")
-		assertFalse(relays.me().relayEnabled)
+		assertFalse(relays.me(person = SessionService.OWNER).relayEnabled)
 		val relayId = "rly_" + UUID.randomUUID().toString().replace("-", "")
 		val started = relays.start(
 			s.sessionId, s.token,
@@ -60,7 +60,7 @@ class RelayOffTests @Autowired constructor(
 			values (:id, 'usr_owner', 1, 'permission_request', 'ses', :session, 'left over', 'immediate', :rid, :fp, now() + interval '1 minute')
 			""".trimIndent(),
 		).param("id", itemId).param("session", s.sessionId).param("rid", "rly_" + UUID.randomUUID().toString().replace("-", "")).param("fp", fp).update()
-		val refused = assertFailsWith<ConflictException> { relays.answer(itemId, RelayAnswerIn(decision = "allow")) }
+		val refused = assertFailsWith<ConflictException> { relays.answer(itemId, RelayAnswerIn(decision = "allow"), person = SessionService.OWNER) }
 		assertContains(refused.message!!, "중계가 꺼져 있다")
 		assertEquals("open", jdbc.sql("select state from inbox_items where id = :id").param("id", itemId).query(String::class.java).single())
 	}

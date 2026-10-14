@@ -30,7 +30,7 @@ class SessionServiceTests @Autowired constructor(
 
 	private fun repoKey() = "git:" + UUID.randomUUID().toString().replace("-", "") + "00000000"
 
-	private fun device(): String = sessions.registerDevice(RegisterDevice("test-pc", "windows")).deviceId
+	private fun device(): String = sessions.registerDevice(RegisterDevice("test-pc", "windows"), person = SessionService.OWNER).deviceId
 
 	private fun register(
 		repoKey: String?,
@@ -214,13 +214,13 @@ class SessionServiceTests @Autowired constructor(
 		touch(a, repo, "x.kt")
 		touch(b, repo, "x.kt")
 		val noticeId = noticesBetween(a.id, b.id).single()["id"] as String
-		assertFailsWith<BadRequestException> { people.judgeNotice(noticeId, NoticeStatusIn("not_a_conflict")) }
-		people.judgeNotice(noticeId, NoticeStatusIn("resolved"))
+		assertFailsWith<BadRequestException> { people.judgeNotice(noticeId, NoticeStatusIn("not_a_conflict"), actor = SessionService.OWNER) }
+		people.judgeNotice(noticeId, NoticeStatusIn("resolved"), actor = SessionService.OWNER)
 		assertTrue(openItems(noticeId).isEmpty())
 		touch(b, repo, "x.kt")
 		assertEquals("open", noticesBetween(a.id, b.id).single()["status"])
 		assertEquals(1, openItems(noticeId).size)
-		people.judgeNotice(noticeId, NoticeStatusIn("not_a_conflict", "다른 함수를 고친다"))
+		people.judgeNotice(noticeId, NoticeStatusIn("not_a_conflict", "다른 함수를 고친다"), actor = SessionService.OWNER)
 		touch(a, repo, "x.kt")
 		assertEquals("not_a_conflict", noticesBetween(a.id, b.id).single()["status"], "a judged non-conflict stays judged")
 		assertTrue(openItems(noticeId).isEmpty())

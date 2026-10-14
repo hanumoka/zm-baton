@@ -41,17 +41,17 @@ class RunControlTests @Autowired constructor(
 	private data class Setup(val device: String, val repoKey: String, val workId: String)
 
 	private fun setup(): Setup {
-		val device = sessions.registerDevice(RegisterDevice("control-pc", "windows")).deviceId
+		val device = sessions.registerDevice(RegisterDevice("control-pc", "windows"), person = SessionService.OWNER).deviceId
 		val key = "git:" + UUID.randomUUID().toString().replace("-", "") + "00000000"
-		delegations.addRepository(device, RepositoryUpsert(key, "demo"))
-		val work = workItems.create(CreateWorkItem("제어 작업", "usr_owner", acceptance = "a.txt를 만든다", initialStage = "ready", executorKind = "human"))
+		delegations.addRepository(device, RepositoryUpsert(key, "demo"), actor = SessionService.OWNER)
+		val work = workItems.create(CreateWorkItem("제어 작업", "usr_owner", acceptance = "a.txt를 만든다", initialStage = "ready", executorKind = "human"), actor = SessionService.OWNER)
 		return Setup(device, key, work.id)
 	}
 
 	private fun version(workId: String) = workItems.detail(workId).item.version
 
 	private fun delegate(s: Setup, device: String = s.device, note: String? = null) =
-		delegations.delegate(s.workId, DelegateIn("claude_code", device, s.repoKey, "main", listOf("Read", "Edit"), version(s.workId), note))
+		delegations.delegate(s.workId, DelegateIn("claude_code", device, s.repoKey, "main", listOf("Read", "Edit"), version(s.workId), note), actor = SessionService.OWNER)
 
 	private fun newestRun(workId: String): String =
 		jdbc.sql("select id from runs where work_item_id = :id order by created_at desc, id desc limit 1").param("id", workId)
@@ -91,11 +91,11 @@ class RunControlTests @Autowired constructor(
 
 	private fun <T> withSkipped(stages: List<String>, block: () -> T): T {
 		val before = workItems.workflow().skippedStages
-		workItems.setWorkflow(WorkflowSettings(stages))
+		workItems.setWorkflow(WorkflowSettings(stages), actor = SessionService.OWNER)
 		try {
 			return block()
 		} finally {
-			workItems.setWorkflow(WorkflowSettings(before))
+			workItems.setWorkflow(WorkflowSettings(before), actor = SessionService.OWNER)
 		}
 	}
 
@@ -126,7 +126,7 @@ class RunControlTests @Autowired constructor(
 	fun `a run whose lease lapsed past the grace ends lost with outcome_unknown, a shorter lapse only shows`() {
 		val s = setup()
 		val (runId, gen) = running(s)
-		control.sendInput(runId, RunInputIn("남은 것도 해 줘"))
+		control.sendInput(runId, RunInputIn("남은 것도 해 줘"), actor = SessionService.OWNER)
 		lapse(runId, 30) // within the 60-second grace of this test
 		assertTrue(runs.sweepLost().none { it == runId })
 		val lapsed = view(s.workId, runId)
@@ -187,7 +187,7 @@ class RunControlTests @Autowired constructor(
 		val before = view(s.workId, runId)
 		assertTrue(before.actions!!.cancel.allowed)
 
-		val after = control.cancel(runId, version(s.workId))
+		val after = control.cancel(runId, version(s.workId), actor = SessionService.OWNER)
 		assertEquals("work_item.run_cancel_requested", after.history.first().action)
 		val stopping = view(s.workId, runId)
 		assertEquals("stopping", stopping.state)
@@ -195,9 +195,9 @@ class RunControlTests @Autowired constructor(
 		assertFalse(stopping.actions!!.cancel.allowed)
 		assertContains(stopping.actions.cancel.reason!!, "이미 취소를 요청했다")
 		assertFalse(stopping.actions.sendInput.allowed)
-		val e = assertFailsWith<ConflictException> { control.cancel(runId, version(s.workId)) }
+		val e = assertFailsWith<ConflictException> { control.cancel(runId, version(s.workId), actor = SessionService.OWNER) }
 		assertContains(e.message!!, "이미 취소를 요청했다")
-		assertFailsWith<ConflictException> { control.sendInput(runId, RunInputIn("계속해")) }
+		assertFailsWith<ConflictException> { control.sendInput(runId, RunInputIn("계속해"), actor = SessionService.OWNER) }
 
 		val lease = runs.renew(runId, LeaseIn(s.device, gen))
 		assertEquals("stopping", lease.state)
@@ -211,7 +211,7 @@ class RunControlTests @Autowired constructor(
 		assertEquals("in_progress", item.item.stage)
 		assertEquals(listOf("outcome_unknown"), item.item.waitReasons)
 		assertEquals("resume", item.delegation.mode)
-		assertFailsWith<ConflictException> { control.cancel(runId, version(s.workId)) }
+		assertFailsWith<ConflictException> { control.cancel(runId, version(s.workId), actor = SessionService.OWNER) }
 	}
 
 	@Test
@@ -220,7 +220,7 @@ class RunControlTests @Autowired constructor(
 		delegate(s)
 		val runId = newestRun(s.workId)
 		val gen = runs.claim(runId, s.device).generation
-		control.cancel(runId, version(s.workId))
+		control.cancel(runId, version(s.workId), actor = SessionService.OWNER)
 		ingest(runId, ended(gen, 1, "cancelled", false, false))
 		val item = workItems.detail(s.workId)
 		assertEquals("ready", item.item.stage)
@@ -229,16 +229,16 @@ class RunControlTests @Autowired constructor(
 
 		delegate(s)
 		val requested = newestRun(s.workId)
-		val back = control.cancel(requested, version(s.workId))
+		val back = control.cancel(requested, version(s.workId), actor = SessionService.OWNER)
 		assertEquals("work_item.delegation_withdrawn", back.history.first().action)
 		assertEquals("cancelled", view(s.workId, requested).endReason)
 		// A stale version is refused before anything changes.
 		delegate(s)
 		val third = newestRun(s.workId)
 		runs.claim(third, s.device)
-		assertFailsWith<ConflictException> { control.cancel(third, version(s.workId) - 1) }
+		assertFailsWith<ConflictException> { control.cancel(third, version(s.workId) - 1, actor = SessionService.OWNER) }
 		assertEquals("claimed", view(s.workId, third).state)
-		assertFailsWith<NotFoundException> { control.cancel("run_nope", 0) }
+		assertFailsWith<NotFoundException> { control.cancel("run_nope", 0, actor = SessionService.OWNER) }
 	}
 
 	@Test
@@ -256,12 +256,12 @@ class RunControlTests @Autowired constructor(
 	fun `an instruction reaches the connector at its next renewal and its state follows the reports`() {
 		val s = setup()
 		val (runId, gen) = running(s)
-		val first = control.sendInput(runId, RunInputIn("  README도 고친다  "))
+		val first = control.sendInput(runId, RunInputIn("  README도 고친다  "), actor = SessionService.OWNER)
 		assertEquals("README도 고친다", first.text)
 		assertEquals("pending", first.state)
-		val second = control.sendInput(runId, RunInputIn("테스트 파일은 건드리지 않는다"))
-		assertFailsWith<BadRequestException> { control.sendInput(runId, RunInputIn("   ")) }
-		assertFailsWith<BadRequestException> { control.sendInput(runId, RunInputIn("x".repeat(2001))) }
+		val second = control.sendInput(runId, RunInputIn("테스트 파일은 건드리지 않는다"), actor = SessionService.OWNER)
+		assertFailsWith<BadRequestException> { control.sendInput(runId, RunInputIn("   "), actor = SessionService.OWNER) }
+		assertFailsWith<BadRequestException> { control.sendInput(runId, RunInputIn("x".repeat(2001)), actor = SessionService.OWNER) }
 		assertEquals("run.input_sent", workItems.detail(s.workId).history.first().action)
 
 		val lease = runs.renew(runId, LeaseIn(s.device, gen))
@@ -281,7 +281,7 @@ class RunControlTests @Autowired constructor(
 		// The end report settles the rest: what the executor did not take is undelivered.
 		ingest(runId, ended(gen, 2, "submitted", true, true, mapOf("inputs" to listOf(mapOf("id" to second.id, "state" to "sent")))))
 		assertEquals(listOf("delivered", "undelivered"), view(s.workId, runId).inputs.map { it.state })
-		assertFailsWith<ConflictException> { control.sendInput(runId, RunInputIn("늦었다")) }
+		assertFailsWith<ConflictException> { control.sendInput(runId, RunInputIn("늦었다"), actor = SessionService.OWNER) }
 	}
 
 	@Test
@@ -293,13 +293,13 @@ class RunControlTests @Autowired constructor(
 		val claimed = view(s.workId, runId).actions!!
 		assertFalse(claimed.sendInput.allowed)
 		assertContains(claimed.sendInput.reason!!, "아직 시작되지 않았다")
-		assertFailsWith<ConflictException> { control.sendInput(runId, RunInputIn("지금")) }
+		assertFailsWith<ConflictException> { control.sendInput(runId, RunInputIn("지금"), actor = SessionService.OWNER) }
 
 		ingest(runId, started(gen, s, runId, liveInput = false))
 		val old = view(s.workId, runId).actions!!
 		assertFalse(old.sendInput.allowed)
 		assertContains(old.sendInput.reason!!, "실행 중 지시를 받지 않는다")
-		val e = assertFailsWith<ConflictException> { control.sendInput(runId, RunInputIn("지금")) }
+		val e = assertFailsWith<ConflictException> { control.sendInput(runId, RunInputIn("지금"), actor = SessionService.OWNER) }
 		assertEquals(old.sendInput.reason, e.message)
 	}
 
@@ -346,8 +346,8 @@ class RunControlTests @Autowired constructor(
 		val s = setup()
 		val (cut, gen) = running(s)
 		ingest(cut, ended(gen, 2, "lost", true, false))
-		val other = sessions.registerDevice(RegisterDevice("other-pc", "windows")).deviceId
-		delegations.addRepository(other, RepositoryUpsert(s.repoKey, "demo"))
+		val other = sessions.registerDevice(RegisterDevice("other-pc", "windows"), person = SessionService.OWNER).deviceId
+		delegations.addRepository(other, RepositoryUpsert(s.repoKey, "demo"), actor = SessionService.OWNER)
 		delegate(s, device = other)
 		val claim = runs.claim(newestRun(s.workId), other)
 		val resume = assertNotNull(claim.resume)
@@ -385,7 +385,7 @@ class RunControlTests @Autowired constructor(
 		val s = setup()
 		val (first, gen) = running(s)
 		ingest(first, ended(gen, 2, "submitted", true, true))
-		workItems.transition(s.workId, TransitionIn("in_progress", version(s.workId), "제목이 틀렸다"))
+		workItems.transition(s.workId, TransitionIn("in_progress", version(s.workId), "제목이 틀렸다"), actor = SessionService.OWNER)
 		val plan = workItems.detail(s.workId).delegation
 		assertEquals("resume", plan.mode)
 		assertFalse(plan.needsNote)
@@ -399,7 +399,7 @@ class RunControlTests @Autowired constructor(
 	@Test
 	fun `a work item a person carries out is not taken over by a continuing run`() {
 		val s = setup()
-		workItems.transition(s.workId, TransitionIn("in_progress", version(s.workId)))
+		workItems.transition(s.workId, TransitionIn("in_progress", version(s.workId)), actor = SessionService.OWNER)
 		val plan = workItems.detail(s.workId).delegation
 		assertFalse(plan.allowed)
 		assertNull(plan.mode)

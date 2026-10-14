@@ -47,10 +47,10 @@ class QuestionTests @Autowired constructor(
 	private data class Setup(val device: String, val repoKey: String, val workId: String)
 
 	private fun setup(stage: String = "ready"): Setup {
-		val device = sessions.registerDevice(RegisterDevice("question-pc", "windows")).deviceId
+		val device = sessions.registerDevice(RegisterDevice("question-pc", "windows"), person = SessionService.OWNER).deviceId
 		val key = "git:" + UUID.randomUUID().toString().replace("-", "") + "00000000"
-		delegations.addRepository(device, RepositoryUpsert(key, "demo"))
-		val work = workItems.create(CreateWorkItem("질문 작업", "usr_owner", acceptance = "기한을 정한다", initialStage = stage, executorKind = "human"))
+		delegations.addRepository(device, RepositoryUpsert(key, "demo"), actor = SessionService.OWNER)
+		val work = workItems.create(CreateWorkItem("질문 작업", "usr_owner", acceptance = "기한을 정한다", initialStage = stage, executorKind = "human"), actor = SessionService.OWNER)
 		return Setup(device, key, work.id)
 	}
 
@@ -66,7 +66,7 @@ class QuestionTests @Autowired constructor(
 
 	/** Hands the work item over (or on) and reports a submitted result from executor session [session]. */
 	private fun submitted(s: Setup, session: String, answer: String = "끝냈다"): String {
-		delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, "main", listOf("Read", "Edit"), version(s.workId)))
+		delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, "main", listOf("Read", "Edit"), version(s.workId)), actor = SessionService.OWNER)
 		val runId = newestRun(s.workId)
 		val gen = runs.claim(runId, s.device).generation
 		runs.ingest(runId, EventBatch(2, listOf(
@@ -93,11 +93,11 @@ class QuestionTests @Autowired constructor(
 
 	private fun <T> withSkipped(stages: List<String>, block: () -> T): T {
 		val before = workItems.workflow().skippedStages
-		workItems.setWorkflow(WorkflowSettings(stages))
+		workItems.setWorkflow(WorkflowSettings(stages), actor = SessionService.OWNER)
 		try {
 			return block()
 		} finally {
-			workItems.setWorkflow(WorkflowSettings(before))
+			workItems.setWorkflow(WorkflowSettings(before), actor = SessionService.OWNER)
 		}
 	}
 
@@ -106,7 +106,7 @@ class QuestionTests @Autowired constructor(
 	@Test
 	fun `a person's question is routed, holds the work item waiting and reaches bucket 2`() {
 		val s = setup()
-		workItems.transition(s.workId, TransitionIn("in_progress", version(s.workId)))
+		workItems.transition(s.workId, TransitionIn("in_progress", version(s.workId)), actor = SessionService.OWNER)
 		val after = ask(s.workId)
 		assertEquals(listOf("waiting_answer"), after.item.waitReasons)
 		assertTrue(after.history.any { it.action == "question.asked" })
@@ -152,7 +152,7 @@ class QuestionTests @Autowired constructor(
 	@Test
 	fun `questions are refused on closed work, Git copies and runs of another work item`() {
 		val s = setup()
-		workItems.transition(s.workId, TransitionIn("cancelled", version(s.workId)))
+		workItems.transition(s.workId, TransitionIn("cancelled", version(s.workId)), actor = SessionService.OWNER)
 		assertContains(assertFailsWith<ConflictException> { ask(s.workId) }.message!!, "질문을 남기지 않는다")
 		val closed = workItems.detail(s.workId).question
 		assertFalse(closed.allowed)
@@ -238,7 +238,7 @@ class QuestionTests @Autowired constructor(
 		assertEquals("resume", detail.delegation.mode)
 		assertEquals(1, detail.delegation.answersReady)
 
-		delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, "main", listOf("Read", "Edit"), version(s.workId)))
+		delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, "main", listOf("Read", "Edit"), version(s.workId)), actor = SessionService.OWNER)
 		val second = newestRun(s.workId)
 		val view = reads.runs(s.workId, 20).single { it.id == second }
 		assertEquals("answer_arrived", view.continueReason)
@@ -267,7 +267,7 @@ class QuestionTests @Autowired constructor(
 
 		val open = setup()
 		val cut = run {
-			delegations.delegate(open.workId, DelegateIn("claude_code", open.device, open.repoKey, "main", listOf("Read"), version(open.workId)))
+			delegations.delegate(open.workId, DelegateIn("claude_code", open.device, open.repoKey, "main", listOf("Read"), version(open.workId)), actor = SessionService.OWNER)
 			val id = newestRun(open.workId)
 			val gen = runs.claim(id, open.device).generation
 			runs.ingest(id, EventBatch(2, listOf(
@@ -278,7 +278,7 @@ class QuestionTests @Autowired constructor(
 		}
 		ask(open.workId, "어느 쪽인가?", askedBy = "run", runId = cut)
 		questions.answer(only(open.workId).id, AnswerIn("왼쪽"), "usr_owner")
-		delegations.delegate(open.workId, DelegateIn("claude_code", open.device, open.repoKey, "main", listOf("Read"), version(open.workId)))
+		delegations.delegate(open.workId, DelegateIn("claude_code", open.device, open.repoKey, "main", listOf("Read"), version(open.workId)), actor = SessionService.OWNER)
 		val next = newestRun(open.workId)
 		assertEquals("answer_arrived", reads.runs(open.workId, 20).single { it.id == next }.continueReason)
 		val gen = runs.claim(next, open.device).generation
@@ -328,7 +328,7 @@ class QuestionTests @Autowired constructor(
 		val s = setup()
 		ask(s.workId)
 		val q = only(s.workId)
-		workItems.transition(s.workId, TransitionIn("cancelled", version(s.workId)))
+		workItems.transition(s.workId, TransitionIn("cancelled", version(s.workId)), actor = SessionService.OWNER)
 		val closed = questions.view(q.id)
 		assertEquals("resolved", closed.state)
 		assertEquals("work_cancelled", closed.closeReason)
@@ -340,7 +340,7 @@ class QuestionTests @Autowired constructor(
 		val s = setup()
 		ask(s.workId)
 		val q = only(s.workId)
-		val device = sessions.registerDevice(RegisterDevice("ai-pc")).deviceId
+		val device = sessions.registerDevice(RegisterDevice("ai-pc"), person = SessionService.OWNER).deviceId
 		val token = sessions.register(RegisterSession(2, device, "claude_code", executorSessionId = UUID.randomUUID().toString())).token
 		fun post(path: String, body: String, bearer: String? = null): HttpResponse<String> {
 			val b = HttpRequest.newBuilder(URI.create(base + path)).header("Content-Type", "application/json")

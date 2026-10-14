@@ -48,9 +48,9 @@ class ReviewTests @Autowired constructor(
 	private data class Setup(val device: String, val repoKey: String, val workId: String, val projectId: String?)
 
 	private fun setup(project: Boolean = false, title: String = "검토 작업"): Setup {
-		val device = sessions.registerDevice(RegisterDevice("review-pc", "windows")).deviceId
+		val device = sessions.registerDevice(RegisterDevice("review-pc", "windows"), person = SessionService.OWNER).deviceId
 		val key = "git:" + UUID.randomUUID().toString().replace("-", "") + "00000000"
-		delegations.addRepository(device, RepositoryUpsert(key, "demo"))
+		delegations.addRepository(device, RepositoryUpsert(key, "demo"), actor = SessionService.OWNER)
 		val projectId = if (project) {
 			val id = Ids.project()
 			jdbc.sql("insert into projects (id, org_id, name) values (:id, 'org_owner', :name)").param("id", id).param("name", "프로젝트 $id").update()
@@ -58,7 +58,7 @@ class ReviewTests @Autowired constructor(
 		} else {
 			null
 		}
-		val work = workItems.create(CreateWorkItem(title, "usr_owner", projectId, acceptance = "고친다", initialStage = "ready", executorKind = "human"))
+		val work = workItems.create(CreateWorkItem(title, "usr_owner", projectId, acceptance = "고친다", initialStage = "ready", executorKind = "human"), actor = SessionService.OWNER)
 		return Setup(device, key, work.id, projectId)
 	}
 
@@ -80,7 +80,7 @@ class ReviewTests @Autowired constructor(
 		s: Setup, files: List<String>, snapshot: String? = sha(), toolPaths: List<String> = emptyList(), note: String? = null,
 		billingStopped: Boolean = false,
 	): String {
-		delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, "main", listOf("Read", "Edit"), version(s.workId), note))
+		delegations.delegate(s.workId, DelegateIn("claude_code", s.device, s.repoKey, "main", listOf("Read", "Edit"), version(s.workId), note), actor = SessionService.OWNER)
 		val runId = newestRun(s.workId)
 		val gen = runs.claim(runId, s.device).generation
 		// An extra billing signal during the run stops the work item (UsageService); a handoff clears it, so it comes after.
@@ -105,7 +105,7 @@ class ReviewTests @Autowired constructor(
 		jdbc.sql("select id, reason, state, target_kind, target_ref from review_items where run_id = :id order by created_at, id").param("id", runId)
 			.query { rs, _ -> Review(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5)) }.list()
 
-	private fun inboxOf(reviewId: String): InboxItemView? = people.inbox().singleOrNull { it.sourceId == reviewId }
+	private fun inboxOf(reviewId: String): InboxItemView? = people.inbox(person = SessionService.OWNER).singleOrNull { it.sourceId == reviewId }
 
 	private fun run(workId: String, runId: String) = reads.runs(workId, 20).single { it.id == runId }
 
@@ -116,11 +116,11 @@ class ReviewTests @Autowired constructor(
 
 	private fun <T> withSkipped(stages: List<String>, block: () -> T): T {
 		val before = workItems.workflow().skippedStages
-		workItems.setWorkflow(WorkflowSettings(stages))
+		workItems.setWorkflow(WorkflowSettings(stages), actor = SessionService.OWNER)
 		try {
 			return block()
 		} finally {
-			workItems.setWorkflow(WorkflowSettings(before))
+			workItems.setWorkflow(WorkflowSettings(before), actor = SessionService.OWNER)
 		}
 	}
 
@@ -175,7 +175,7 @@ class ReviewTests @Autowired constructor(
 		val done = detail.moves.single { it.target == "done" }
 		assertFalse(done.allowed)
 		assertContains(done.reason!!, "위험 목록 검토")
-		assertFailsWith<ConflictException> { workItems.transition(s.workId, TransitionIn("done", detail.item.version)) }
+		assertFailsWith<ConflictException> { workItems.transition(s.workId, TransitionIn("done", detail.item.version), actor = SessionService.OWNER) }
 		assertEquals(listOf("system"), audits("review.raised", r.id))
 	}
 
@@ -371,7 +371,7 @@ class ReviewTests @Autowired constructor(
 	fun `a request whose work item moved on is only recorded when rejected (contract boundary 7)`() = withSkipped(emptyList()) {
 		val s = setup()
 		val r = reviewsOf(result(s, listOf("AGENTS.md"))).single()
-		workItems.transition(s.workId, TransitionIn("plan_review", version(s.workId), "범위가 바뀌었다"))
+		workItems.transition(s.workId, TransitionIn("plan_review", version(s.workId), "범위가 바뀌었다"), actor = SessionService.OWNER)
 		val detail = reviews.detail(r.id)
 		assertFalse(detail.effects!!.rejectNeedsVersion)
 		assertEquals("recorded", reject(r, "어차피 다시 계획한다").effect)
@@ -446,7 +446,7 @@ class ReviewTests @Autowired constructor(
 		assertEquals(listOf("session", "system", "system"), audits("review.close_refused", r.id))
 
 		// Over HTTP a session token is refused before anything is read, and that is audited too.
-		val device = sessions.registerDevice(RegisterDevice("ai-pc")).deviceId
+		val device = sessions.registerDevice(RegisterDevice("ai-pc"), person = SessionService.OWNER).deviceId
 		val token = sessions.register(RegisterSession(2, device, "claude_code", executorSessionId = UUID.randomUUID().toString())).token
 		val body = json.writeValueAsString(mapOf("decision" to "approved", "target_ref" to r.targetRef))
 		val response = http.send(
@@ -509,7 +509,7 @@ class ReviewTests @Autowired constructor(
 		val item = inboxOf(r.id)!!
 		jdbc.sql("update inbox_items set waiting_since = now() - interval '25 hours' where id = :id").param("id", item.id).update()
 		assertTrue(reviews.promoteWaiting() >= 1)
-		val raised = people.inbox()
+		val raised = people.inbox(person = SessionService.OWNER)
 		val mine = raised.single { it.id == item.id }
 		assertNotNull(mine.promotedAt)
 		assertEquals(4, mine.bucket)

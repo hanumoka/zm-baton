@@ -40,7 +40,7 @@ class RetentionTests @Autowired constructor(
 
 	private fun records(at: OffsetDateTime): Records {
 		val n = UUID.randomUUID().toString().replace("-", "")
-		val device = sessions.registerDevice(RegisterDevice("retention-pc", "windows")).deviceId
+		val device = sessions.registerDevice(RegisterDevice("retention-pc", "windows"), person = SessionService.OWNER).deviceId
 		val audit = "aud_old_$n"
 		jdbc.sql("insert into audit_log (id, actor_kind, actor_id, action, at) values (:id, 'person', 'usr_owner', 'test.old', :at)")
 			.param("id", audit).param("at", at).update()

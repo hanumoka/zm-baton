@@ -75,7 +75,7 @@ class ManagerTests @Autowired constructor(
 	@Test
 	fun `my record shows who I am, my card, my work and my sessions`() {
 		val title = "매니저 기록의 작업 " + UUID.randomUUID().toString().take(6)
-		val work = workItems.create(CreateWorkItem(title, "usr_owner", nextAction = "카드를 본다"))
+		val work = workItems.create(CreateWorkItem(title, "usr_owner", nextAction = "카드를 본다"), actor = SessionService.OWNER)
 		val (status, body) = call("GET", "/api/me/record")
 		assertEquals(200, status, body)
 		val record = obj(body)
