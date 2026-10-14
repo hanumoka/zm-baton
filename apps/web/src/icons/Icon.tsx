@@ -30,12 +30,14 @@ export type IconName =
   | 'git-file'
   | 'lock'
   | 'bell'
+  | 'focus'
   | 'alert'
   | 'conflict'
   | 'chevron-down'
   | 'more'
   | 'arrow-up'
-  | 'arrow-down';
+  | 'arrow-down'
+  | 'key';
 
 const SHAPES: Record<IconName, ReactNode> = {
   inbox: (
@@ -94,6 +96,12 @@ const SHAPES: Record<IconName, ReactNode> = {
     </>
   ),
   close: <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />,
+  key: (
+    <>
+      <circle cx="5.25" cy="10.75" r="2.75" />
+      <path d="M7.25 8.75 13.25 2.75M10.75 5.25l1.75 1.75M9.25 6.75l1.25 1.25" />
+    </>
+  ),
   plus: <path d="M8 3.5v9M3.5 8h9" />,
   'sidebar-expand': (
     <>
@@ -151,6 +159,13 @@ const SHAPES: Record<IconName, ReactNode> = {
       <path d="M6.75 14.25h2.5" />
     </>
   ),
+  // Focus mode: the bell crossed out, as alerts wait until it ends.
+  focus: (
+    <>
+      <path d="M3.5 12h9l-1-1.5V7.25a3.5 3.5 0 0 0-7 0v3.25z" />
+      <path d="M6.75 14.25h2.5M2.75 2.75l10.5 10.5" />
+    </>
+  ),
   alert: (
     <>
       <circle cx="8" cy="8" r="6" />
@@ -201,12 +216,14 @@ export const ICONS: { name: IconName; label: string }[] = [
   { name: 'git-file', label: 'Git 파일' },
   { name: 'lock', label: '잠김' },
   { name: 'bell', label: '브라우저 알림' },
+  { name: 'focus', label: '집중 모드' },
   { name: 'alert', label: '오류' },
   { name: 'conflict', label: '겹침(충돌)' },
   { name: 'chevron-down', label: '펼쳐 고르기' },
   { name: 'more', label: '더 보기' },
   { name: 'arrow-up', label: '위로' },
   { name: 'arrow-down', label: '아래로' },
+  { name: 'key', label: 'AI 계정' },
 ];
 
 /**

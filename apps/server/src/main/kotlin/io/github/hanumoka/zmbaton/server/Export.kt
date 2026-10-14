@@ -55,6 +55,8 @@ class ExportService(
 		/** Collection name, table, order. The names are the export's, the tables the database's. */
 		val COLLECTIONS: List<Triple<String, String, String>> = listOf(
 			Triple("organizations", "organizations", "id"),
+			// The person's own settings: focus mode, digest times and the first screen's visibility.
+			Triple("users", "users", "id"),
 			Triple("projects", "projects", "external_ref nulls last, id"),
 			Triple("work_items", "work_items", "created_at, id"),
 			Triple("decisions", "decisions", "decided_on nulls last, external_ref nulls last, id"),
@@ -68,6 +70,9 @@ class ExportService(
 			Triple("document_work_items", "document_work_items", "document_id, work_item_id"),
 			Triple("document_decisions", "document_decisions", "document_id, decision_id"),
 			Triple("devices", "devices", "created_at, id"),
+			// AI accounts are references: kind, purpose, affiliation, terms, limits and where the device keeps
+			// the sign-in (`device_login` or `env:ANTHROPIC_API_KEY`). No key or login value is ever stored.
+			Triple("ai_accounts", "ai_accounts", "created_at, id"),
 			// Remotes are stored cleaned (DelegationService.addRepository: SessionService.cleanRemote
 			// drops user info, query and fragment, and local paths), so no credential is exported.
 			Triple("device_repositories", "device_repositories", "device_id, repo_key"),
@@ -84,6 +89,8 @@ class ExportService(
 			// Who had to see which result and what they decided; the evidence holds patterns, paths and draws.
 			Triple("review_items", "review_items", "created_at, id"),
 			Triple("work_item_links", "work_item_links", "created_at, from_id, to_id"),
+			// What executors said runs used and the provider's limit signals: counts, ratios and estimates, no secret.
+			Triple("usage_signals", "usage_signals", "received_at, id"),
 			Triple("audit_log", "audit_log", "at, id"),
 		)
 

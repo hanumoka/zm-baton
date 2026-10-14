@@ -67,7 +67,7 @@ go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 
 ## 이 시험에서 하지 않는 것
 
-다음은 이 시험이 끝난 뒤 1단계 본작업에서 한다: WebSocket 깨우기, 보내지 못한 사건의 디스크 보관, `request_id`, 질문 경로, 실행기 설정 격리(`CLAUDE_CONFIG_DIR`). 임대 갱신은 둘째 판에서 이 시험에도 들어왔고, 끊긴 실행의 재개는 아래 `zm-baton agent`에 있다. 도구 결과 본문은 4,000자로 자르기만 하고 비밀값을 가리지 않는다.
+다음은 이 시험이 끝난 뒤 1단계 본작업에서 한다: WebSocket 깨우기, 보내지 못한 사건의 디스크 보관, `request_id`, 질문 경로. 계정에 따른 인증 방식 고정과 설정 격리(`CLAUDE_CONFIG_DIR`)는 아래 `zm-baton agent`에만 있고, 이 시험은 그대로다. 임대 갱신은 둘째 판에서 이 시험에도 들어왔고, 끊긴 실행의 재개는 아래 `zm-baton agent`에 있다. 도구 결과 본문은 4,000자로 자르기만 하고 비밀값을 가리지 않는다.
 
 ## `zm-baton repo`·`zm-baton agent` — 맡긴 작업을 실행한다
 
@@ -83,7 +83,9 @@ go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 8. 맡긴 실행은 지시를 표준 입력(`--input-format stream-json --replay-user-messages`)으로 넣는다. 임대 갱신의 답으로 받은 사람의 지시도 같은 입력에 넣고, Claude Code가 되돌려 보내면 받은 것으로 친다. 결과가 오면 입력을 닫는다. 지시마다의 상태는 다음 갱신과 끝 보고의 `inputs`로 보낸다.
 9. 이어서 맡긴 실행(청구 응답의 `resume`)은 같은 기기이고 `runs/<이전 실행 시도 번호>.json`(설정 폴더)이 이전 실행기와 하위 프로세스가 끝났다고 말할 때만 이전 작업 트리와 세션(`--resume`)을 이어 쓴다. 아니면 이전 실행 브랜치 끝에서 새 작업 트리와 새 세션으로, 다른 기기면 기준에서 시작한다. 어느 쪽인지는 작업 트리 보고의 `origin`과 지시 끝에 덧붙인 문장으로 알린다. Claude Code에 그 세션이 없으면 같은 작업 트리에서 새 세션으로 다시 띄운다.
 
-종료 코드는 실행 시험과 같다: 0 정상(`--once`이면 `submitted`이고 서버가 사건을 다 받음), 1 실패, 2 플래그·설정 오류, 130 Ctrl+C. `--run-timeout` 기본값은 30분이다.
+10. 위임마다 AI 계정이 붙는다(청구 응답의 `account`·`limits`, `internal/agent/auth.go`). 계정이 정한 인증 방식이 아닌 자격 환경 변수(`CLAUDE_CODE_USE_BEDROCK`·`CLAUDE_CODE_USE_VERTEX`·`CLAUDE_CODE_USE_FOUNDRY`·`ANTHROPIC_AUTH_TOKEN`·`ANTHROPIC_API_KEY`·`CLAUDE_CODE_OAUTH_TOKEN`·`ANTHROPIC_PROFILE`)를 실행기 환경에서 빼고, 뺀 이름을 준비 검사의 `account` 항목에 적는다. 값은 읽어 남기거나 보내지 않는다. API 키 계정은 이 창의 `ANTHROPIC_API_KEY`가 있어야 하고, 설정 폴더의 `executors/<계정 번호>/claude`를 `CLAUDE_CONFIG_DIR`로 넘긴다. 구독 계정은 사람의 설정 폴더를 그대로 쓴다(그곳에 로그인이 있다). 턴·비용 상한은 `--max-turns`·`--max-budget-usd`로 넘기고, 시간 상한은 연결 프로그램이 잰다. 시작 보고에 `auth_method`, 끝 보고에 실행기 첫 줄의 `apiKeySource`로 확인한 `auth`와 닿은 상한 `limit_hit`을 싣는다. 쓰는 순서는 [docs/stage1/accounts.md](../../docs/stage1/accounts.md)에 있다.
+
+종료 코드는 실행 시험과 같다: 0 정상(`--once`이면 `submitted`이고 서버가 사건을 다 받음), 1 실패, 2 플래그·설정 오류, 130 Ctrl+C. `--run-timeout` 기본값은 0이고, 0이면 계정의 「실행마다 시간」을 쓴다(서버가 보내지 않으면 30분). 값을 주면 그것이 더 짧을 때만 쓴다.
 
 ## `zm-baton` 명령 — 사람이 직접 연 AI 세션을 서버에 잇는다
 
@@ -91,17 +93,19 @@ go build -o bin/zm-baton-agent.exe ./cmd/zm-baton-agent
 
 1. `zm-baton login --server http://127.0.0.1:18081`으로 이 기기를 한 번 등록한다. 설정은 사용자 설정 폴더의 `zm-baton/config.json`에 둔다(`ZM_BATON_HOME`으로 바꿀 수 있다).
 2. 훅은 Claude Code 플러그인으로 붙는다. zm-baton은 Claude Code 설정 파일을 고치지 않는다.
-   1. `zm-baton hooks install`이 zm-baton 설정 폴더의 `claude-plugin/`에 로컬 마켓플레이스(`zm-baton-local`)와 플러그인(`zm-baton`, 훅 다섯)을 만들고, 붙이는 명령을 보여 준다.
+   1. `zm-baton hooks install`이 zm-baton 설정 폴더의 `claude-plugin/`에 로컬 마켓플레이스(`zm-baton-local`)와 플러그인(`zm-baton`, 훅 일곱)을 만들고, 붙이는 명령을 보여 준다.
    2. 사람이 Claude Code의 명령을 실행한다: `claude plugin marketplace add "<그 폴더>"`(처음 한 번), 그리고 `claude plugin install zm-baton@zm-baton-local --scope user`. `--project <폴더>`를 주면 그 폴더에서 `--scope local`로 설치하라고 보여 주며, 그 저장소에서 연 세션에만 붙는다. 설정 파일은 Claude Code가 고친다.
-   3. 플러그인은 그 폴더를 그대로 읽으므로, 실행 파일을 옮기면 `hooks install`만 다시 실행한다.
+   3. 플러그인은 그 폴더를 그대로 읽으므로, 실행 파일을 옮기거나 훅 목록이 바뀐 판으로 올리면 `hooks install`만 다시 실행한다. 새로 여는 세션부터, 이미 열린 세션은 `/reload-plugins` 뒤부터 적용된다.
    4. `zm-baton hooks uninstall`은 빼는 명령(`claude plugin uninstall …`, 마켓플레이스 지우기)을 보여 준다. 플러그인 폴더는 그 뒤에 지운다.
-3. 그 뒤 새로 여는 Claude Code 세션은 시작할 때 서버에 등록되고, 서버가 돌려준 현재 상태 카드가 AI의 맥락에 들어간다. 파일을 고치는 도구(`Edit`·`Write`·`MultiEdit`·`NotebookEdit`)가 끝나면 저장소 기준 상대 경로·`git hash-object`·HEAD를 보낸다. 알림 훅은 기다림을, 다음 입력이나 도구 실행은 재개를, 끝 훅은 세션 끝을 보낸다. 기다림으로 보내는 알림은 사람을 기다리는 다섯 종류(`permission_prompt`·`idle_prompt`·`elicitation_dialog`·`elicitation_url_dialog`·`agent_needs_input`)뿐이다. 알림 문구는 보내지 않는다. 예외는 도구 이름만 담은 `Claude needs your permission to use <도구>` 한 가지다. 재개를 보내지 못하면 다음 도구 실행에서 다시 보낸다.
-4. 세션 안에서 `zm-baton session work "<무엇을, 어디서>"`로 「지금 하는 일」을 올린다(300자 이하, `--ref`). `--private`를 한 번 주면 그 세션의 이후 요약도 다른 세션에 보이지 않는다. `--share`로 되돌린다. 요약마다 공유 여부를 함께 보내므로, 늦게 도착한 요약이 다른 요약의 공유 설정을 바꾸지 못한다.
-5. `zm-baton session off`는 먼저 이 세션의 보고를 멈추고, 그다음 서버에 등록 해제를 알린다. 서버에 알리지 못하면 보고는 멈춘 채로 다시 보낼 것을 남긴다. 같은 명령을 다시 실행하면 같은 해제를 다시 보낸다. 해제하는 동안 끝난 재등록도 해제한다. 시작 전에 끄려면 `ZM_BATON_OFF=1`을 둔다.
+3. 그 뒤 새로 여는 Claude Code 세션은 시작할 때 서버에 등록되고, 서버가 돌려준 현재 상태 카드가 AI의 맥락에 들어간다. 파일을 고치는 도구(`Edit`·`Write`·`MultiEdit`·`NotebookEdit`)가 끝나면 저장소 기준 상대 경로·`git hash-object`·HEAD를 보낸다. 알림 훅은 기다림을, 다음 입력이나 도구 실행은 재개를, 끝 훅은 세션 끝을 보낸다. 기다림으로 보내는 알림은 사람을 기다리는 다섯 종류(`permission_prompt`·`idle_prompt`·`elicitation_dialog`·`elicitation_url_dialog`·`agent_needs_input`)뿐이다. 알림 문구는 보내지 않는다. 예외는 도구 이름만 담은 `Claude needs your permission to use <도구>` 한 가지다. 재개를 보내지 못하면 다음 도구 실행에서 다시 보낸다. 서버가 등록을 살아 있지 않다고 답하면(HTTP 401, 12시간 동안 사건이 없어 토큰이 끝났을 때 등) 그 훅이 다시 등록하고 한 번 더 보낸다. 끝 훅은 다시 등록하지 않는다.
+4. 권한 요청 훅(`PermissionRequest`)과 선택형 질문(`PreToolUse`, `AskUserQuestion`만)은 첫 화면으로 중계한다(계약 「권한 요청과 선택형 질문을 첫 화면으로 중계한다」). 단 서버가 `ZM_BATON_RELAY=on`으로 떠 있을 때만이다. 기본은 꺼짐이고, 훅은 등록할 때 서버가 알려 준 켜짐을 상태 파일에 두어 꺼져 있으면 서버에 묻지 않고 곧바로 끝난다(사람 인증이 없어 다른 프로그램이 답할 수 있기 때문이다. 고도화 후보 H-21). 훅이 도구 입력에 비밀값 검사를 하고, 걸리면 상세를 보내지 않는다. 통과하면 중계 번호·입력 지문(SHA-256)·사람이 판단할 상세(도구 이름, 명령 전문이나 저장소 기준 파일 경로, 실행기 설명, 작업 위치)를 보내고, 0.5초마다 답을 묻는다. 사람이 첫 화면에서 누른 답을 서버에서 가져왔을 때만 결정(허용, 사유를 붙인 거절, 고른 답)을 Claude Code 형식으로 출력한다. 서버가 없거나, 기한이 지나거나, 지문이 다르거나, 무엇이든 어긋나면 아무것도 출력하지 않고 끝나 Claude Code가 터미널에서 묻는다. 훅의 시간 상한은 80초, 플러그인 대기 시간은 90초로 서버 기한(시작값 60초)보다 길다.
+5. 중계 상세는 첫 화면에서만 쓴다. 항목이 닫히고 7일이 지나면 서버가 지운다.
+6. 세션 안에서 `zm-baton session work "<무엇을, 어디서>"`로 「지금 하는 일」을 올린다(300자 이하, `--ref`). `--private`를 한 번 주면 그 세션의 이후 요약도 다른 세션에 보이지 않는다. `--share`로 되돌린다. 요약마다 공유 여부를 함께 보내므로, 늦게 도착한 요약이 다른 요약의 공유 설정을 바꾸지 못한다.
+7. `zm-baton session off`는 먼저 이 세션의 보고를 멈추고, 그다음 서버에 등록 해제를 알린다. 서버에 알리지 못하면 보고는 멈춘 채로 다시 보낼 것을 남긴다. 같은 명령을 다시 실행하면 같은 해제를 다시 보낸다. 해제하는 동안 끝난 재등록도 해제한다. 시작 전에 끄려면 `ZM_BATON_OFF=1`을 둔다.
 
 지키는 것:
 
-- 훅은 늘 종료 코드 0으로 끝나고, 실패해도 세션에 아무것도 출력하지 않는다. 시간 상한은 시작 4초, 세션 끝 1초, 나머지 3초다. 입력 읽기·상태 잠금·서버 요청·git이 모두 이 상한에서 멈추고, 그래도 끝나지 않으면 상한 0.25초 뒤에 프로세스를 끝낸다. 실패는 설정 폴더의 `hook.log`에 남는다.
+- 훅은 늘 종료 코드 0으로 끝나고, 실패해도 세션에 아무것도 출력하지 않는다. 시간 상한은 시작 4초, 세션 끝 1초, 중계 80초, 나머지 3초다. 입력 읽기·상태 잠금·서버 요청·git이 모두 이 상한에서 멈추고, 그래도 끝나지 않으면 상한 0.25초 뒤에 프로세스를 끝낸다. 실패는 설정 폴더의 `hook.log`에 남는다.
 - 한 세션의 훅 여럿이 동시에 돌 수 있어 상태 파일은 기기 하나에 하나인 잠금(`sessions/.lock`) 안에서만 바꾼다. 잠금은 운영체제의 파일 잠금(Windows `LockFileEx`, 그 밖 `flock`)이라, 잠근 프로세스가 죽으면 운영체제가 푼다. 오래된 잠금을 추측해 지우지 않는다.
 - 실행기 버전은 보내지 않는다. 훅 입력과 환경 어디에도 이 세션의 Claude Code 버전이 없고, 물려받은 `CLAUDE_CODE_VERSION`은 부모 세션의 값이다.
 - 기기의 절대 경로는 보내지 않는다. 저장소는 첫 커밋 번호(`git:<SHA>`)로 식별하고, 원격 주소는 호스트와 경로만 남긴다(자격 증명·쿼리·scp 형식의 사용자 부분을 버린다).

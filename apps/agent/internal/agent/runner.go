@@ -77,7 +77,10 @@ type Config struct {
 	// StateDir keeps one record per executor this device started (record.go). Empty keeps none,
 	// and then no later run reuses an earlier run's worktree and session.
 	StateDir string
-	Log      *slog.Logger
+	// ExecutorDir holds one Claude Code configuration folder per API-key account (auth.go). Empty
+	// gives such runs no folder of their own.
+	ExecutorDir string
+	Log         *slog.Logger
 }
 
 // Job is what one claimed run executes. The compat-test loop builds it from its flags; the
@@ -107,6 +110,16 @@ type Job struct {
 	ResumeSession string
 	// Readiness holds the checks made before the executor starts; it goes into the end report.
 	Readiness *Readiness
+	// SignIn, when set, decides how the executor signs in: the credential variables taken out of its
+	// environment and set (auth.go). The start report names the method, the end report what was used.
+	SignIn *SignIn
+	// Timeout, when above 0, replaces Config.RunTimeout for this job; TimeoutIsLimit says it is the
+	// account's per-run time limit, so reaching it is reported as that limit.
+	Timeout        time.Duration
+	TimeoutIsLimit bool
+	// MaxTurns and MaxBudgetUSD go to Claude Code's own --max-turns and --max-budget-usd (FN-0409).
+	MaxTurns     int
+	MaxBudgetUSD float64
 }
 
 // Prepare makes the job after the claim, for example the run's worktree. An error ends the run
@@ -307,6 +320,8 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 		reason = EndSubmitted
 	case l.stopWhy == "cancelled":
 		reason = EndCancelled
+	case l.stopWhy == "timeout" && job.TimeoutIsLimit:
+		rep.Add(claude.KindError, map[string]any{"source": "agent", "text": "the account's per-run time limit was reached; executor stopped"})
 	case l.stopWhy == "timeout":
 		rep.Add(claude.KindError, map[string]any{"source": "agent", "text": "run timeout reached; executor stopped"})
 	case !l.mapper.ResultSeen():
@@ -327,6 +342,12 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 		"phase": "ended", "end_reason": reason, "exit_code": l.exitCode,
 		"executor_started": true, "result_seen": l.mapper.ResultSeen(),
 	}
+	if hit := limitHit(l, job); hit != "" && reason != EndSubmitted {
+		endedPayload["limit_hit"] = hit
+	}
+	if auth := authReport(l.mapper, job); auth != nil {
+		endedPayload["auth"] = auth
+	}
 	r.addEndDetails(endedPayload, job, ctl)
 	rep.Add(claude.KindLifecycle, endedPayload)
 
@@ -344,14 +365,17 @@ func (r *Runner) execute(ctx context.Context, rep *report.Reporter, log *slog.Lo
 func (r *Runner) launch(ctx context.Context, rep *report.Reporter, log *slog.Logger, job Job, ctl *control, sessionID string, resume bool) launched {
 	opts := claude.Options{
 		SessionID: sessionID, AllowedTools: job.AllowedTools, Restricted: job.Restricted,
-		StreamInput: job.LiveInput, Resume: resume,
+		StreamInput: job.LiveInput, Resume: resume, MaxTurns: job.MaxTurns, MaxBudgetUSD: job.MaxBudgetUSD,
 	}
 	if !job.LiveInput {
 		opts.Prompt = job.Prompt
 	}
 	cmd := exec.Command(r.cfg.ClaudePath, claude.Args(opts)...) // no shell
 	cmd.Dir = job.Workdir
-	if len(job.Env) > 0 {
+	if job.SignIn != nil {
+		// Only the account's way of signing in stays (auth.go); values are never logged or sent.
+		cmd.Env = append(executorEnviron(os.Environ(), job.SignIn.Remove, job.SignIn.Set), job.Env...)
+	} else if len(job.Env) > 0 {
 		cmd.Env = append(os.Environ(), job.Env...)
 	}
 	cmd.SysProcAttr = proc.SysProcAttr() // Windows: start suspended until Track pins it
@@ -413,6 +437,9 @@ func (r *Runner) launch(ctx context.Context, rep *report.Reporter, log *slog.Log
 	if job.Workspace != nil {
 		startedPayload["workspace"] = job.Workspace
 	}
+	if job.SignIn != nil {
+		startedPayload["auth_method"] = job.SignIn.Method
+	}
 	rep.Add(claude.KindLifecycle, startedPayload)
 	var input *inputPipe
 	if stdin != nil {
@@ -455,7 +482,11 @@ func (r *Runner) launch(ctx context.Context, rep *report.Reporter, log *slog.Log
 		}
 	}()
 
-	stopped := r.watchStop(ctx, pinned, sessionID, ctl.stopped(), log)
+	timeout := r.cfg.RunTimeout
+	if job.Timeout > 0 {
+		timeout = job.Timeout
+	}
+	stopped := r.watchStop(ctx, pinned, sessionID, ctl.stopped(), timeout, log)
 	waitErr := cmd.Wait()
 	stopWhy := stopped()
 
@@ -504,15 +535,15 @@ func ctlRunID(c *control) string {
 // ended the executor. Wait may return while a stop is being decided; the pin, closed only after
 // that, keeps the PID from being reused. On Windows Kill ends the executor's whole job, so the
 // processes it started end with it.
-func (r *Runner) watchStop(ctx context.Context, pinned *proc.Run, marker string, asked <-chan struct{}, log *slog.Logger) func() string {
+func (r *Runner) watchStop(ctx context.Context, pinned *proc.Run, marker string, asked <-chan struct{}, limit time.Duration, log *slog.Logger) func() string {
 	exited := make(chan struct{})
 	done := make(chan struct{})
 	var why string
 	go func() {
 		defer close(done)
 		var timeout <-chan time.Time
-		if r.cfg.RunTimeout > 0 {
-			t := time.NewTimer(r.cfg.RunTimeout)
+		if limit > 0 {
+			t := time.NewTimer(limit)
 			defer t.Stop()
 			timeout = t.C
 		}
@@ -572,6 +603,44 @@ func (r *Runner) watchChanges(ctx context.Context, rep *report.Reporter, log *sl
 		close(stop)
 		<-done
 	}
+}
+
+// limitHit names the run limit the executor ran into (FN-0409): Claude Code's own --max-turns or
+// --max-budget-usd (its result subtype), or the account's per-run time on the connector's timer.
+func limitHit(l launched, job Job) string {
+	switch l.mapper.ResultSubtype() {
+	case "error_max_turns":
+		return "max_turns"
+	case "error_max_budget_usd":
+		return "max_budget_usd"
+	}
+	if l.stopWhy == "timeout" && job.TimeoutIsLimit {
+		return "max_minutes"
+	}
+	return ""
+}
+
+// authReport is the end report's sign-in: the method the executor really used by its init line (the
+// arranged one when no init line came), what the line said, and whether the run had its own
+// configuration folder. Names only, never a value. Nil when there is nothing to say.
+func authReport(m *claude.Mapper, job Job) map[string]any {
+	source, seen := m.APIKeySource()
+	told := seen && source != ""
+	method := ""
+	if job.SignIn != nil {
+		method = job.SignIn.Method
+	}
+	if told {
+		method = observedMethod(source)
+	}
+	if method == "" {
+		return nil
+	}
+	out := map[string]any{"method": method, "config_isolated": job.SignIn != nil && job.SignIn.ConfigDir != ""}
+	if told {
+		out["api_key_source"] = source
+	}
+	return out
 }
 
 // addEndDetails puts what the end report carries besides the end itself: the run's worktree, the

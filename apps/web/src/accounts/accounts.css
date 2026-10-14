@@ -1,0 +1,53 @@
+/*
+ * The AI account screen's own parts. The list-and-detail layout, the row and the detail head are
+ * shared (ui/panes.css); the form, the warning band, the history and the flags are the work screen's
+ * (work/work.css). Here are today's use, the limits and their rules, the days and runs lists and the
+ * fixed facts in the form. Every value is a token.
+ */
+
+/* Row: why an account is stopped, before today's use and the runs it counts */
+.acc-flag { margin-right: var(--s-3); font-weight: var(--fw-semi); color: var(--c-warn); }
+.acc-use { margin-right: var(--s-3); }
+
+/* Detail: the stop band under the facts, and a disabled account's quieter line */
+.dt .acc-block { margin-top: var(--s-4); }
+.acc-off {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-2);
+  max-width: var(--w-text);
+  margin: var(--s-4) 0 0;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-sm);
+  background: var(--c-canvas);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-row);
+}
+.acc-off .ico { flex: none; margin-top: var(--s-0); color: var(--c-ink-2); }
+
+/* Today's use: the cost first, then the share of the daily limit, runs and turns */
+.acc-today { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-1) var(--s-3); margin: 0; font-size: var(--fs-md); line-height: var(--lh-row); }
+.acc-today strong { font-size: var(--fs-xl); font-weight: var(--fw-semi); color: var(--c-ink); }
+.acc-dim { color: var(--c-ink-2); }
+p.acc-dim { margin: var(--s-1) 0 0; font-size: var(--fs-sm); line-height: var(--lh-row); overflow-wrap: anywhere; }
+.acc-note { max-width: var(--w-text); margin: var(--s-2) 0 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+
+/* Limits and how they act */
+.acc-limits { margin: 0; }
+.acc-rules { max-width: var(--w-text); margin: var(--s-2) 0 0; padding-left: var(--s-5); font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.acc-rules li + li { margin-top: var(--s-1); }
+
+/* The last seven days and the newest runs: one line each, wrapping on a narrow screen */
+.acc-days,
+.acc-runs { display: flex; flex-direction: column; gap: var(--s-2); max-width: var(--w-text); margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); line-height: var(--lh-row); }
+.acc-days li,
+.acc-runs li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s-0) var(--s-3); }
+.acc-day { min-width: var(--w-ref); font-weight: var(--fw-semi); color: var(--c-ink); }
+.acc-days small { flex-basis: 100%; font-size: var(--fs-xs); overflow-wrap: anywhere; }
+.acc-runs a { color: var(--c-ink); font-weight: var(--fw-medium); overflow-wrap: anywhere; }
+
+/* Form: what does not change shows as a fact, the limits sit in one row of fields */
+.acc-fixed { display: flex; flex-direction: column; gap: var(--s-1); margin: 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }
+.acc-fixed strong { color: var(--c-ink); font-weight: var(--fw-semi); }
+.acc-limits-set { display: flex; flex-direction: column; gap: var(--s-2); margin: 0; padding: 0; border: 0; min-width: 0; }
+.acc-limits-set legend { margin-bottom: var(--s-1); padding: 0; font-size: var(--fs-sm); line-height: var(--lh-row); color: var(--c-ink-2); }

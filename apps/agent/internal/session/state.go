@@ -82,6 +82,9 @@ type State struct {
 	Private bool `json:"private,omitempty"`
 	// Off means the person turned registration off for this session; hooks send nothing more.
 	Off bool `json:"off,omitempty"`
+	// RelayOn is what the server said at the last registration about relays. While it is false
+	// the relay hooks end at once without asking the server, and Claude Code asks in its terminal.
+	RelayOn bool `json:"relay_on,omitempty"`
 	// OffPending means the server has not yet taken the deregistration. SessionID and Token
 	// are kept so `zm-baton session off` can send the same event again; once the server has
 	// it, the token is dropped.

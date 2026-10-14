@@ -2,17 +2,21 @@ import { useId, useState } from 'react';
 import { Icon } from '../icons/Icon';
 import type { RunEvent } from '../api';
 import { reportStatus, statusLabel, summary } from '../runState';
+import { tokensLine } from '../accounts/accountView';
 import { inboxHref } from '../inboxModel';
 import { autoLabel, humanLabel, notSentWhy, reasonLabel } from '../review/reviewModel';
 import type { ItemRun, RunInput } from '../workApi';
 import { at } from '../workModel';
+import { billingLine, limitsLine, methodLabel, stopLine, usageLine } from './runUsage';
 
 /*
  * One run of a work item in its run list: its report status, where it worked, and what a person can
  * do with it (FN-0410). A run that has not ended can be stopped, and a running executor that takes
  * input can get a short instruction; the server says when either is not possible and why. A run that
  * went silent shows when the server will give it up, and a run stopped by the readiness check shows
- * which check failed. The screen decides nothing itself.
+ * which check failed. A run on an AI account shows the account and how it signed in, its limits,
+ * what it used and where that is charged, and which limit or signal stopped it. The screen decides
+ * nothing itself.
  */
 
 /** Activity the person reads: not the connector's own lifecycle and change lists. */
@@ -59,6 +63,7 @@ const CHECK_LABELS: Record<string, string> = {
   base_branch: '기준',
   worktree: '작업 트리',
   resume: '이어 쓰기',
+  account: '계정',
 };
 
 /** Contract end reasons in words. */
@@ -100,6 +105,10 @@ export function RunRow({ run, events, now, outcomeUnknown, onWithdraw, onCancel,
   const overFolder = new Set(changes?.base_overlap ?? []);
   const readiness = run.readiness;
   const failedChecks = readiness && !readiness.ok ? readiness.checks.filter((c) => !c.ok) : [];
+  const limits = limitsLine(run);
+  const used = usageLine(run);
+  const billing = billingLine(run);
+  const stop = stopLine(run);
   return (
     <li className="hr-run">
       <p className="hr-head">
@@ -136,6 +145,33 @@ export function RunRow({ run, events, now, outcomeUnknown, onWithdraw, onCancel,
             <dd>{d.allowed_tools.join(', ')}</dd>
           </div>
         )}
+        {run.account && (
+          <div>
+            <dt>계정</dt>
+            <dd>
+              {run.account.name}
+              {run.auth_method && <span className="hr-dim">{methodLabel(run.auth_method)}</span>}
+            </dd>
+          </div>
+        )}
+        {limits && (
+          <div>
+            <dt>상한</dt>
+            <dd>{limits}</dd>
+          </div>
+        )}
+        {used && (
+          <div>
+            <dt>사용량</dt>
+            <dd>{used}</dd>
+          </div>
+        )}
+        {billing && (
+          <div>
+            <dt>과금 위치</dt>
+            <dd>{billing}</dd>
+          </div>
+        )}
         {run.resumed_from_run_id && (
           <div>
             <dt>이어서</dt>
@@ -147,6 +183,13 @@ export function RunRow({ run, events, now, outcomeUnknown, onWithdraw, onCancel,
         )}
       </dl>
       {ws?.origin && ORIGIN_LABELS[ws.origin] && <p className="hr-branch">{ORIGIN_LABELS[ws.origin]}</p>}
+      {stop && (
+        <p className="hr-warn" role="status">
+          <Icon name="alert" />
+          <span>{stop}</span>
+        </p>
+      )}
+      {run.usage && <p className="hr-branch num">토큰: {tokensLine(run.usage)}</p>}
       <ReviewLine run={run} />
       {run.state === 'requested' && d && !d.revoked_at && (
         <div className="hr-wait">

@@ -1,24 +1,26 @@
 import { useRef, useState } from 'react';
 import { Icon } from '../icons/Icon';
-import { NAV_GROUPS, screenById, TAB_ITEMS, type ScreenId } from './screens';
+import { FOOT_ITEMS, NAV_GROUPS, screenById, TAB_ITEMS, type ScreenId } from './screens';
 import { Sheet } from './Sheet';
-import { NotifyItem, SETTINGS_WHY, type Counts, type Permission } from './Sidebar';
+import { FocusItem, NotifyItem, type Counts, type Permission } from './Sidebar';
 
 type Props = {
   current: ScreenId;
   counts: Counts;
   permission: Permission;
   onAskPermission: () => void;
+  focus?: boolean | null;
+  onToggleFocus?: () => void;
 };
 
 /**
  * The bottom tab bar that stands in for the sidebar on narrow screens (DESIGN.md 「화면 배치」 6):
  * four screens and 「더 보기」, which opens a sheet with the rest. CSS shows it only there.
  */
-export function TabBar({ current, counts, permission, onAskPermission }: Props) {
+export function TabBar({ current, counts, permission, onAskPermission, focus = null, onToggleFocus = () => {} }: Props) {
   const [more, setMore] = useState(false);
   const moreButton = useRef<HTMLButtonElement>(null);
-  const rest = NAV_GROUPS.flatMap((g) => g.items).filter((id) => !TAB_ITEMS.includes(id));
+  const rest = [...NAV_GROUPS.flatMap((g) => g.items), ...FOOT_ITEMS].filter((id) => !TAB_ITEMS.includes(id));
   const inMore = !TAB_ITEMS.includes(current);
   const closeMore = () => {
     setMore(false);
@@ -67,15 +69,10 @@ export function TabBar({ current, counts, permission, onAskPermission }: Props) 
               );
             })}
             <li>
-              <span className="it" aria-disabled="true">
-                <Icon name="settings" />
-                <span className="nm">설정</span>
-                <Icon name="lock" className="lock" />
-              </span>
-              <p className="why">{SETTINGS_WHY}</p>
+              <NotifyItem permission={permission} onAsk={onAskPermission} rail={false} inline />
             </li>
             <li>
-              <NotifyItem permission={permission} onAsk={onAskPermission} rail={false} inline />
+              <FocusItem focus={focus} onToggle={onToggleFocus} rail={false} />
             </li>
           </ul>
         </Sheet>

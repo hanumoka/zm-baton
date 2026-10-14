@@ -152,6 +152,26 @@ func (h *Handoff) Execute(ctx context.Context, c api.Claim, repo Repo) Result {
 		}
 		ready.Pass("executor", "Claude Code "+version)
 
+		// The account's way of signing in, and only that one (auth.go). A run handed over before
+		// accounts, or by an older server, has none and keeps the environment as it is.
+		if acct := c.Account; acct != nil {
+			sign, present, err := signInFor(*acct, os.Environ(), h.runner.cfg.ExecutorDir)
+			if err != nil {
+				return job, ready.Fail("account", err.Error(), nil)
+			}
+			if err := ensureConfigDir(sign.ConfigDir); err != nil {
+				return job, ready.Fail("account", "이 계정 전용 설정 폴더를 만들 수 없다", err)
+			}
+			ready.Pass("account", sign.Detail(*acct, present))
+			job.SignIn = &sign
+			log.Info("executor sign-in", "account_id", acct.ID, "method", sign.Method, "removed_present", present,
+				"own_config_folder", sign.ConfigDir != "")
+		}
+		job.Timeout, job.TimeoutIsLimit = runTimeout(h.runner.cfg.RunTimeout, c.Limits)
+		if c.Limits != nil {
+			job.MaxTurns, job.MaxBudgetUSD = c.Limits.MaxTurns, c.Limits.MaxBudgetUSD
+		}
+
 		// Neither the repository nor its worktrees may sit under a temp folder (contract "실행할 때 넘기는 것").
 		if _, err := CheckWorkdir(repo.Root, h.tempDirs); err != nil {
 			return job, ready.Fail("repository", "등록한 저장소 폴더가 없거나 임시 폴더 안에 있다", err)
@@ -219,7 +239,8 @@ func (h *Handoff) Execute(ctx context.Context, c api.Claim, repo Repo) Result {
 func (h *Handoff) workspaceFor(ctx context.Context, c api.Claim, repo Repo, ready *Readiness, log *slog.Logger) (*workspace.Workspace, string, string, error) {
 	r := c.Resume
 	note := ""
-	if r != nil && r.SameDevice && workspace.IsRunID(r.RunID) {
+	sameAccount := r == nil || r.SameAccount == nil || *r.SameAccount
+	if r != nil && r.SameDevice && sameAccount && workspace.IsRunID(r.RunID) {
 		if prev, ok := workspace.PreviousFrom(r.Workspace); ok {
 			confirmed, why := h.runner.records.endedConfirmed(r.RunID, r.SessionID)
 			if confirmed {
@@ -242,6 +263,8 @@ func (h *Handoff) workspaceFor(ctx context.Context, c api.Claim, repo Repo, read
 			log.Warn("no worktree from the earlier run's branch", "err", err)
 		}
 		note = "이전 실행의 브랜치를 이 기기에서 찾지 못해 기준에서 새로 시작했다. 이전 실행의 결과는 여기에 없다."
+	} else if r != nil && !sameAccount {
+		note = "이전 실행은 다른 AI 계정으로 돌았다. 기준에서 새로 시작했으므로 이전 실행의 결과는 여기에 없다."
 	} else if r != nil {
 		note = "이전 실행은 다른 기기에서 돌았다. 기준에서 새로 시작했으므로 이전 실행의 결과는 여기에 없다."
 	}
@@ -296,6 +319,26 @@ func (h *Handoff) appendix(ctx context.Context, c api.Claim, ws *workspace.Works
 		b.WriteString(" 외")
 	}
 	return b.String()
+}
+
+// defaultRunTimeout bounds a delegated run when neither the account nor --run-timeout sets a time.
+const defaultRunTimeout = 30 * time.Minute
+
+// runTimeout is how long a delegated run may take: the account's per-run time limit, or --run-timeout
+// when that is set and shorter. limit says the account's limit is what applies. Without either the
+// run gets defaultRunTimeout.
+func runTimeout(flag time.Duration, limits *api.Limits) (d time.Duration, limit bool) {
+	if limits != nil && limits.MaxMinutes > 0 {
+		account := time.Duration(limits.MaxMinutes) * time.Minute
+		if flag > 0 && flag < account {
+			return flag, false
+		}
+		return account, true
+	}
+	if flag > 0 {
+		return flag, false
+	}
+	return defaultRunTimeout, false
 }
 
 // checkTools keeps the delegation's tools only when every one is known; an empty list is refused.

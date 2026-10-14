@@ -62,6 +62,8 @@ type Registered struct {
 	Token      string `json:"token"`
 	Reused     bool   `json:"reused"`
 	StatusCard string `json:"status_card"`
+	// RelayEnabled is the server's relay switch (ZM_BATON_RELAY). Off when a server leaves it out.
+	RelayEnabled bool `json:"relay_enabled"`
 }
 
 // Event is one session event (contract "세션이 보내는 사건").

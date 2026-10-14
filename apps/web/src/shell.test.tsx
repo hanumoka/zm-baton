@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { FINDS } from './Shell';
 import { CommandBar, isCommandShortcut } from './shell/CommandBar';
-import { commandTarget, exactScreen, matchScreen, NAV_GROUPS, screenFromHash, SCREENS, TAB_ITEMS } from './shell/screens';
+import { commandTarget, exactScreen, FOOT_ITEMS, matchScreen, NAV_GROUPS, screenFromHash, SCREENS, TAB_ITEMS } from './shell/screens';
 import { readSideOpen, SIDE_KEY, writeSideOpen } from './shell/sidePref';
 import { NotifyItem, Sidebar } from './shell/Sidebar';
 import { TabBar } from './shell/TabBar';
@@ -36,7 +36,9 @@ describe('screens', () => {
 
   it('puts every navigable screen in the sidebar once and leaves the kit to its address', () => {
     const inNav = NAV_GROUPS.flatMap((g) => g.items);
-    expect(inNav).toEqual(SCREENS.filter((s) => s.inNav).map((s) => s.id));
+    // The groups at the top, then the foot's settings place.
+    expect([...inNav, ...FOOT_ITEMS]).toEqual(SCREENS.filter((s) => s.inNav).map((s) => s.id));
+    expect(FOOT_ITEMS).toEqual(['accounts']);
     expect(inNav).not.toContain('kit');
     expect(TAB_ITEMS.every((id) => inNav.includes(id))).toBe(true);
   });
@@ -69,10 +71,13 @@ describe('sidebar', () => {
     expect(html).not.toContain('accent');
   });
 
-  it('locks settings with the reason on hover, on focus and for screen readers', () => {
-    const html = sidebar(false);
-    expect(html).toMatch(/<button type="button" class="it tipped" aria-disabled="true" aria-describedby="[^"]+" data-tip="설정: 설정 화면은 아직 없다/);
-    expect(html).toContain('검토 단계는 작업 화면에서 켜고 끈다');
+  it('opens the AI accounts from the settings place at the foot, named on hover when folded', () => {
+    const folded = sidebar(false);
+    expect(folded).toMatch(/<div class="side-foot"><ul><li><a class="it tipped" href="#accounts" data-tip="AI 계정">/);
+    expect(folded).not.toContain('aria-disabled="true"');
+    expect(sidebar(true)).toMatch(/<a class="it" href="#accounts"><svg[^>]*>.*<\/svg><span class="nm">AI 계정<\/span><\/a>/);
+    expect(matchScreen('설정')?.id).toBe('accounts');
+    expect(matchScreen('계정')?.id).toBe('accounts');
   });
 
   it('asks for browser notifications with a button, and states granted or blocked', () => {

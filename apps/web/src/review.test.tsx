@@ -78,7 +78,7 @@ describe('the first screen', () => {
     const old = item({ id: 'inb_o', source_id: 'rvw_3', waiting_since: iso(-26 * 60), promoted_at: iso(-60) });
     const groups = inboxGroups([risk, sample, old]);
     expect(groups.map((g) => [g.bucket, g.raised, g.items.map((i) => i.id)])).toEqual([
-      [1, false, ['inb_o']],
+      [1, true, ['inb_o']],
       [2, true, []],
       [3, true, []],
       [4, true, ['inb_r']],
@@ -88,7 +88,7 @@ describe('the first screen', () => {
     expect(kindOf(risk)).toEqual({ mark: 'alert', label: '위험 검토' });
     expect(kindOf(sample)).toEqual({ mark: 'done', label: '표본 검토' });
     expect(groupNote({ bucket: 4, raised: true })).toBe('사람이 볼 위험 결과가 없다');
-    expect(groupNote({ bucket: 5, raised: true })).toBe('고른 표본이 없다');
+    expect(groupNote({ bucket: 5, raised: true })).toBe('고른 표본과 알림이 없다');
   });
 
   it('titles a review row with its work item and puts the caught file on the second line', () => {

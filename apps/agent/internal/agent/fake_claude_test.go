@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -162,6 +163,58 @@ func fakeClaude(mode string, args []string) int {
 			emit(blocks("assistant", map[string]any{"type": "text", "text": "no instruction came"}))
 		}
 		return finish(0)
+	case "account", "account-maxturns":
+		// A delegated run on an AI account: it says how it would sign in, as Claude Code's init line
+		// does, and which limits and configuration folder it got, without ever printing a value.
+		if os.Getenv("ZM_BATON_OFF") != "1" || !has("--restricted") {
+			fmt.Fprintln(os.Stderr, "fake claude: a delegated run must be restricted with the hooks off")
+			return 5
+		}
+		present := func(name string) string {
+			if _, ok := os.LookupEnv(name); ok {
+				return "present"
+			}
+			return "absent"
+		}
+		source := "none"
+		if present("ANTHROPIC_API_KEY") == "present" {
+			source = "ANTHROPIC_API_KEY"
+		}
+		emit(map[string]any{"type": "system", "subtype": "init", "apiKeySource": source})
+		config := "none"
+		if dir, ok := os.LookupEnv("CLAUDE_CONFIG_DIR"); ok {
+			switch under := os.Getenv("ZMB_FAKE_CONFIG_UNDER"); {
+			case under != "" && strings.HasPrefix(dir, under):
+				config = "own"
+			case dir == os.Getenv("ZMB_FAKE_PERSON_CONFIG"):
+				config = "kept"
+			default:
+				config = "other"
+			}
+		}
+		turns, _ := flag("--max-turns")
+		budget, _ := flag("--max-budget-usd")
+		emit(blocks("assistant", map[string]any{"type": "text", "text": fmt.Sprintf(
+			"key=%s auth_token=%s oauth=%s bedrock=%s config=%s max-turns=%s max-budget=%s",
+			present("ANTHROPIC_API_KEY"), present("ANTHROPIC_AUTH_TOKEN"), present("CLAUDE_CODE_OAUTH_TOKEN"),
+			present("CLAUDE_CODE_USE_BEDROCK"), config, turns, budget)}))
+		if mode == "account-maxturns" {
+			emit(map[string]any{"type": "result", "subtype": "error_max_turns", "is_error": true, "num_turns": 3,
+				"errors": []string{"Reached maximum number of turns (3)"}, "total_cost_usd": 0.2})
+			if stream {
+				for in.Scan() {
+				}
+			}
+			return 1
+		}
+		emit(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": "done", "num_turns": 2,
+			"total_cost_usd": 0.0170312, "usage": map[string]any{"output_tokens": 0},
+			"modelUsage": map[string]any{"claude-opus-5-5": map[string]any{"inputTokens": 2, "outputTokens": 140, "costUSD": 0.0170312}}})
+		if stream {
+			for in.Scan() {
+			}
+		}
+		return 0
 	case "edit", "edit-resume", "resume-missing":
 		// A delegated run: it must run with zm-baton's own hooks off, restricted, then change files in its folder.
 		if os.Getenv("ZM_BATON_OFF") != "1" {

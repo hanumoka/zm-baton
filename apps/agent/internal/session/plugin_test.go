@@ -6,9 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestPluginFilesCarryTheFiveHooksForTheExecutable(t *testing.T) {
+func TestPluginFilesCarryTheSevenHooksForTheExecutable(t *testing.T) {
 	exe := filepath.Join(t.TempDir(), "Program Files", "zm-baton.exe")
 	files, err := PluginFiles(exe)
 	if err != nil {
@@ -32,7 +33,8 @@ func TestPluginFilesCarryTheFiveHooksForTheExecutable(t *testing.T) {
 	}
 	var hooks struct {
 		Hooks map[string][]struct {
-			Hooks []struct {
+			Matcher string
+			Hooks   []struct {
 				Type    string
 				Command string
 				Args    []string
@@ -43,7 +45,7 @@ func TestPluginFilesCarryTheFiveHooksForTheExecutable(t *testing.T) {
 	if err := json.Unmarshal(files[PluginName+"/hooks/hooks.json"], &hooks); err != nil {
 		t.Fatal(err)
 	}
-	if len(hooks.Hooks) != len(ClaudeHooks) {
+	if len(hooks.Hooks) != len(ClaudeHooks) || len(ClaudeHooks) != 7 {
 		t.Fatalf("%d events, want %d", len(hooks.Hooks), len(ClaudeHooks))
 	}
 	for _, spec := range ClaudeHooks {
@@ -60,6 +62,26 @@ func TestPluginFilesCarryTheFiveHooksForTheExecutable(t *testing.T) {
 		if strings.Contains(h.Command, `\`) {
 			t.Errorf("%s: backslash in %q", spec.Event, h.Command)
 		}
+		if entries[0].Matcher != spec.Matcher {
+			t.Errorf("%s: matcher %q, want %q", spec.Event, entries[0].Matcher, spec.Matcher)
+		}
+	}
+	// The relay hooks: PreToolUse only for AskUserQuestion, and both wait longer than the hook's
+	// own limit, so the server's deadline (at most 70 seconds) always ends the wait first.
+	if m := hooks.Hooks["PreToolUse"][0].Matcher; m != "AskUserQuestion" {
+		t.Errorf("PreToolUse matcher %q", m)
+	}
+	if m := hooks.Hooks["PermissionRequest"][0].Matcher; m != "" {
+		t.Errorf("PermissionRequest matcher %q: every tool's request is relayed", m)
+	}
+	for _, event := range []string{"PermissionRequest", "PreToolUse"} {
+		timeout := time.Duration(hooks.Hooks[event][0].Hooks[0].Timeout) * time.Second
+		if limit, _ := HookTimeout(map[string]string{"PermissionRequest": "permission-request", "PreToolUse": "pre-tool-use"}[event]); timeout <= limit || limit <= 70*time.Second {
+			t.Errorf("%s: Claude Code timeout %v, hook limit %v", event, timeout, limit)
+		}
+	}
+	if strings.Contains(string(files[PluginName+"/hooks/hooks.json"]), `"matcher": ""`) {
+		t.Error("an empty matcher is written; leave it out so the hook matches everything")
 	}
 }
 
