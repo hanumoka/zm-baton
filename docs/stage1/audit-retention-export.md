@@ -133,7 +133,7 @@ JSON 하나다. 형식 이름은 `zm-baton.export`, 판은 `format_version` 1이
 | `provenance.exported_at`, `exported_by` | 내보낸 시각(UTC)과 사람 |
 | `provenance.server` | 서버 이름, 판(`0.0.1-SNAPSHOT` 같은 jar 판), 빌드한 커밋. 커밋은 `update.ps1`로 빌드했을 때 채워지고, 그 밖에는 `unknown`이다 |
 | `provenance.database` | 마이그레이션 판과 적용한 마이그레이션 목록 |
-| `provenance.access` | 권한 정보. 1단계는 사람이 한 명이라 모든 기록을 그 사람이 본다 |
+| `provenance.access` | 권한 정보. 내보낸 사람의 조직과 그 조직의 사람들. 내보내기는 운영자 역할만 한다. 매니저 기록의 개인 메모는 담지 않고(`not_exported`), 다른 사람의 개인 범위 작업·결정·문서와 공유하지 않은 「지금 하는 일」도 담지 않는다([org-and-permissions.md](org-and-permissions.md)) |
 | `provenance.withheld_fields`, `not_exported` | 일부러 뺀 칸(`agent_sessions.token_hash`)과 뺀 표 |
 | `collections.<이름>` | 표마다 `table`, `count`, `records`. 프로젝트, 작업, 결정, 결정과 프로젝트의 연결, 기기, 기기 저장소, 세션, 세션 사건, 첫 화면 항목, 충돌 알림, 위임, 실행 시도(실행 지시와 작업 트리 포함), 실행 사건, 감사 기록, 조직 설정. 기기 저장소의 원격 주소는 서버가 받을 때 이미 사용자 정보·쿼리·조각을 떼고 저장하므로 그대로 내보내도 자격 증명이 없다. 위임 범위와 작업 트리는 저장소 키·브랜치·도구 이름만 담고 경로는 담지 않는다 |
 | 작업·결정의 `source` | 그 기록의 정본 위치. `{"of_truth": "zm-baton"}`이면 이 서버가 정본이다. `{"of_truth": "git", "repo_key", "path", "commit", "external_ref"}`이면 그 저장소·파일·커밋의 Git 파일이 정본이고 이 기록은 가져온 복사본이다 |
