@@ -86,8 +86,8 @@ class AuditApiTests @Autowired constructor(
 	@Test
 	fun `device and session registration, sharing, conflicts and their judgement, and session ends are audited`() {
 		val dev = device()
-		// Registering gives the device its token (docs/stage1/auth.md); both are written down, newest first.
-		assertEquals(listOf("device.token_issued", "device.registered"), actions(auditOf("dev", dev)))
+		// Both events belong to one transaction. Their timestamps (and UUIDv7 millisecond) may tie.
+		assertEquals(listOf("device.registered", "device.token_issued"), actions(auditOf("dev", dev)).sorted())
 		val repo = repoKey()
 		val a = register(dev, repo)
 		val b = register(dev, repo)

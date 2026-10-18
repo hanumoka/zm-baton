@@ -5,6 +5,7 @@ import io.github.hanumoka.zmbaton.server.permission.Act
 import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
 import io.github.hanumoka.zmbaton.server.permission.PermissionRules
 import io.github.hanumoka.zmbaton.server.permission.Permissions
+import io.github.hanumoka.zmbaton.server.permission.RecordVisibility
 import io.github.hanumoka.zmbaton.server.permission.ScopeColumns
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
@@ -22,6 +23,8 @@ import org.springframework.web.bind.annotation.RequestHeader
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.ResponseStatus
 import org.springframework.web.bind.annotation.RestController
+import tools.jackson.core.type.TypeReference
+import tools.jackson.databind.ObjectMapper
 import java.time.OffsetDateTime
 
 // A manager per person (FN-0402, DEC-0099 3): not an AI session kept running, but one record a
@@ -93,7 +96,8 @@ data class NoteIn(val body: String)
  * first, then the card is cut before its last line.
  */
 @Component
-class StatusCards(private val jdbc: JdbcClient, private val facts: PermissionFacts) {
+class StatusCards(private val jdbc: JdbcClient, private val facts: PermissionFacts, private val visibility: RecordVisibility, private val json: ObjectMapper) {
+	private val mapType = object : TypeReference<Map<String, Any?>>() {}
 
 	/** The card of a registered session: its person's, in its repository. */
 	fun forSession(sessionId: String): String {
@@ -108,20 +112,26 @@ class StatusCards(private val jdbc: JdbcClient, private val facts: PermissionFac
 	fun card(personId: String, sessionId: String?, repoKey: String?): String {
 		val actor = facts.person(personId)
 		val who = listOfNotNull(personId, actor.manager)
+		val reader = visibility.reader(actor)
 		val counts = jdbc.sql(
-			"select bucket, count(*) from inbox_items where user_id = :user and state = 'open' group by bucket",
-		).param("user", personId).query { rs, _ -> rs.getInt(1) to rs.getLong(2) }.list().toMap()
-		val holds = "(responsible_user_id = :user or executor_id in (:who)) and stage not in ('done', 'cancelled')"
-		val openCount = jdbc.sql("select count(*) from work_items where $holds").param("user", personId).param("who", who)
+			"select id, bucket, source_id, detail::text from inbox_items where user_id = :user and state = 'open'",
+		).param("user", personId).query { rs, _ ->
+			val target = facts.inboxItem(rs.getString(1))
+			if (target != null && PermissionRules.canSee(actor, target) && reader.allows(rs.getString(3)) &&
+				reader.allows(rs.getString(4)?.let { json.readValue(it, mapType) })) rs.getInt(2) else null
+		}.list().filterNotNull().groupingBy { it }.eachCount()
+		val scope = PermissionRules.filter(actor, ScopeColumns.WORK_ITEMS)
+		val holds = "(w.responsible_user_id = :user or w.executor_id in (:who)) and w.stage not in ('done', 'cancelled') and ${scope.sql}"
+		val openCount = jdbc.sql("select count(*) from work_items w where $holds").param("user", personId).param("who", who).params(scope.params)
 			.query(Long::class.javaObjectType).single()
 		// Work under way first; among equals the most recently changed.
 		val work = jdbc.sql(
 			"""
-			select external_ref, title, stage, wait_reasons, next_action from work_items
+			select external_ref, title, stage, wait_reasons, next_action from work_items w
 			 where $holds
 			 order by (stage = 'in_progress') desc, updated_at desc, opened_on desc nulls last, id desc limit ${SessionService.CARD_WORK_ITEMS}
 			""".trimIndent(),
-		).param("user", personId).param("who", who).query { rs, _ ->
+		).param("user", personId).param("who", who).params(scope.params).query { rs, _ ->
 			@Suppress("UNCHECKED_CAST")
 			val reasons = (rs.getArray(4).array as Array<String>).toList()
 			val head = "- ${rs.getString(1)?.let { "$it " } ?: ""}${clip(rs.getString(2), 60)} (${Workflow.label(rs.getString(3))}" +

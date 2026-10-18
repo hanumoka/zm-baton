@@ -244,6 +244,13 @@ object PermissionRules {
 	 * records would allow (PermissionRulesTests compares the two on the same rows).
 	 */
 	fun filter(a: Actor, c: ScopeColumns): SqlFilter {
+		val own = scopeFilter(a, c)
+		if (c != ScopeColumns.WORK_ITEMS) return own
+		val sources = MasterVisibility.filter(a)
+		return SqlFilter("(${own.sql} and ${sources.sql})", own.params + sources.params)
+	}
+
+	private fun scopeFilter(a: Actor, c: ScopeColumns): SqlFilter {
 		if (!a.member || a.orgId == null) return SqlFilter("(${c.visibility} = 'public')", emptyMap())
 		val who = listOfNotNull(a.person, a.manager).ifEmpty { listOf(NONE) }
 		val involved = (listOf("${c.owner} = :pv_person") + c.people.map { "$it in (:pv_who)" }).joinToString(" or ")

@@ -4,7 +4,10 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import io.github.hanumoka.zmbaton.server.auth.Requester
 import io.github.hanumoka.zmbaton.server.permission.Act
 import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.PermissionRules
 import io.github.hanumoka.zmbaton.server.permission.Permissions
+import io.github.hanumoka.zmbaton.server.permission.RecordVisibility
+import io.github.hanumoka.zmbaton.server.permission.ScopeColumns
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -128,6 +131,7 @@ class AccountService(
 	private val usage: UsageService,
 	private val sessions: SessionService,
 	private val access: PermissionFacts,
+	private val visibility: RecordVisibility,
 ) {
 	companion object {
 		val AUTH_KINDS = setOf("personal_subscription", "org_account", "api_key")
@@ -161,9 +165,11 @@ class AccountService(
 		jdbc.sql("$SELECT where a.id = :id").param("id", id).query { rs, _ -> view(rs, usage.now()) }.optional()
 			.orElseThrow { NotFoundException("no AI account $id") }
 
-	fun detail(id: String, viewer: String = "usr_owner"): AccountDetail {
+	fun detail(id: String, viewer: String): AccountDetail {
 		val account = get(id)
-		val scope = io.github.hanumoka.zmbaton.server.permission.PermissionRules.filter(access.person(viewer), io.github.hanumoka.zmbaton.server.permission.ScopeColumns.WORK_ITEMS)
+		val actor = access.person(viewer)
+		val scope = PermissionRules.filter(actor, ScopeColumns.WORK_ITEMS)
+		val reader = visibility.reader(actor)
 		val statement = jdbc.sql(
 			"""
 			select r.id, r.work_item_id, w.title, r.state, r.end_reason, r.created_at, (r.usage ->> 'cost_usd')::numeric,
@@ -183,12 +189,12 @@ class AccountService(
 		val history = jdbc.sql(
 			"""
 			select action, actor_kind, actor_id, details::text, at from audit_log
-			 where target_kind = 'acc' and target_id = :id order by at desc, id desc limit 30
+			 where target_kind = 'acc' and target_id = :id order by at desc, id desc
 			""".trimIndent(),
 		).param("id", id).query { rs, _ ->
 			HistoryEntry(rs.getString(1), rs.getString(2), rs.getString(3), json.readValue(rs.getString(4), mapType),
 				rs.getObject(5, OffsetDateTime::class.java))
-		}.list()
+		}.stream().use { rows -> rows.filter { reader.allows(it.details) }.limit(30).toList() }
 		return AccountDetail(account, usage.daily(id, 7), runs, actions(account), history)
 	}
 

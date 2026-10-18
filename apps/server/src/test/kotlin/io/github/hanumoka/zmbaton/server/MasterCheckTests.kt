@@ -1,5 +1,7 @@
 package io.github.hanumoka.zmbaton.server
 
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
@@ -43,6 +45,7 @@ class MasterCheckTests @Autowired constructor(
 	private val settings: MasterSettings,
 	transactions: PlatformTransactionManager,
 	private val org: OrgService,
+	private val facts: PermissionFacts,
 ) {
 	private val base = "http://localhost:" + env.getRequiredProperty("local.server.port")
 	private val http = HttpClient.newHttpClient()
@@ -426,12 +429,31 @@ class MasterCheckTests @Autowired constructor(
 		ok("POST", "/api/decisions/$linkedId/approvals", mapOf("decision" to "approved", "version" to 0))
 		val subjectDoc = approvedDocument("배포 정책", "# 정책\n\n배포 요일은 수요일이다. 배포 창은 저녁이다.", p, listOf(linkedId))
 		val subject = material.subject("document_version", versionId(subjectDoc))!!
-		val compared = material.compare(listOf(subject), 5, 6000)
+		val compared = material.compare(listOf(subject), 5, 6000, facts.person("usr_owner"))
 		assertEquals(listOf(linkedId, near), compared.map { it.id }, compared.map { it.label }.toString())
 		assertEquals(listOf(true, false), compared.map { it.linked })
 		assertEquals(listOf("C1", "C2"), compared.map { it.key })
 		assertTrue(compared.none { it.id == otherProject || it.id == (draft["document"] as Map<*, *>)["id"] })
 		assertEquals(1, compared[1].number)
+	}
+
+	@Test
+	fun `a queued local master run refuses material whose owner narrowed its scope before the claim`() {
+		device()
+		val p = project()
+		approvedDocument("scope comparison", "scopecomparison shared reference", p)
+		val source = approvedDocument("scope subject", "scopecomparison changed reference", p)
+		val check = checkFor(versionId(source))
+		val run = check["run_id"] as String
+		val person = org.addPerson("usr_owner", PersonIn("private source owner", listOf("assignee")))
+		jdbc.sql("update documents set owner_user_id = :person, visibility = 'personal' where id = :id")
+			.param("person", person).param("id", source).update()
+		val response = call("POST", "/api/runs/$run/claim", mapOf("device_id" to deviceOf(run)))
+		assertEquals(409, response.first)
+		assertContains(response.second, "열람 권한이 바뀌어")
+		assertEquals("cancelled", jdbc.sql("select end_reason from runs where id = :id").param("id", run).query(String::class.java).single())
+		checks.sweep()
+		assertEquals("failed", checkFor(versionId(source))["state"])
 	}
 
 	@Test

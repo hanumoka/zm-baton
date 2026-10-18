@@ -212,7 +212,7 @@ class UsageTests @Autowired constructor(
 		val daily = usage.daily(acc, 7)
 		assertEquals(1, daily.size)
 		assertEquals(1.25, daily.single().totals.costUsd)
-		val detail = accounts.detail(acc)
+		val detail = accounts.detail(acc, "usr_owner")
 		assertEquals(runId, detail.runs.single().id)
 		assertEquals(1.25, detail.runs.single().costUsd)
 		val signals = jdbc.sql("select kind from usage_signals where run_id = :id").param("id", runId).query(String::class.java).list()
@@ -331,7 +331,7 @@ class UsageTests @Autowired constructor(
 		assertEquals("cancel", runs.renew(runId, LeaseIn(s.device, gen)).stop)
 		assertEquals(listOf("billing_stopped"), waits(workId))
 		assertEquals("immediate", notices(runId).single().second)
-		val detail = accounts.detail(acc)
+		val detail = accounts.detail(acc, "usr_owner")
 		assertEquals("extra_billing", detail.account.block!!.cause)
 		assertTrue(detail.actions.single { it.name == "resume_billing" }.allowed)
 		val e = assertFailsWith<ConflictException> { delegate(s, work(), acc) }

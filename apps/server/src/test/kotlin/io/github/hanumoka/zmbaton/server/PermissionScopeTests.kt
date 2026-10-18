@@ -44,6 +44,10 @@ class PermissionScopeTests @Autowired constructor(
 	private val accounts: AccountService,
 	private val audit: AuditService,
 	private val sessions: SessionService,
+	private val cards: StatusCards,
+	private val material: ContradictionMaterial,
+	private val master: MasterCheckService,
+	private val masterAccess: MasterAccess,
 	transactions: PlatformTransactionManager,
 ) {
 	private val tx = TransactionTemplate(transactions)
@@ -159,7 +163,16 @@ class PermissionScopeTests @Autowired constructor(
 	fun `a question or review recipient cannot bypass its private work through the inbox`() = rolledBack {
 		val p = people()
 		val work = workItems.create(CreateWorkItem("private parent title", p.b, visibility = "personal"), p.b)
+		val before = workItems.detail(work.id).item
+		assertFailsWith<ConflictException> {
+			questions.ask(work.id, AskIn("cannot reach recipient", "approval", version = before.version), p.b)
+		}
+		assertEquals(before.version, workItems.detail(work.id).item.version)
+		assertTrue(questions.forWorkItem(work.id).isEmpty())
+		// Existing requests can lose access after their parent becomes private.
+		jdbc.sql("update work_items set visibility = 'org' where id = :id").param("id", work.id).update()
 		questions.ask(work.id, AskIn("private question body", "approval", version = workItems.detail(work.id).item.version), p.b)
+		jdbc.sql("update work_items set visibility = 'personal' where id = :id").param("id", work.id).update()
 		val question = questions.forWorkItem(work.id).single().id
 		val review = Ids.review()
 		jdbc.sql("""insert into review_items (id, org_id, work_item_id, recipient_user_id, target_kind, target_ref, source_key, reason, raised_by)
@@ -214,6 +227,7 @@ class PermissionScopeTests @Autowired constructor(
 			.param("id", run).param("w", works.getValue(Visibility.PERSONAL)).update()
 		jdbc.sql("insert into run_events (event_id, run_id, generation, seq, kind, payload) values (:e, :r, 1, 1, 'answer', '{\"text\":\"hidden-run-answer\"}'::jsonb)")
 			.param("e", "evt_" + Ids.uuidV7()).param("r", run).update()
+		sessions.audit("system", "fixture", "account.private-run", "acc", "acc_owner_login", mapOf("run_id" to run))
 		for (viewer in viewers(p)) {
 			val bundle = exports.export(viewer.person!!)
 			@Suppress("UNCHECKED_CAST")
@@ -223,6 +237,7 @@ class PermissionScopeTests @Autowired constructor(
 			for ((visibility, id) in works) assertEquals(PermissionRules.canSee(viewer, permissions.workItem(id)), id in exported, "${viewer.person} / $visibility")
 			val raw = bundle.toString()
 			assertEquals(viewer.person == p.b, accounts.detail("acc_owner_login", viewer.person!!).runs.any { it.id == run })
+			assertEquals(viewer.person == p.b, accounts.detail("acc_owner_login", viewer.person!!).history.any { it.details["run_id"] == run })
 			if (viewer.person == p.b) {
 				assertContains(raw, "hidden-version-content")
 				assertContains(raw, "hidden-run-answer")
@@ -230,6 +245,67 @@ class PermissionScopeTests @Autowired constructor(
 				for (hidden in listOf(doc, run, "hidden-version-content", "hidden-run-instruction", "hidden-run-answer")) assertFalse(hidden in raw, hidden)
 			}
 		}
+	}
+
+	@Test
+	fun `master work copies follow all original scopes in lists details runs accounts cards and exports`() = rolledBack {
+		val p = people()
+		val doc = documentWrites.register(mapOf("title" to "master source", "source_of_truth" to "product", "body_markdown" to "source body",
+			"project_id" to p.project), p.b).document.id
+		val decision = decisionWrites.propose(mapOf("question" to "comparison", "project_ids" to listOf(p.project)), p.b).decision.id
+		val work = workItems.create(CreateWorkItem("copied-master-title", "usr_owner"), "usr_owner").id
+		val run = Ids.run()
+		jdbc.sql("insert into runs (id, work_item_id, state, end_reason, executor, instruction, account_id) values (:r, :w, 'ended', 'submitted', 'claude_code', 'copied-master-prompt', 'acc_owner_login')")
+			.param("r", run).param("w", work).update()
+		jdbc.sql("""insert into master_checks (id, org_id, trigger, subjects, material, state, work_item_id, run_id)
+			values (:id, 'org_owner', 'document_version_approved', jsonb_build_array(jsonb_build_object('kind', 'document_version', 'document_id', cast(:doc as text))),
+			jsonb_build_array(jsonb_build_object('kind', 'document', 'id', cast(:doc as text)), jsonb_build_object('kind', 'decision', 'id', cast(:d as text))), 'done', :w, :r)""")
+			.param("id", Ids.masterCheck()).param("doc", doc).param("d", decision).param("w", work).param("r", run).update()
+		for (visibility in Visibility.entries) {
+			jdbc.sql("update documents set visibility = :v where id = :id").param("v", visibility.wire).param("id", doc).update()
+			for (viewer in viewers(p)) {
+				val expected = PermissionRules.canSee(viewer, permissions.document(doc)) && PermissionRules.canSee(viewer, permissions.decision(decision))
+				assertEquals(expected, work in workItems.list(500, null, false, null, viewer).map { it.id }, "master list ${viewer.person} / $visibility")
+				assertEquals(expected, PermissionRules.canSee(viewer, permissions.workItem(work)))
+				assertEquals(expected, PermissionRules.canSee(viewer, permissions.run(run)))
+				assertEquals(expected, accounts.detail("acc_owner_login", viewer.person!!).runs.any { it.id == run })
+			}
+		}
+		// Either input can narrow the copied record, including after the check has finished.
+		jdbc.sql("update documents set visibility = 'org' where id = :id").param("id", doc).update()
+		jdbc.sql("update decisions set visibility = 'personal' where id = :id").param("id", decision).update()
+		val owner = facts.person("usr_owner")
+		assertFailsWith<NotFoundException> { permissions.see(owner, permissions.run(run)) }
+		assertFalse("copied-master-title" in cards.preview("usr_owner"))
+		val raw = exports.export("usr_owner").toString()
+		for (hidden in listOf(work, run, "copied-master-title", "copied-master-prompt")) assertFalse(hidden in raw, hidden)
+		assertTrue(PermissionRules.canSee(facts.person(p.b), permissions.run(run)))
+		jdbc.sql("update runs set state = 'requested', end_reason = null, executor = 'anthropic_api' where id = :id").param("id", run).update()
+		assertTrue(masterAccess.refuseClaim(run))
+		assertEquals("cancelled", jdbc.sql("select end_reason from runs where id = :id").param("id", run).query(String::class.java).single())
+	}
+
+	@Test
+	fun `the master does not send another person's private source or comparison to the organisation owner's executor`() = rolledBack {
+		val p = people()
+		fun doc(title: String, visibility: String): String = documentWrites.register(mapOf("title" to title,
+			"source_of_truth" to "product", "body_markdown" to "uniqueprivacycomparison", "project_id" to p.project, "visibility" to visibility), p.b).document.id
+		val subject = doc("shared subject", "org")
+		val shared = doc("shared comparison", "org")
+		val hidden = doc("hidden comparison", "personal")
+		jdbc.sql("update document_versions set approved_by = 'usr_owner', approved_at = now() where doc_id in (:docs)")
+			.param("docs", listOf(subject, shared, hidden)).update()
+		fun version(doc: String): String = jdbc.sql("select id from document_versions where doc_id = :id").param("id", doc).query(String::class.java).single()
+		val row = material.subject("document_version", version(subject))!!
+		val compared = material.compare(listOf(row), 20, 6000, facts.person("usr_owner")).map { it.id }
+		assertTrue(shared in compared)
+		assertFalse(hidden in compared)
+		assertTrue(hidden in material.compare(listOf(row), 20, 6000, facts.person(p.b)).map { it.id })
+		val check = master.request(ContradictionTrigger("document_version_approved", listOf(CheckSubject("document_version", version(hidden)))))
+		val result = jdbc.sql("select state, reason, run_id from master_checks where id = :id").param("id", check).query().singleRow()
+		assertEquals("skipped", result["state"])
+		assertEquals(null, result["run_id"])
+		assertContains(result["reason"].toString(), "원본 자료를 볼 수 없어")
 	}
 
 	@Test

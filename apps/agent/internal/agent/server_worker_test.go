@@ -3,12 +3,14 @@ package agent
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/hanumoka/zm-baton/apps/agent/internal/api"
 )
 
 func TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", fakeKeyValue)
 	repo := handoffRepo(t)
 	for _, scenario := range []string{"no account", "subscription", "no limits", "no cost", "no turns", "no time", "no configuration folder"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -38,8 +40,14 @@ func TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims(t *testing.T)
 			if result.EndReason != EndFailed {
 				t.Fatalf("unsafe shared execution was not refused: %+v", result)
 			}
-			if lastPayload(t, f.runEvents(claim.RunID))["executor_started"] != false {
+			ended := lastPayload(t, f.runEvents(claim.RunID))
+			if ended["executor_started"] != false {
 				t.Fatal("executor started before the server-worker check")
+			}
+			check := readinessCheck(t, ended, "account")
+			detail, _ := check["detail"].(string)
+			if check["ok"] != false || !strings.HasPrefix(detail, "공용 서버 실행") {
+				t.Fatalf("failed for another reason instead of the server-worker policy: %v", check)
 			}
 		})
 	}

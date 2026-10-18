@@ -204,6 +204,10 @@ class QuestionService(
 			""".trimIndent(),
 		).param("id", workItemId).query(String::class.java).optional().orElse(null)
 		val route = QuestionRouting.route(kind, owner, docOwner, access.approverFor(org, "question"))
+		val target = access.workItem(workItemId) ?: throw NotFoundException("no work item $workItemId")
+		if (!access.isActiveMember(org, route.id) || !PermissionRules.canSee(access.person(route.id), target)) {
+			throw ConflictException("질문을 받을 사람이 이 작업을 볼 수 없다. 작업 공유 범위와 받는 사람의 역할을 먼저 확인한다")
+		}
 
 		val id = Ids.question()
 		val history = listOf(mapOf("at" to OffsetDateTime.now().toString(), "event" to "routed", "to" to route.id, "role" to route.role))
