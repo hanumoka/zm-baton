@@ -43,9 +43,10 @@ const usage = `zm-baton — connects AI sessions you open yourself to the zm-bat
   zm-baton repo add [DIR] [--worktrees DIR]    let this device run handed-over work in a repository
   zm-baton repo list                           show the repositories registered on this device
   zm-baton repo remove DIR|KEY                 stop running handed-over work in a repository
-  zm-baton agent [--once] [--claude PATH] [--run-timeout D]
+  zm-baton agent [--once] [--claude PATH] [--run-timeout D] [--server-worker]
                                                run the work handed to this device, each run in
-                                               its own worktree and branch; Ctrl+C stops
+                                               its own worktree and branch; Ctrl+C stops;
+                                               --server-worker requires a bounded API-key account
   zm-baton status                              show this device's connection
   zm-baton hook <event>                        called by executor hooks; not for people
 

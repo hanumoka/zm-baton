@@ -1,0 +1,30 @@
+[Unit]
+Description=zm-baton shared server execution worker
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=zm-baton-worker
+Group=zm-baton-worker
+WorkingDirectory=/srv/zm-baton
+Environment=HOME=/var/lib/zm-baton-worker
+Environment=ZM_BATON_HOME=/var/lib/zm-baton-worker/connector
+Environment=ZM_BATON_OFF=1
+EnvironmentFile=/etc/zm-baton/worker.env
+ExecStart=/opt/zm-baton/bin/zm-baton agent --server-worker --claude /opt/zm-baton/bin/claude --run-timeout 15m
+Restart=on-failure
+RestartSec=10
+RestartPreventExitStatus=2 78
+KillSignal=SIGINT
+KillMode=control-group
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/zm-baton-worker /srv/zm-baton
+
+[Install]
+WantedBy=multi-user.target

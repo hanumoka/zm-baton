@@ -220,6 +220,7 @@ func agentCmd(args []string, stderr io.Writer) int {
 	once := fs.Bool("once", false, "claim one run, execute it, then exit (exit code 0 only if it ended submitted)")
 	pollInterval := fs.Duration("poll-interval", 2*time.Second, "pause between polls when there is nothing to claim")
 	claudeBin := fs.String("claude", "claude", "Claude Code executable name or path")
+	serverWorker := fs.Bool("server-worker", false, "shared server: require an explicit API-key account and turn, time and cost limits")
 	runTimeout := fs.Duration("run-timeout", 0,
 		"stop the executor after this long when that is shorter than the AI account's per-run time limit; 0 uses the account's limit (30m when the server sends none)")
 	if err := fs.Parse(args); err != nil {
@@ -264,7 +265,7 @@ func agentCmd(args []string, stderr io.Writer) int {
 	h, err := agent.NewHandoff(agent.Config{
 		Client: client, DeviceID: cfg.DeviceID, ClaudePath: claudePath, PollInterval: *pollInterval,
 		RunTimeout: *runTimeout, StateDir: filepath.Join(home, "runs"), ExecutorDir: filepath.Join(home, "executors"),
-		MasterDir: filepath.Join(home, "master"), Log: log,
+		MasterDir: filepath.Join(home, "master"), ServerWorker: *serverWorker, Log: log,
 	}, repos, tempDirs())
 	if err != nil {
 		return fail("bad flags", err)
@@ -283,6 +284,9 @@ func agentCmd(args []string, stderr io.Writer) int {
 		return 130
 	case err != nil:
 		log.Error("agent failed", "err", err)
+		if *serverWorker && errors.Is(err, api.ErrUnauthorized) {
+			return 78 // credentials need operator attention; a service must not restart-loop
+		}
 		return 1
 	case *once && res.Delivery != nil:
 		return 1
