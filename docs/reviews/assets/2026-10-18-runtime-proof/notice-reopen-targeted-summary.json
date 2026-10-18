@@ -1,0 +1,43 @@
+{
+  "scope": "work/preview-notice-reopen functional source, before removal of two redundant test !! operators",
+  "suites": [
+    {
+      "name": "io.github.hanumoka.zmbaton.server.MasterCheckTests",
+      "tests": "10",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "18.609"
+    },
+    {
+      "name": "io.github.hanumoka.zmbaton.server.NoticeRecipientsTests",
+      "tests": "3",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "9.283"
+    },
+    {
+      "name": "io.github.hanumoka.zmbaton.server.SessionServiceTests",
+      "tests": "21",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "245.845"
+    },
+    {
+      "name": "io.github.hanumoka.zmbaton.server.UsageTests",
+      "tests": "14",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0",
+      "time": "4.067"
+    }
+  ],
+  "total": {
+    "tests": 48,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

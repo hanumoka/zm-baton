@@ -1,0 +1,21 @@
+=== RUN   TestRevokedDeviceStopsItsExecutorInsteadOfRetryingItsLease
+--- PASS: TestRevokedDeviceStopsItsExecutorInsteadOfRetryingItsLease (0.07s)
+=== RUN   TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims
+=== RUN   TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/no_account
+=== RUN   TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/subscription
+=== RUN   TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/no_limits
+=== RUN   TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/no_cost
+=== RUN   TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/no_turns
+=== RUN   TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/no_time
+=== RUN   TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/no_configuration_folder
+--- PASS: TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims (0.30s)
+    --- PASS: TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/no_account (0.00s)
+    --- PASS: TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/subscription (0.00s)
+    --- PASS: TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/no_limits (0.00s)
+    --- PASS: TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/no_cost (0.00s)
+    --- PASS: TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/no_turns (0.00s)
+    --- PASS: TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/no_time (0.00s)
+    --- PASS: TestServerWorkerRefusesFallbackSubscriptionAndUnboundedClaims/no_configuration_folder (0.00s)
+=== RUN   TestServerWorkerExecutesAnExplicitBoundedAPIAccount
+--- PASS: TestServerWorkerExecutesAnExplicitBoundedAPIAccount (1.18s)
+PASS
