@@ -123,6 +123,7 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 			"sides" to listOf(side(c.left, c.leftQuote), side(c.right, c.rightQuote)),
 		)
 		val evidenceJson = json.writeValueAsString(evidence)
+		val recipientIds = recipients(c).distinct()
 		val key = ContradictionPrompt.dedupeKey(c)
 		val existing = jdbc.sql("select id, status from notices where dedupe_key = :key for update").param("key", key)
 			.query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional().orElse(null)
@@ -135,7 +136,7 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 				insert into notices (id, kind, evidence, dedupe_key, recipients, source_run_id)
 				values (:id, 'doc_contradiction', cast(:e as jsonb), :key, cast(:to as text[]), :run)
 				""".trimIndent(),
-			).param("id", id).param("e", evidenceJson).param("key", key).param("to", "{" + recipients(c).joinToString(",") + "}")
+			).param("id", id).param("e", evidenceJson).param("key", key).param("to", "{" + recipientIds.joinToString(",") + "}")
 				.param("run", runId).update()
 			sessions.audit("system", MasterCheckService.ACTOR, "notice.raised", "ntc", id, details)
 		} else {
@@ -144,17 +145,18 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 				"""
 				update notices
 				   set repeat_count = repeat_count + 1, last_seen_at = now(), evidence = cast(:e as jsonb), source_run_id = :run,
+				       recipients = array(select distinct recipient from unnest(notices.recipients || cast(:to as text[])) as recipient order by recipient),
 				       status = case when status = 'resolved' then 'open' else status end,
 				       status_by = case when status = 'resolved' then null else status_by end,
 				       status_at = case when status = 'resolved' then null else status_at end,
 				       status_note = case when status = 'resolved' then null else status_note end
 				 where id = :id
 				""".trimIndent(),
-			).param("e", evidenceJson).param("run", runId).param("id", id).update()
+			).param("e", evidenceJson).param("run", runId).param("id", id).param("to", "{" + recipientIds.joinToString(",") + "}").update()
 			if (existing.second == "resolved") sessions.audit("system", MasterCheckService.ACTOR, "notice.reopened", "ntc", id, details)
 			if (existing.second != "open" && existing.second != "resolved") return id
 		}
-		for (recipient in recipients(c).distinct()) {
+		for (recipient in recipientIds) {
 			jdbc.sql(
 				"""
 				insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, notify)

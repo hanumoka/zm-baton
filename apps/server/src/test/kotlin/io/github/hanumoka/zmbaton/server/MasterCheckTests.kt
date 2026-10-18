@@ -46,6 +46,7 @@ class MasterCheckTests @Autowired constructor(
 	transactions: PlatformTransactionManager,
 	private val org: OrgService,
 	private val facts: PermissionFacts,
+	private val people: PersonService,
 ) {
 	private val base = "http://localhost:" + env.getRequiredProperty("local.server.port")
 	private val http = HttpClient.newHttpClient()
@@ -276,6 +277,8 @@ class MasterCheckTests @Autowired constructor(
 		checks.sweep()
 		val notice = ((checkFor(versionId(b))["outcome"] as Map<*, *>)["notice_ids"] as List<*>).single() as String
 		ok("POST", "/api/notices/$notice/status", mapOf("status" to "resolved"))
+		val newOwner = org.addPerson("usr_owner", PersonIn("new document owner", listOf("requester", "assignee")))
+		jdbc.sql("update documents set owner_user_id = :owner where id = :id").param("owner", newOwner).param("id", a).update()
 		ok("POST", "/api/documents/$b/versions", mapOf("based_on" to 1, "body_markdown" to "# 정책\n\n감사 기록은 감사 보존 30일 뒤 지운다.\n다시 쓴 판."))
 		ok("POST", "/api/documents/$b/versions/2/approvals", mapOf("decision" to "approved"))
 		answer(checkFor(versionId(b, 2))["run_id"] as String, text)
@@ -284,6 +287,10 @@ class MasterCheckTests @Autowired constructor(
 		assertTrue(list("/api/inbox").any { it["source_id"] == notice })
 		val open = ok("GET", "/api/contradictions?about=$a")["open"] as List<*>
 		assertEquals(listOf(notice), open.map { (it as Map<*, *>)["id"] })
+		assertEquals(1, people.inbox(newOwner).count { it.sourceId == notice })
+		people.judgeNotice(notice, NoticeStatusIn("resolved"), newOwner)
+		assertTrue(people.inbox(newOwner).none { it.sourceId == notice })
+		assertTrue(people.inbox("usr_owner").none { it.sourceId == notice })
 	}
 
 	@Test
@@ -364,7 +371,7 @@ class MasterCheckTests @Autowired constructor(
 		}
 		val made = mutableListOf<String>()
 		try {
-			subjects.forEach { v -> made += tx.execute { checks.request(ContradictionTrigger("document_version_approved", listOf(CheckSubject("document_version", v)))) }!! }
+			subjects.forEach { v -> made += tx.execute { checks.request(ContradictionTrigger("document_version_approved", listOf(CheckSubject("document_version", v)))) } }
 			limitReached(made)
 		} finally {
 			// The other tests of this class need today's room back; the checks' runs and work items stay.
@@ -382,7 +389,7 @@ class MasterCheckTests @Autowired constructor(
 		val git = ok("POST", "/api/documents", mapOf("title" to "Git 문서", "source_of_truth" to "git",
 			"git" to mapOf("repo" to "github.com/hanumoka/zm-docs", "path" to "docs/x.md", "commit" to "0123456789abcdef0123456789abcdef01234567")))
 		val gitVersion = versionId((git["document"] as Map<*, *>)["id"] as String)
-		val g = tx.execute { checks.request(ContradictionTrigger("document_version_approved", listOf(CheckSubject("document_version", gitVersion)))) }!!
+		val g = tx.execute { checks.request(ContradictionTrigger("document_version_approved", listOf(CheckSubject("document_version", gitVersion)))) }
 		made += g
 		assertContains(jdbc.sql("select reason from master_checks where id = :id").param("id", g).query(String::class.java).single(), "본문이 이 서버에 없어")
 		assertEquals(settings.dailyLimit, checks.usedToday())
