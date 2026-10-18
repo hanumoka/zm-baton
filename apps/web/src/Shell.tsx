@@ -23,6 +23,7 @@ import { Sidebar, type Permission } from './shell/Sidebar';
 import { TabBar } from './shell/TabBar';
 import { usePoll } from './usePoll';
 import { Work } from './work/Work';
+import { ServerManagement } from './server/ServerManagement';
 
 const currentHash = () => (typeof window === 'undefined' ? '' : window.location.hash);
 
@@ -305,6 +306,7 @@ export function Shell({ auth = LOCAL_FALLBACK, onAuthChanged = () => {} }: { aut
           {screen === 'audit' && <Audit onError={failed('audit')} onRead={() => cleared('audit')} chipHost={chipHost} />}
           {screen === 'runs' && <RunTest />}
           {screen === 'kit' && <Kit />}
+          {screen === 'server' && <ServerManagement auth={auth} onAuthChanged={onAuthChanged} />}
         </div>
       </div>
       <TabBar

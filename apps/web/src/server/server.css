@@ -1,0 +1,9 @@
+.wn .server-confirm {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: var(--s-2);
+  padding: var(--s-2) 0;
+  line-height: var(--lh-body);
+  cursor: pointer;
+}
+.server-confirm input { flex: none; margin-top: var(--s-1); }
