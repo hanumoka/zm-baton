@@ -61,6 +61,11 @@ const detail = (o: OrgView, id: string) =>
   renderToStaticMarkup(<OrgDetail org={o} id={id} run={async () => {}} refusal={null} onOpen={() => {}} />);
 
 describe('organisation view', () => {
+  it('shows login administration only when the server grants it', () => {
+    expect(detail(solo({ can_manage_logins: true }), 'usr_owner')).toContain('로그인 계정');
+    expect(detail(solo({ can_manage_logins: false }), 'usr_owner')).not.toContain('로그인 계정');
+    expect(detail(solo(), 'usr_owner')).not.toContain('로그인 계정');
+  });
   it('keeps a one-person organisation simple and folds the kinds it does not use into one row', () => {
     const groups = groupOrg(solo());
     expect(groups.map((g) => g.kind)).toEqual(['org', 'person', 'project', 'repository', 'rest']);
@@ -155,7 +160,7 @@ describe('organisation detail', () => {
     expect(repo).toContain('저장소 키');
     const person = renderToStaticMarkup(<OrgForm start={newDraft('person')} envKinds={[]} onSubmit={async () => {}} onCancel={() => {}} error="HTTP 403: 이 일(조직 구조 관리)에는 운영자 역할 가운데 하나가 필요하다" />);
     expect(person).toContain('운영자 역할');
-    expect(person).toContain('매니저 기록');
+    expect(person).toContain('첫 비밀번호 설정 코드');
   });
 });
 

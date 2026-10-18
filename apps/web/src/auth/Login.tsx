@@ -132,8 +132,8 @@ function Setup({ onSignedIn }: { onSignedIn: (s: AuthState) => void }) {
         처음 비밀번호 정하기
       </h1>
       <p className="wn-lead">
-        서버를 띄운 PC의 서버 기록에서 한 번 쓰는 설정 토큰(<code>zmbt_</code>로 시작)을 찾아 넣는다. Docker로 띄웠으면{' '}
-        <code>docker compose -f deploy/compose/compose.yaml logs server</code>에 있다. 토큰은 한 번만 쓰이고 24시간 뒤나 서버를 다시 띄우면 바뀐다.
+        조직 소유자에게 받은 설정 코드(<code>zmbt_</code>로 시작)를 넣는다. 최초 소유자는 서버 시작 기록에서 코드를 확인한다.
+        코드는 24시간 동안 한 번만 사용할 수 있으며 새 코드가 발급되면 이전 코드는 만료된다.
       </p>
       {error && (
         <p role="alert" className="wd-refused">

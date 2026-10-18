@@ -44,7 +44,8 @@ describe('the sign-in screen', () => {
     const html = renderToStaticMarkup(<Login state={required({ setup_pending: true })} onSignedIn={() => {}} />);
     expect(html).toContain('처음 비밀번호 정하기');
     expect(html).toContain('zmbt_');
-    expect(html).toContain('logs server');
+    expect(html).toContain('조직 소유자에게 받은 설정 코드');
+    expect(html).toContain('최초 소유자는 서버 시작 기록');
     expect(html).toContain('설정 토큰을 넣는다');
     expect(html).toContain('로그인으로 돌아가기');
   });

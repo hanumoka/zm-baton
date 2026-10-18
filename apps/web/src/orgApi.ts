@@ -49,7 +49,11 @@ export type OrgView = {
   links: OrgLink[];
   /** Whether I may change the structure (role operator). */
   can_manage: boolean;
+  can_manage_logins?: boolean;
 };
+
+export type PersonLogin = { login: string | null; pending_until: string | null; can_issue: boolean; reason: string | null };
+export type LoginSetup = { setup_token: string; expires_at: string };
 
 /** What a new item is made with; the server checks every field. */
 export type NewItem = { name: string; kind?: string; repo_key?: string; remote?: string };
@@ -101,6 +105,8 @@ export type ManagerRecord = {
 const enc = encodeURIComponent;
 
 export const orgApi = {
+  personLogin: (id: string, signal?: AbortSignal) => call<PersonLogin>('GET', `/api/org/people/${enc(id)}/login`, undefined, signal),
+  issueLoginSetup: (id: string) => call<LoginSetup>('POST', `/api/org/people/${enc(id)}/login/setup`),
   view: (signal?: AbortSignal) => call<OrgView>('GET', '/api/org', undefined, signal),
   rename: (name: string) => call<OrgView>('PATCH', '/api/org', { name }),
   addPerson: (display_name: string, roles: string[]) => call<OrgView>('POST', '/api/org/people', { display_name, roles }),

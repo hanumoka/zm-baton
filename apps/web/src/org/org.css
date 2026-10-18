@@ -58,6 +58,12 @@
 .org-readonly .ico { flex: none; margin-top: var(--s-0); }
 .org-refused { margin-top: var(--s-2); }
 
+.org-login > .btn, .org-login-confirm { margin-top: var(--s-3); }
+.org-login-code { margin-top: var(--s-4); padding-top: var(--s-3); border-top: var(--rule) solid var(--c-rule); }
+.org-login-code label { display: grid; gap: var(--s-2); font-size: var(--fs-sm); }
+.org-login-code textarea { width: 100%; min-width: 0; overflow-wrap: anywhere; resize: vertical; }
+.org-login-actions { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-3); }
+
 /* The roles and the sharing scopes, explained on the organisation's own row */
 .org-legend { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--s-1) var(--s-4); max-width: var(--w-text); margin: 0; font-size: var(--fs-sm); line-height: var(--lh-row); }
 .org-legend div { display: contents; }
