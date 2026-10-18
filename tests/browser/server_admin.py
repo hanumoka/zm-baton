@@ -58,6 +58,9 @@ def main():
         page.get_by_label("새 비밀번호 한 번 더", exact=True).fill(password)
         page.get_by_role("button", name="비밀번호 정하고 로그인", exact=True).click()
         expect(page.get_by_role("heading", name="내 조직의 서버 시작하기")).to_be_visible()
+        expect(page.get_by_label("조직 이름", exact=True)).to_have_value("")
+        expect(page.get_by_label("관리자 이름", exact=True)).to_have_value("")
+        expect(page.get_by_role("button", name="조직 설정 마치기", exact=True)).to_be_disabled()
         capture("setup-empty")
         variants("setup", {
             "a": "",
