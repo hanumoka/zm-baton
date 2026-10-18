@@ -92,6 +92,35 @@ func TestAnOldServerWithoutLeasesLetsTheRunFinish(t *testing.T) {
 	}
 }
 
+func TestRevokedDeviceStopsItsExecutorInsteadOfRetryingItsLease(t *testing.T) {
+	f, c := newFakeServer(t)
+	r := newTestRunner(t, c, "child", 0)
+	pidFile := filepath.Join(r.cfg.Workdir, "child.pid")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	go func() {
+		for ctx.Err() == nil {
+			if _, err := os.Stat(pidFile); err == nil {
+				f.set(func(f *fakeServer) { f.leaseStatus = http.StatusUnauthorized })
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	got := r.Execute(ctx, api.Claim{RunID: "run_revoked", Generation: 3})
+	if ctx.Err() != nil || got.EndReason != EndCancelled {
+		t.Fatalf("revocation did not stop the executor promptly: %+v, %v", got, ctx.Err())
+	}
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(data)))
+	if !childGone(t, pid) {
+		t.Fatalf("revoked executor's child %d is still alive", pid)
+	}
+}
+
 func TestAStopBeforeTheExecutorStartsEndsCancelledWithoutStartingIt(t *testing.T) {
 	f, c := newFakeServer(t)
 	f.stop = true

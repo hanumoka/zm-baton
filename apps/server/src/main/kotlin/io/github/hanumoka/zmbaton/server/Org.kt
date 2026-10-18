@@ -1,6 +1,7 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.admin.ServerAdministration
 import io.github.hanumoka.zmbaton.server.permission.Act
 import io.github.hanumoka.zmbaton.server.permission.Actor
 import io.github.hanumoka.zmbaton.server.permission.Target
@@ -108,7 +109,8 @@ data class MembersIn(@JsonProperty("user_ids") val userIds: List<String>)
 data class LinkIn(@JsonProperty("from_id") val fromId: String, @JsonProperty("to_id") val toId: String)
 
 @Service
-class OrgService(private val jdbc: JdbcClient, private val facts: PermissionFacts, private val sessions: SessionService) {
+class OrgService(private val jdbc: JdbcClient, private val facts: PermissionFacts, private val sessions: SessionService,
+	private val administration: ServerAdministration) {
 
 	companion object {
 		const val NAME_MAX = 100
@@ -214,6 +216,7 @@ class OrgService(private val jdbc: JdbcClient, private val facts: PermissionFact
 	 */
 	@Transactional
 	fun updatePerson(actor: String, id: String, patch: Map<String, Any?>) {
+		if ("status" in patch) administration.guardPersonStatus(id, patch["status"] as? String)
 		val org = facts.orgOf(actor)
 		val unknown = patch.keys - setOf("display_name", "roles", "status")
 		if (unknown.isNotEmpty()) throw BadRequestException("unknown fields $unknown")
@@ -242,6 +245,13 @@ class OrgService(private val jdbc: JdbcClient, private val facts: PermissionFact
 			if (status == "inactive") {
 				jdbc.sql("update web_logins set ended_at = now() where user_id = :id and ended_at is null").param("id", id).update()
 				jdbc.sql("update setup_tokens set dropped_at = now() where user_id = :id and used_at is null and dropped_at is null").param("id", id).update()
+				// Reactivation never restores an old device or session credential. A person must
+				// authorize a new device; an offline executor cannot be forcibly killed by the server.
+				changed["revoked_devices"] = jdbc.sql("update devices set revoked_at = now() where user_id = :id and revoked_at is null")
+					.param("id", id).update()
+				jdbc.sql("update device_logins set denied_at = now() where approved_by = :id and consumed_at is null and denied_at is null")
+					.param("id", id).update()
+				changed["ended_sessions"] = sessions.endForPerson(id)
 			}
 			changed["status"] = status
 		}

@@ -64,6 +64,7 @@ class ExportService(
 			"web_logins" to "로그인 쿠키 토큰의 해시와 로그인 기록이다. 비밀값은 내보내지 않는다(G13.3)",
 			"setup_tokens" to "한 번 쓰는 설정 토큰의 해시다. 비밀값은 내보내지 않는다(G13.3)",
 			"device_logins" to "기기 로그인 코드의 해시다. 10분 뒤 쓸모가 없고 비밀값은 내보내지 않는다(G13.3)",
+			"server_installation" to "서버 운영 권한과 초기 설정이다. 조직 업무 내보내기에는 넣지 않고 서버 백업으로 보존한다",
 		)
 
 		/** Rows left out per table: another person's personal records (`:me` is the exporter). */
