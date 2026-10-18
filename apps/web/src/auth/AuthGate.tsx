@@ -3,6 +3,7 @@ import { authApi, type AuthState } from '../authApi';
 import { onUnauthorized, setCsrf } from '../http';
 import { ApiError } from '../workApi';
 import { Login } from './Login';
+import { ServerSetup } from '../server/ServerSetup';
 
 /** What the screen assumes until the server says: `local`, the way stage 1 always worked. */
 export const LOCAL_FALLBACK: AuthState = { mode: 'local', secure: false, person: null, csrf_token: null, setup_pending: false };
@@ -61,6 +62,9 @@ export function AuthGate({ children }: Props) {
         }}
       />
     );
+  }
+  if (state.mode === 'required' && state.server_admin && state.server_setup_pending) {
+    return <ServerSetup auth={state} onChanged={() => void read()} />;
   }
   return <>{children(state, () => void read())}</>;
 }

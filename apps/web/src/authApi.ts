@@ -16,6 +16,8 @@ export type AuthState = {
   csrf_token: string | null;
   /** No owner has a password yet: the screen offers the first password with the setup token. */
   setup_pending: boolean;
+  server_admin?: boolean;
+  server_setup_pending?: boolean;
 };
 
 export type MyDevice = {
