@@ -3,6 +3,7 @@ package io.github.hanumoka.zmbaton.server
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.github.hanumoka.zmbaton.server.permission.Act
 import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.PermissionRules
 import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
@@ -554,7 +555,7 @@ class QuestionController(private val questions: QuestionService, private val per
 	fun list(@PathVariable id: String, @RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): List<QuestionView> {
 		val me = permissions.person(authorization, "read questions")
 		permissions.see(me, permissions.workItem(id))
-		return questions.forWorkItem(id)
+		return questions.forWorkItem(id).filter { PermissionRules.canSee(me, permissions.question(it.id)) }
 	}
 
 	@GetMapping("/questions/{id}")

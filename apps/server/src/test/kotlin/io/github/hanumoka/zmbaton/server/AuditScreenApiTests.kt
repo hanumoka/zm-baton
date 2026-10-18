@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.core.env.Environment
+import org.springframework.jdbc.core.simple.JdbcClient
 import tools.jackson.databind.ObjectMapper
 import java.net.URI
 import java.net.URLEncoder
@@ -28,6 +29,7 @@ class AuditScreenApiTests @Autowired constructor(
 	env: Environment,
 	private val json: ObjectMapper,
 	private val sessions: SessionService,
+	private val jdbc: JdbcClient,
 ) {
 	private val base = "http://localhost:" + env.getRequiredProperty("local.server.port")
 	private val http = HttpClient.newHttpClient()
@@ -59,9 +61,15 @@ class AuditScreenApiTests @Autowired constructor(
 	/** Four rows about one new target, one per actor class. */
 	private fun fourActors(): String {
 		val target = "wrk_" + UUID.randomUUID()
+		// Audit reads now require a readable target, including the run acting on its behalf.
+		jdbc.sql("insert into work_items (id, title, stage, responsible_user_id) values (:id, 'audit fixture', 'draft', 'usr_owner')")
+			.param("id", target).update()
+		val run = Ids.run()
+		jdbc.sql("insert into runs (id, work_item_id, state, end_reason, executor) values (:id, :w, 'ended', 'submitted', 'claude_code')")
+			.param("id", run).param("w", target).update()
 		sessions.audit("person", SessionService.OWNER, "work_item.updated", "wrk", target, mapOf("fields" to listOf("title")))
 		sessions.audit("session", "ses_x", "session.sharing_changed", "wrk", target, mapOf("share" to false))
-		sessions.audit("system", "run_" + UUID.randomUUID(), "work_item.stage_changed", "wrk", target, mapOf("to" to "in_progress"))
+		sessions.audit("system", run, "work_item.stage_changed", "wrk", target, mapOf("to" to "in_progress"))
 		sessions.audit("system", SessionService.SYSTEM_ACTOR, "session.expired", "wrk", target, emptyMap())
 		return target
 	}

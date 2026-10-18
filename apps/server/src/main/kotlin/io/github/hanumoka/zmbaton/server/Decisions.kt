@@ -170,7 +170,7 @@ class DecisionService(
 				view, rs.getString(1), json.readValue(rs.getString(2), sectionsType), rs.getString(3), gitRef,
 				rs.getString(5), options, rs.getString(7), rs.getString(8), rs.getString(9),
 				json.readValue(rs.getString(10), DecisionRoles::class.java), facts.approver,
-				if (product) linkedWork(id) else emptyList(),
+				if (product) linkedWork(id, access.person(actor)) else emptyList(),
 				approvals.list("decision", id),
 				if (product) null else DecisionRules.gitReason(gitRef?.get("path") as String?),
 				DecisionRules.actions(facts, actor).map { DecisionActionView(it.name, it.allowed, it.reason) },
@@ -255,16 +255,20 @@ class DecisionService(
 		return views.map { it.copy(projects = byDecision[it.id].orEmpty()) }
 	}
 
-	private fun linkedWork(id: String): List<LinkedWork> =
-		jdbc.sql(
+	private fun linkedWork(id: String, viewer: Actor): List<LinkedWork> {
+		val scope = PermissionRules.filter(viewer, ScopeColumns.WORK_ITEMS)
+		val stmt = jdbc.sql(
 			"""
 			select w.id, w.external_ref, w.title, w.stage, w.wait_reasons from decision_work_items dw join work_items w on w.id = dw.work_item_id
-			 where dw.decision_id = :id order by w.external_ref nulls last, w.created_at
+			 where dw.decision_id = :id and ${scope.sql} order by w.external_ref nulls last, w.created_at
 			""".trimIndent(),
-		).param("id", id).query { rs, _ ->
+		).param("id", id)
+		scope.params.forEach { (key, value) -> stmt.param(key, value) }
+		return stmt.query { rs, _ ->
 			@Suppress("UNCHECKED_CAST")
 			LinkedWork(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), (rs.getArray(5).array as Array<String>).toList())
 		}.list()
+	}
 
 	private fun history(id: String): List<HistoryEntry> =
 		jdbc.sql(

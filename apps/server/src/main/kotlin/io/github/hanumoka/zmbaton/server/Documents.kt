@@ -134,7 +134,7 @@ class DocumentService(private val jdbc: JdbcClient, private val json: ObjectMapp
 			versions.first { it.number == n }.copy(bodyMarkdown = body)
 		}
 		return DocumentDetail(
-			view, versions, shown, linkedWork(id), linkedDecisions(id), approver,
+			view, versions, shown, linkedWork(id, access.person(actor)), linkedDecisions(id, access.person(actor)), approver,
 			if (view.sourceOfTruth == "git") DocumentRules.gitReason(view.gitRef?.get("path") as String?) else null,
 			history(id),
 		)
@@ -184,27 +184,35 @@ class DocumentService(private val jdbc: JdbcClient, private val json: ObjectMapp
 		)
 	}
 
-	private fun linkedWork(id: String): List<LinkedWork> =
-		jdbc.sql(
+	private fun linkedWork(id: String, viewer: Actor): List<LinkedWork> {
+		val scope = PermissionRules.filter(viewer, ScopeColumns.WORK_ITEMS)
+		val stmt = jdbc.sql(
 			"""
 			select w.id, w.external_ref, w.title, w.stage, w.wait_reasons from document_work_items dw join work_items w on w.id = dw.work_item_id
-			 where dw.document_id = :id order by w.external_ref nulls last, w.created_at
+			 where dw.document_id = :id and ${scope.sql} order by w.external_ref nulls last, w.created_at
 			""".trimIndent(),
-		).param("id", id).query { rs, _ ->
+		).param("id", id)
+		scope.params.forEach { (key, value) -> stmt.param(key, value) }
+		return stmt.query { rs, _ ->
 			@Suppress("UNCHECKED_CAST")
 			LinkedWork(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), (rs.getArray(5).array as Array<String>).toList())
 		}.list()
+	}
 
-	private fun linkedDecisions(id: String): List<LinkedDecision> =
-		jdbc.sql(
+	private fun linkedDecisions(id: String, viewer: Actor): List<LinkedDecision> {
+		val scope = PermissionRules.filter(viewer, ScopeColumns.DECISIONS)
+		val stmt = jdbc.sql(
 			"""
 			select d.id, d.external_ref, d.number, d.question, d.status from document_decisions dd join decisions d on d.id = dd.decision_id
-			 where dd.document_id = :id order by d.decided_on desc nulls first, d.external_ref desc nulls last, d.number desc nulls last
+			 where dd.document_id = :id and ${scope.sql} order by d.decided_on desc nulls first, d.external_ref desc nulls last, d.number desc nulls last
 			""".trimIndent(),
-		).param("id", id).query { rs, _ ->
+		).param("id", id)
+		scope.params.forEach { (key, value) -> stmt.param(key, value) }
+		return stmt.query { rs, _ ->
 			val number = rs.getObject(3) as Int?
 			LinkedDecision(rs.getString(1), rs.getString(2) ?: number?.let(DecisionService::refOf), rs.getString(4), rs.getString(5))
 		}.list()
+	}
 
 	private fun history(id: String): List<HistoryEntry> =
 		jdbc.sql(

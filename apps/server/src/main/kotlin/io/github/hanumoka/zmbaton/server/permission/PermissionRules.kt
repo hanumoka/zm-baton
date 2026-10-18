@@ -78,6 +78,8 @@ data class Target(
 	val projectTeams: Set<String> = emptySet(),
 	/** What a refusal says when the actor may not even know the record exists. */
 	val missing: String = "no $kind $id",
+	/** A child carrying its parent's text cannot widen the parent's visibility. */
+	val requiredParents: List<Target> = emptyList(),
 )
 
 enum class Relation {
@@ -196,6 +198,7 @@ object PermissionRules {
 
 	/** Whether [a] may see [t]: its scope, and for a narrow scope who [a] is to it. */
 	fun canSee(a: Actor, t: Target): Boolean {
+		if (t.requiredParents.any { !canSee(a, it) }) return false
 		if (t.visibility == Visibility.PUBLIC) return true
 		if (!a.member || a.orgId != t.orgId) return false
 		return when (t.visibility) {

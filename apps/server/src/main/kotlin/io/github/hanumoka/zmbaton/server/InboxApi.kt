@@ -5,6 +5,9 @@ import io.github.hanumoka.zmbaton.server.auth.Requester
 import io.github.hanumoka.zmbaton.server.permission.Act
 import io.github.hanumoka.zmbaton.server.permission.Actor
 import io.github.hanumoka.zmbaton.server.permission.Permissions
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.PermissionRules
+import io.github.hanumoka.zmbaton.server.permission.RecordVisibility
 import org.springframework.context.annotation.Configuration
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -86,6 +89,8 @@ class PersonService(
 	private val jdbc: JdbcClient,
 	private val json: ObjectMapper,
 	private val sessions: SessionService,
+	private val access: PermissionFacts,
+	private val visibility: RecordVisibility,
 ) {
 	private val mapType = object : TypeReference<Map<String, Any?>>() {}
 	private val listType = object : TypeReference<List<String>>() {}
@@ -143,8 +148,10 @@ class PersonService(
 	 * [RelayService.RECENT_MINUTES] after it closed, so the person sees whether the answer reached the
 	 * executor; those come after the open ones of their bucket.
 	 */
-	fun inbox(person: String): List<InboxItemView> =
-		jdbc.sql(
+	fun inbox(person: String): List<InboxItemView> {
+		val viewer = access.person(person)
+		val reader = visibility.reader(viewer)
+		return jdbc.sql(
 			"""
 			select id, bucket, kind, source_kind, source_id, summary, detail::text as detail, wait_kind, repeat_count,
 			       waiting_since, notify, state, relay_deadline, relay_reason, answer::text as answer, answered_at,
@@ -179,7 +186,10 @@ class PersonService(
 				closedAt = rs.getObject("closed_at", OffsetDateTime::class.java),
 				promotedAt = rs.getObject("promoted_at", OffsetDateTime::class.java),
 			)
-		}.list()
+		}.list().filter { item ->
+			access.inboxItem(item.id)?.let { PermissionRules.canSee(viewer, it) } == true && reader.allows(listOf(item.sourceId, item.detail))
+		}
+	}
 
 	/**
 	 * A person's judgement of a conflict notice (contract "알림 처리"). Any of the three takes it

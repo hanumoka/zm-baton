@@ -38,6 +38,12 @@ class PermissionScopeTests @Autowired constructor(
 	private val documents: DocumentService,
 	private val documentWrites: DocumentWriteService,
 	private val jdbc: JdbcClient,
+	private val exports: ExportService,
+	private val questions: QuestionService,
+	private val peopleService: PersonService,
+	private val accounts: AccountService,
+	private val audit: AuditService,
+	private val sessions: SessionService,
 	transactions: PlatformTransactionManager,
 ) {
 	private val tx = TransactionTemplate(transactions)
@@ -128,6 +134,102 @@ class PermissionScopeTests @Autowired constructor(
 		// The decision's approver (the organisation's owner) sees a restricted proposal to decide on it.
 		assertTrue(decisionIds.getValue(Visibility.RESTRICTED) in decisions.list(500, null, null, null, facts.person("usr_owner")).map { it.id })
 		assertEquals("restricted", decisions.load(decisionIds.getValue(Visibility.RESTRICTED))!!.visibility)
+	}
+
+	@Test
+	fun `shared document and decision details do not reveal linked private records`() = rolledBack {
+		val p = people()
+		val privateWork = workItems.create(CreateWorkItem("private linked work", p.b, visibility = "personal"), p.b).id
+		val sharedDecision = decisionWrites.propose(mapOf("question" to "shared decision"), p.b).decision.id
+		val privateDecision = decisionWrites.propose(mapOf("question" to "private decision", "visibility" to "personal"), p.b).decision.id
+		val doc = documentWrites.register(mapOf("title" to "shared document", "source_of_truth" to "product", "body_markdown" to "shared body"), p.b).document.id
+		jdbc.sql("insert into decision_work_items (decision_id, work_item_id) values (:d, :w)").param("d", sharedDecision).param("w", privateWork).update()
+		jdbc.sql("insert into document_work_items (document_id, work_item_id) values (:d, :w)").param("d", doc).param("w", privateWork).update()
+		jdbc.sql("insert into document_decisions (document_id, decision_id) values (:d, :decision)").param("d", doc).param("decision", privateDecision).update()
+		assertEquals(listOf(privateWork), decisions.detail(sharedDecision, p.b).workItems.map { it.id })
+		assertEquals(listOf(privateDecision), documents.detail(doc, null, p.b).decisions.map { it.id })
+		for (viewer in listOf("usr_owner", p.operator, p.outsider)) {
+			assertTrue(decisions.detail(sharedDecision, viewer).workItems.isEmpty())
+			assertTrue(documents.detail(doc, null, viewer).workItems.isEmpty())
+			assertTrue(documents.detail(doc, null, viewer).decisions.isEmpty())
+		}
+	}
+
+	@Test
+	fun `a question or review recipient cannot bypass its private work through the inbox`() = rolledBack {
+		val p = people()
+		val work = workItems.create(CreateWorkItem("private parent title", p.b, visibility = "personal"), p.b)
+		questions.ask(work.id, AskIn("private question body", "approval", version = workItems.detail(work.id).item.version), p.b)
+		val question = questions.forWorkItem(work.id).single().id
+		val review = Ids.review()
+		jdbc.sql("""insert into review_items (id, org_id, work_item_id, recipient_user_id, target_kind, target_ref, source_key, reason, raised_by)
+			values (:r, 'org_owner', :w, 'usr_owner', 'unpinned', 'fixture', :w, 'owner_watch', 'human')""")
+			.param("r", review).param("w", work.id).update()
+		jdbc.sql("""insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, notify)
+			values (:i, 'usr_owner', 4, 'risk_review', 'rvw', :r, 'private review title', 'immediate')""")
+			.param("i", Ids.inbox()).param("r", review).update()
+		for (viewer in listOf("usr_owner", p.operator, p.outsider)) {
+			assertFailsWith<NotFoundException> { permissions.see(facts.person(viewer), permissions.question(question)) }
+			assertFailsWith<NotFoundException> { permissions.see(facts.person(viewer), permissions.review(review)) }
+			assertFalse(peopleService.inbox(viewer).any { it.sourceId in listOf(question, review) })
+		}
+		assertTrue(PermissionRules.canSee(facts.person(p.b), permissions.question(question)))
+		// Explicitly sharing the parent makes the existing recipient's requests visible again.
+		jdbc.sql("update work_items set visibility = 'org' where id = :id").param("id", work.id).update()
+		assertEquals(setOf(question, review), peopleService.inbox("usr_owner").filter { it.sourceId in listOf(question, review) }.map { it.sourceId }.toSet())
+	}
+
+	@Test
+	fun `audit list detail facets and nested evidence follow the referenced work visibility`() = rolledBack {
+		val p = people()
+		val privateWork = workItems.create(CreateWorkItem("hidden audit title", p.b, visibility = "personal"), p.b).id
+		val publicWork = workItems.create(CreateWorkItem("shared audit title", p.b), p.b).id
+		sessions.audit("person", p.b, "privacy.fixture", "wrk", publicWork, mapOf("title" to "visible evidence"))
+		sessions.audit("person", p.b, "privacy.fixture", "wrk", privateWork, mapOf("title" to "private evidence"))
+		sessions.audit("person", p.b, "privacy.fixture", "wrk", publicWork,
+			mapOf("comparison" to listOf(mapOf("work_item_id" to privateWork, "quote" to "copied private evidence"))))
+		val query = AuditQuery(action = "privacy.fixture")
+		val mine = audit.list(query, facts.person(p.b))
+		assertEquals(3, mine.size)
+		val hidden = mine.filter { it.targetId == privateWork || it.details.containsKey("comparison") }
+		for (person in listOf("usr_owner", p.operator, p.outsider)) {
+			val viewer = facts.person(person)
+			assertEquals(1, audit.list(query, viewer).size)
+			assertEquals(1, audit.list(query.copy(limit = 1), viewer).size)
+			assertEquals(1L, audit.facets(query, viewer).total)
+			for (row in hidden) assertFailsWith<NotFoundException> { audit.one(row.id, viewer) }
+		}
+	}
+
+	@Test
+	fun `export uses every visibility scope and removes private versions runs events and audit copies`() = rolledBack {
+		val p = people()
+		val works = Visibility.entries.associateWith { v ->
+			workItems.create(CreateWorkItem("export work ${v.wire}", p.b, projectId = p.project, visibility = v.wire), p.b).id
+		}
+		val doc = documentWrites.register(mapOf("title" to "private export document", "source_of_truth" to "product",
+			"body_markdown" to "hidden-version-content", "visibility" to "personal"), p.b).document.id
+		val run = Ids.run()
+		jdbc.sql("insert into runs (id, work_item_id, state, end_reason, executor, instruction, account_id) values (:id, :w, 'ended', 'submitted', 'claude_code', 'hidden-run-instruction', 'acc_owner_login')")
+			.param("id", run).param("w", works.getValue(Visibility.PERSONAL)).update()
+		jdbc.sql("insert into run_events (event_id, run_id, generation, seq, kind, payload) values (:e, :r, 1, 1, 'answer', '{\"text\":\"hidden-run-answer\"}'::jsonb)")
+			.param("e", "evt_" + Ids.uuidV7()).param("r", run).update()
+		for (viewer in viewers(p)) {
+			val bundle = exports.export(viewer.person!!)
+			@Suppress("UNCHECKED_CAST")
+			val collections = bundle["collections"] as Map<String, Map<String, Any?>>
+			@Suppress("UNCHECKED_CAST")
+			val exported = (collections.getValue("work_items")["records"] as List<Map<String, Any?>>).map { it["id"] }.toSet()
+			for ((visibility, id) in works) assertEquals(PermissionRules.canSee(viewer, permissions.workItem(id)), id in exported, "${viewer.person} / $visibility")
+			val raw = bundle.toString()
+			assertEquals(viewer.person == p.b, accounts.detail("acc_owner_login", viewer.person!!).runs.any { it.id == run })
+			if (viewer.person == p.b) {
+				assertContains(raw, "hidden-version-content")
+				assertContains(raw, "hidden-run-answer")
+			} else {
+				for (hidden in listOf(doc, run, "hidden-version-content", "hidden-run-instruction", "hidden-run-answer")) assertFalse(hidden in raw, hidden)
+			}
+		}
 	}
 
 	@Test
