@@ -25,10 +25,12 @@ class QuietHandler(SimpleHTTPRequestHandler):
 def evidence_directory(path):
     """Do not create browser evidence in a potentially tracked source directory."""
     out = Path(path).resolve()
-    repo = Path(__file__).resolve().parents[2]
-    if out.is_relative_to(repo):
+    parent = next(path for path in (out, *out.parents) if path.is_dir())
+    found = subprocess.run(['git', '-C', str(parent), 'rev-parse', '--show-toplevel'], capture_output=True, text=True)
+    if found.returncode == 0:
+        repo = Path(found.stdout.strip()).resolve()
         result = subprocess.run(
-            ['git', '-C', str(repo), 'check-ignore', '--quiet', '--', str(out / 'evidence.json')],
+            ['git', '-C', str(repo), 'check-ignore', '--quiet', '--', str(out) + '/'],
             capture_output=True,
         )
         if result.returncode != 0:
@@ -172,5 +174,6 @@ if __name__ == '__main__':
         # Playwright errors may include request headers; never print the exception body.
         import traceback
         trace = traceback.extract_tb(error.__traceback__)
-        print(f'FAIL: {type(error).__name__} at {trace[-1].name}:{trace[-1].lineno}', file=sys.stderr)
+        own = next((frame for frame in reversed(trace) if Path(frame.filename).resolve() == Path(__file__).resolve()), trace[-1])
+        print(f'FAIL: {type(error).__name__} at {own.name}:{own.lineno}', file=sys.stderr)
         raise SystemExit(1)

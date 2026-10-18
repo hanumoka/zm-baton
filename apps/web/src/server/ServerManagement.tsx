@@ -6,6 +6,7 @@ import { EmptyState } from '../ui/EmptyState';
 import { RowSkeleton } from '../ui/Group';
 import { usePoll } from '../usePoll';
 import { at } from '../workModel';
+import { ApiError } from '../workApi';
 import './server.css';
 
 export function ServerManagement({ auth, onAuthChanged }: { auth: AuthState; onAuthChanged: () => void }) {
@@ -18,11 +19,20 @@ export function ServerManagement({ auth, onAuthChanged }: { auth: AuthState; onA
   const [busy, setBusy] = useState(false);
   const inFlight = useRef(false);
 
+  function report(e: unknown) {
+    setError(e instanceof Error ? e.message : String(e));
+    if (e instanceof ApiError && e.status === 403) {
+      setView(null);
+      setPeople([]);
+      onAuthChanged();
+    }
+  }
+
   usePoll(async (alive, signal) => {
     if (!auth.server_admin) return;
     const [server, org] = await Promise.all([serverApi.view(signal), orgApi.view(signal)]);
     if (alive()) { setView(server); setPeople(org.people); setError(null); }
-  }, 30000, [refresh, auth.server_admin], (e) => setError(e instanceof Error ? e.message : String(e)));
+  }, 30000, [refresh, auth.server_admin], report);
 
   const candidates = people.filter((person) => person.status === 'active' && person.id !== view?.administrator_user_id);
   const valid = candidates.some((person) => person.id === target);
@@ -38,11 +48,12 @@ export function ServerManagement({ auth, onAuthChanged }: { auth: AuthState; onA
       await serverApi.transfer(target);
       window.location.hash = 'me';
       onAuthChanged();
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    } catch (e) { report(e); }
     finally { inFlight.current = false; setBusy(false); }
   }
 
-  return <main className="me-page"><article className="dt me">
+  return <main className="me-page server-management"><article className="dt me">
+    <nav className="server-location" aria-label="현재 위치"><a href="#me">내 계정</a><span aria-current="page">서버 관리</span></nav>
     <h1 className="dt-title">서버 관리</h1>
     {!auth.server_admin ? <EmptyState kind="empty" title="서버 관리자만 볼 수 있다"><a className="btn" href="#me">내 화면으로 돌아가기</a></EmptyState> : <>
       {error && <div className="wd-refused" role="alert">{error} <button className="btn" onClick={() => setRefresh((value) => value + 1)}>다시 읽기</button></div>}
@@ -57,7 +68,7 @@ export function ServerManagement({ auth, onAuthChanged }: { auth: AuthState; onA
           <section className="dt-sec">
             <h2 className="me-h">서버 관리자 변경</h2>
             <p className="me-note">서버 관리는 한 사람이 맡는다. 조직 소유자와 구성원의 업무 역할은 바뀌지 않는다.</p>
-            <form className="wn" onSubmit={(event) => void transfer(event)}>
+            <form className="wn" aria-busy={busy} onSubmit={(event) => void transfer(event)}>
               <label className="wn-label">넘겨받을 구성원
                 <select className="field" value={target} disabled={busy || auth.mode !== 'required'} onChange={(event) => { setTarget(event.target.value); setConfirmed(false); }}>
                   <option value="">구성원 선택</option>
@@ -74,8 +85,8 @@ export function ServerManagement({ auth, onAuthChanged }: { auth: AuthState; onA
         </div><aside className="dt-aside"><section className="dt-sec">
           <h2 className="me-h">조직과 계정</h2>
           <p className="me-note">구성원과 업무 역할은 조직 화면에서 관리한다. 서버 관리자여도 개인 메모나 남의 비공개 업무를 읽을 수 있는 권한이 추가되지는 않는다.</p>
-          <a className="btn" href="#org">조직 열기</a>
-          <a className="btn" href="#me">내 계정과 기기</a>
+          <div className="wd-acts"><a className="btn" href="#org">조직 열기</a>
+          <a className="btn" href="#me">내 계정과 기기</a></div>
         </section></aside></div>
       </>}
     </>}

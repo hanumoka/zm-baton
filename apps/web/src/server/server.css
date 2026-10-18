@@ -9,6 +9,10 @@
 .server-confirm input { flex: none; margin-top: var(--s-1); }
 
 .server-setup .au-switch .btn { min-height: var(--h-ctl); }
+.server-location { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3); margin-bottom: var(--s-2); font-size: var(--fs-sm); color: var(--c-ink-2); }
+.server-location a { display: inline-flex; align-items: center; min-height: var(--h-ctl); color: var(--c-accent); text-underline-offset: var(--underline-gap); }
+.server-location [aria-current] { font-weight: var(--fw-semi); }
 @media (max-width: 600px) {
   .server-setup .btn, .server-setup .au-switch .btn, .server-setup .field { min-height: var(--h-touch); }
+  .server-management .btn, .server-management .field, .server-management .server-location a { min-height: var(--h-touch); }
 }

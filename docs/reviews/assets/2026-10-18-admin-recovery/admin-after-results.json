@@ -1,0 +1,14 @@
+{
+  "kind": "actual API on disposable restored preview",
+  "passed": [
+    "actual keyboard transfer and old administrator view removed",
+    "actual transfer 403 rereads authentication",
+    "actual view 403 rereads authentication"
+  ],
+  "expected_http_errors": [
+    403,
+    403
+  ],
+  "navigation_aborted_requests": 2,
+  "unexpected_browser_errors": 0
+}
