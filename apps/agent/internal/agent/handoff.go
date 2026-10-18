@@ -213,6 +213,17 @@ func (h *Handoff) Execute(ctx context.Context, c api.Claim, repo Repo) Result {
 // run and the master's run alike. A failed check is returned as the error ExecuteJob reports.
 func (h *Handoff) prepareExecutor(ctx context.Context, c api.Claim, job *Job, log *slog.Logger) error {
 	ready := job.Readiness
+	if h.runner.cfg.ServerWorker {
+		if c.Account == nil || c.Account.AuthMethod != AuthAPIKey || c.Account.AuthSource != "env:"+apiKeyVar {
+			return ready.Fail("account", "공용 서버 실행은 명시한 API 키 계정만 사용한다. 개인 구독 로그인으로 대신 실행하지 않는다", nil)
+		}
+		if h.runner.cfg.ExecutorDir == "" {
+			return ready.Fail("account", "공용 서버 실행에는 계정별 설정 폴더가 필요하다", nil)
+		}
+		if c.Limits == nil || c.Limits.MaxTurns <= 0 || c.Limits.MaxMinutes <= 0 || c.Limits.MaxBudgetUSD <= 0 {
+			return ready.Fail("account", "공용 서버 실행에는 턴·시간·비용 상한이 모두 필요하다", nil)
+		}
+	}
 	version, v, err := claudeVersion(ctx, h.runner.cfg.ClaudePath)
 	if err != nil {
 		return ready.Fail("executor", "Claude Code의 판을 읽지 못했다", err)

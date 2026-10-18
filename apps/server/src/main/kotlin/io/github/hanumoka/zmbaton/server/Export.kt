@@ -47,6 +47,7 @@ class ExportService(
 	private val json: ObjectMapper,
 	@Value("\${ZM_BATON_BUILD_COMMIT:unknown}") private val buildCommit: String,
 	private val access: PermissionFacts,
+	private val scope: ExportScope,
 ) {
 	companion object {
 		const val FORMAT = "zm-baton.export"
@@ -64,13 +65,7 @@ class ExportService(
 			"web_logins" to "로그인 쿠키 토큰의 해시와 로그인 기록이다. 비밀값은 내보내지 않는다(G13.3)",
 			"setup_tokens" to "한 번 쓰는 설정 토큰의 해시다. 비밀값은 내보내지 않는다(G13.3)",
 			"device_logins" to "기기 로그인 코드의 해시다. 10분 뒤 쓸모가 없고 비밀값은 내보내지 않는다(G13.3)",
-		)
-
-		/** Rows left out per table: another person's personal records (`:me` is the exporter). */
-		val PERSONAL_ROWS: Map<String, String> = mapOf(
-			"work_items" to "t.visibility = 'personal' and t.responsible_user_id is distinct from :me",
-			"decisions" to "t.visibility = 'personal' and t.owner_user_id is distinct from :me",
-			"documents" to "t.visibility = 'personal' and t.owner_user_id is distinct from :me",
+			"server_installation" to "서버 운영 권한과 초기 설정이다. 조직 업무 내보내기에는 넣지 않고 서버 백업으로 보존한다",
 		)
 
 		/** Collection name, table, order. The names are the export's, the tables the database's. */
@@ -160,24 +155,22 @@ class ExportService(
 			)
 		}.list()
 		val collections = linkedMapOf<String, Any?>()
-		// Sessions whose unshared summaries are another person's: their summaries stay out.
-		val othersPrivate = mutableSetOf<String>()
+		val otherSessions = jdbc.sql("select id from agent_sessions where user_id <> :me").param("me", exporter)
+			.query(String::class.java).list().toSet()
+		val loaded = linkedMapOf<String, List<LinkedHashMap<String, Any?>>>()
 		for ((name, table, order) in COLLECTIONS) {
 			val withheld = WITHHELD[table].orEmpty()
-			val leftOut = PERSONAL_ROWS[table]
-			// Table, order and filter come from the fixed lists above, never from input.
-			val stmt = jdbc.sql("select coalesce(json_agg(t order by $order), '[]')::text from $table t" + (leftOut?.let { " where not ($it)" } ?: ""))
-			if (leftOut != null) stmt.param("me", exporter)
+			// Table and order come from the fixed lists above, never from input.
+			val stmt = jdbc.sql("select coalesce(json_agg(t order by $order), '[]')::text from $table t")
 			val raw = stmt.query(String::class.java).single()
 			val records = json.readValue(raw, rowsType).onEach { row ->
 				withheld.forEach { row.remove(it) }
 				if (table == "work_items" || table == "decisions") row["source"] = source(row)
 				if (table == "agent_sessions" && row["current_work_visibility"] == "personal" && row["user_id"] != exporter) {
-					othersPrivate += row["id"] as String
 					row["current_work"] = null
 					row["current_work_refs"] = null
 				}
-				if (table == "session_events" && row["kind"] == "current_work" && row["session_id"] in othersPrivate) {
+				if (table == "session_events" && row["kind"] == "current_work" && row["session_id"] in otherSessions) {
 					@Suppress("UNCHECKED_CAST")
 					val payload = row["payload"] as? MutableMap<String, Any?>
 					if (payload?.get("share") == false) {
@@ -186,6 +179,11 @@ class ExportService(
 					}
 				}
 			}
+			loaded[table] = records
+		}
+		val readable = scope.apply(exporter, loaded)
+		for ((name, table) in COLLECTIONS) {
+			val records = readable.getValue(table)
 			collections[name] = linkedMapOf(
 				"table" to table,
 				"source_of_truth" to if (table == "work_items" || table == "decisions") "per record: source" else "zm-baton",
@@ -209,8 +207,8 @@ class ExportService(
 					"organization" to access.orgOf(exporter),
 					"people" to jdbc.sql("select user_id from memberships where org_id = :org order by created_at, user_id")
 						.param("org", access.orgOf(exporter)).query(String::class.java).list(),
-					"note" to "내보낸 사람이 운영자 역할로 내보냈다. 개인 범위 기록은 그 사람 것만 담고, 매니저 기록의 개인 메모는 담지 않는다" +
-						"(DEC-0103). 1단계 서버는 이 PC(127.0.0.1)에서만 받는다",
+					"note" to "내보낸 사람이 읽을 수 있는 범위만 담는다. 숨긴 기록에 연결된 실행·문서판·승인·이력도 제외한다. " +
+						"남의 첫 화면 항목과 비공개 세션 요약, 매니저 개인 메모는 담지 않는다. 전체 복구에는 DB 백업을 사용한다",
 				),
 				"source_of_truth" to "zm-baton 서버의 데이터베이스. 작업과 결정은 기록마다 source 칸이 정본 위치를 적는다. " +
 					"source.of_truth가 git이면 그 저장소·파일·커밋의 Git 파일이 정본이고 이 기록은 가져온 복사본이다",

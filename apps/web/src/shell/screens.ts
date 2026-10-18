@@ -6,7 +6,7 @@ import type { IconName } from '../icons/Icon';
  * address (#inbox, #work, ...) so a reload stays on the same screen.
  */
 
-export type ScreenId = 'inbox' | 'sessions' | 'work' | 'decisions' | 'documents' | 'risk' | 'runs' | 'me' | 'org' | 'accounts' | 'audit' | 'kit';
+export type ScreenId = 'inbox' | 'sessions' | 'work' | 'decisions' | 'documents' | 'risk' | 'runs' | 'me' | 'org' | 'accounts' | 'audit' | 'kit' | 'server';
 
 export type Screen = {
   id: ScreenId;
@@ -44,6 +44,7 @@ export const SCREENS: Screen[] = [
   // The icon set is at its 30-icon limit (DESIGN.md 「정한 것 넷」 2), so the audit log borrows the settings mark of its place.
   { id: 'audit', label: '감사 기록', short: '감사', icon: 'settings', aliases: ['감사', '보존', '내보내기', 'audit', 'export'], inNav: true },
   { id: 'kit', label: '디자인 키트', short: '키트', icon: 'doc', aliases: [], inNav: false },
+  { id: 'server', label: '서버 관리', short: '서버', icon: 'settings', aliases: [], inNav: false },
 ];
 
 /**

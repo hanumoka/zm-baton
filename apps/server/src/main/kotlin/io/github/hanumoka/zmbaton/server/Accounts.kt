@@ -4,7 +4,10 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import io.github.hanumoka.zmbaton.server.auth.Requester
 import io.github.hanumoka.zmbaton.server.permission.Act
 import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.PermissionRules
 import io.github.hanumoka.zmbaton.server.permission.Permissions
+import io.github.hanumoka.zmbaton.server.permission.RecordVisibility
+import io.github.hanumoka.zmbaton.server.permission.ScopeColumns
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpStatus
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -128,6 +131,7 @@ class AccountService(
 	private val usage: UsageService,
 	private val sessions: SessionService,
 	private val access: PermissionFacts,
+	private val visibility: RecordVisibility,
 ) {
 	companion object {
 		val AUTH_KINDS = setOf("personal_subscription", "org_account", "api_key")
@@ -161,16 +165,21 @@ class AccountService(
 		jdbc.sql("$SELECT where a.id = :id").param("id", id).query { rs, _ -> view(rs, usage.now()) }.optional()
 			.orElseThrow { NotFoundException("no AI account $id") }
 
-	fun detail(id: String): AccountDetail {
+	fun detail(id: String, viewer: String): AccountDetail {
 		val account = get(id)
-		val runs = jdbc.sql(
+		val actor = access.person(viewer)
+		val scope = PermissionRules.filter(actor, ScopeColumns.WORK_ITEMS)
+		val reader = visibility.reader(actor)
+		val statement = jdbc.sql(
 			"""
 			select r.id, r.work_item_id, w.title, r.state, r.end_reason, r.created_at, (r.usage ->> 'cost_usd')::numeric,
 			       (r.usage ->> 'num_turns')::numeric, r.stopped_by, r.auth_method
 			  from runs r join work_items w on w.id = r.work_item_id
-			 where r.account_id = :id order by r.created_at desc, r.id desc limit 20
+			 where r.account_id = :id and (${scope.sql}) order by r.created_at desc, r.id desc limit 20
 			""".trimIndent(),
-		).param("id", id).query { rs, _ ->
+		).param("id", id)
+		scope.params.forEach { (key, value) -> statement.param(key, value) }
+		val runs = statement.query { rs, _ ->
 			AccountRunView(
 				rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5),
 				rs.getObject(6, OffsetDateTime::class.java), rs.getBigDecimal(7)?.toDouble(), rs.getBigDecimal(8)?.toLong(),
@@ -180,12 +189,12 @@ class AccountService(
 		val history = jdbc.sql(
 			"""
 			select action, actor_kind, actor_id, details::text, at from audit_log
-			 where target_kind = 'acc' and target_id = :id order by at desc, id desc limit 30
+			 where target_kind = 'acc' and target_id = :id order by at desc, id desc
 			""".trimIndent(),
 		).param("id", id).query { rs, _ ->
 			HistoryEntry(rs.getString(1), rs.getString(2), rs.getString(3), json.readValue(rs.getString(4), mapType),
 				rs.getObject(5, OffsetDateTime::class.java))
-		}.list()
+		}.stream().use { rows -> rows.filter { reader.allows(it.details) }.limit(30).toList() }
 		return AccountDetail(account, usage.daily(id, 7), runs, actions(account), history)
 	}
 
@@ -235,7 +244,7 @@ class AccountService(
 			.param("daily", limits.dailyCostLimitUsd).update()
 		audit(id, "account.registered", mapOf("name" to name, "auth_kind" to kind, "affiliation" to affiliation, "auth_source" to source,
 			"device_id" to device, "limits" to limits), actor)
-		return detail(id)
+		return detail(id, actor)
 	}
 
 	/**
@@ -270,7 +279,7 @@ class AccountService(
 		changes.forEach { (k, v) -> stmt.param(k, v) }
 		stmt.update()
 		audit(id, "account.updated", changes.mapValues { it.value?.toString() }, actor)
-		return detail(id)
+		return detail(id, actor)
 	}
 
 	/** Disabling keeps the account and its history; no new run is handed to it. Runs already going on go on. */
@@ -280,7 +289,7 @@ class AccountService(
 		if (current.status == "disabled") throw ConflictException("이미 비활성화한 계정이다")
 		jdbc.sql("update ai_accounts set status = 'disabled', version = version + 1, updated_at = now() where id = :id").param("id", id).update()
 		audit(id, "account.disabled", mapOf("from" to current.status), actor)
-		return detail(id)
+		return detail(id, actor)
 	}
 
 	@Transactional
@@ -290,7 +299,7 @@ class AccountService(
 		jdbc.sql("update ai_accounts set status = 'ready', limit_resets_at = null, version = version + 1, updated_at = now() where id = :id")
 			.param("id", id).update()
 		audit(id, "account.enabled", emptyMap(), actor)
-		return detail(id)
+		return detail(id, actor)
 	}
 
 	/**
@@ -306,7 +315,7 @@ class AccountService(
 		).param("id", id).update()
 		if (cleared == 0) throw ConflictException("추가 과금 신호로 멈춘 계정이 아니다")
 		audit(id, "account.billing_resumed", emptyMap(), actor)
-		return detail(id)
+		return detail(id, actor)
 	}
 
 	/**
@@ -464,7 +473,7 @@ class AccountController(private val accounts: AccountService, private val usage:
 	fun detail(@PathVariable id: String, @RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): AccountDetail {
 		val me = permissions.person(authorization, "read an AI account")
 		permissions.see(me, permissions.account(id))
-		return accounts.detail(id)
+		return accounts.detail(id, me.person!!)
 	}
 
 	@PostMapping("/ai-accounts")

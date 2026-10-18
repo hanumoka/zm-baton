@@ -1,6 +1,9 @@
 package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.permission.Actor
+import io.github.hanumoka.zmbaton.server.permission.PermissionRules
+import io.github.hanumoka.zmbaton.server.permission.ScopeColumns
 import org.springframework.jdbc.core.simple.JdbcClient
 import org.springframework.stereotype.Service
 import tools.jackson.core.type.TypeReference
@@ -331,7 +334,9 @@ class ContradictionMaterial(private val jdbc: JdbcClient, private val json: Obje
 	 * by full-text rank; an item that shares no word with the subjects is not taken. A document is
 	 * compared as its newest approved version with a body.
 	 */
-	fun compare(subjects: List<CheckSubjectRow>, limit: Int, textMax: Int): List<MaterialItem> {
+	fun compare(subjects: List<CheckSubjectRow>, limit: Int, textMax: Int, viewer: Actor): List<MaterialItem> {
+		val docs = PermissionRules.filter(viewer, ScopeColumns.DOCUMENTS)
+		val decisions = PermissionRules.filter(viewer, ScopeColumns.DECISIONS)
 		val projects = subjects.flatMap { it.projectIds }.distinct()
 		val linkedDocs = subjects.flatMap { it.linkedDocuments }.distinct()
 		val linkedDecisions = subjects.flatMap { it.linkedDecisions }.distinct()
@@ -339,7 +344,7 @@ class ContradictionMaterial(private val jdbc: JdbcClient, private val json: Obje
 		val excludeDecisions = (subjects.filter { it.kind == "decision" }.map { it.id } + subjects.mapNotNull { it.supersedesId }).distinct()
 		val query = ContradictionPrompt.searchQuery(subjects.joinToString("\n") { "${it.title}\n${it.text.orEmpty()}" })
 		data class Hit(val kind: String, val id: String, val linked: Boolean)
-		val hits = jdbc.sql(
+		val statement = jdbc.sql(
 			"""
 			with q as (select case when :query = '' then null else to_tsquery('simple', :query) end as q),
 			pool as (
@@ -350,6 +355,7 @@ class ContradictionMaterial(private val jdbc: JdbcClient, private val json: Obje
 			                   where doc_id = d.id and approved_by is not null and body_markdown is not null
 			                   order by number desc limit 1) v on true
 			   where d.org_id = :org and not (d.id = any(string_to_array(:excludeDocs, ',')))
+			     and ${docs.sql}
 			     and (not cast(:scoped as boolean) or d.project_id = any(string_to_array(:projects, ','))
 			          or d.id = any(string_to_array(:linkedDocs, ',')))
 			  union all
@@ -359,6 +365,7 @@ class ContradictionMaterial(private val jdbc: JdbcClient, private val json: Obje
 			         x.id = any(string_to_array(:linkedDecisions, ','))
 			    from decisions x
 			   where x.org_id = :org and x.status = 'accepted' and not (x.id = any(string_to_array(:excludeDecisions, ',')))
+			     and exists (select 1 from decisions d where d.id = x.id and ${decisions.sql})
 			     and (not cast(:scoped as boolean)
 			          or exists (select 1 from decision_projects dp where dp.decision_id = x.id and dp.project_id = any(string_to_array(:projects, ',')))
 			          or x.id = any(string_to_array(:linkedDecisions, ',')))
@@ -373,7 +380,8 @@ class ContradictionMaterial(private val jdbc: JdbcClient, private val json: Obje
 			.param("projects", projects.joinToString(",")).param("linkedDocs", linkedDocs.joinToString(","))
 			.param("linkedDecisions", linkedDecisions.joinToString(",")).param("excludeDocs", excludeDocs.joinToString(","))
 			.param("excludeDecisions", excludeDecisions.joinToString(",")).param("limit", limit)
-			.query { rs, _ -> Hit(rs.getString(1), rs.getString(2), rs.getBoolean(3)) }.list()
+		(docs.params + decisions.params).forEach { (key, value) -> statement.param(key, value) }
+		val hits = statement.query { rs, _ -> Hit(rs.getString(1), rs.getString(2), rs.getBoolean(3)) }.list()
 		return hits.mapIndexedNotNull { i, h ->
 			val key = "C${i + 1}"
 			if (h.kind == "document") documentItem(key, h.id, h.linked, textMax) else decisionItem(key, h.id, h.linked, textMax)

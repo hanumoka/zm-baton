@@ -35,6 +35,7 @@ class RunService(
 	private val usage: UsageService,
 	/** The master's own run limits, narrower than an account's (MasterChecks.kt). */
 	private val master: MasterSettings,
+	private val masterAccess: MasterAccess,
 	transactions: PlatformTransactionManager,
 	/** Contract "실행 권리 청구" 6: how long a lapsed lease may stay silent before the run is lost. */
 	@Value("\${zm-baton.run-lost-grace-seconds:300}") private val lostGraceSeconds: Long,
@@ -131,6 +132,9 @@ class RunService(
 	 */
 	fun claim(runId: String, deviceId: String): Claimed {
 		if (deviceId.isBlank()) throw BadRequestException("device_id is required")
+		if (tx.execute { masterAccess.refuseClaim(runId, deviceId.trim()) } == true) {
+			throw ConflictException("자동 검사 원본의 열람 권한이 바뀌어 실행하지 않았다")
+		}
 		val refused = tx.execute { usage.refuseClaim(runId, deviceId.trim()) }
 		if (refused != null) throw ConflictException(refused)
 		return tx.execute { claimNow(runId, deviceId) }!!

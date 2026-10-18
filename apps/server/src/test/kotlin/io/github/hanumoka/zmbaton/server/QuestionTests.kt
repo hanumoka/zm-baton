@@ -39,6 +39,7 @@ class QuestionTests @Autowired constructor(
 	private val sessions: SessionService,
 	private val questions: QuestionService,
 	private val documents: DocumentWriteService,
+	private val org: OrgService,
 	private val jdbc: JdbcClient,
 ) {
 	private val base = "http://localhost:" + env.getRequiredProperty("local.server.port")
@@ -134,12 +135,13 @@ class QuestionTests @Autowired constructor(
 			mapOf("title" to "보존 정책", "source_of_truth" to "product", "body_markdown" to "30일 보관한다", "work_item_ids" to listOf(s.workId)),
 			"usr_owner",
 		).document.id
-		jdbc.sql("update documents set owner_user_id = 'usr_policy' where id = :id").param("id", doc).update()
+		val policyOwner = org.addPerson("usr_owner", PersonIn("정책 책임자", listOf("assignee")))
+		jdbc.sql("update documents set owner_user_id = :owner where id = :id").param("owner", policyOwner).param("id", doc).update()
 		ask(s.workId, kind = "interpretation")
 		val q = only(s.workId)
 		assertEquals("document_owner", q.routedRole)
-		assertEquals("usr_policy", q.routedToId)
-		assertEquals("usr_policy", openItems(q.id).single().user) // it waits for that person, not the owner
+		assertEquals(policyOwner, q.routedToId)
+		assertEquals(policyOwner, openItems(q.id).single().user) // it waits for that person, not the owner
 
 		val approval = setup()
 		ask(approval.workId, "이 정책 예외를 허락하나?", kind = "approval")

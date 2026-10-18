@@ -1,0 +1,78 @@
+{
+  "kind": "synthetic UI responses, no real backend",
+  "before": [
+    {
+      "case": "normal",
+      "passed": true,
+      "expected_http_errors": [],
+      "intentional_network_failures": 0,
+      "unexpected_browser_errors": 0
+    }
+  ],
+  "after": [
+    {
+      "case": "normal",
+      "passed": true,
+      "expected_http_errors": [],
+      "intentional_network_failures": 0,
+      "unexpected_browser_errors": 0
+    },
+    {
+      "case": "long_names",
+      "passed": true,
+      "expected_http_errors": [],
+      "intentional_network_failures": 0,
+      "unexpected_browser_errors": 0
+    },
+    {
+      "case": "retry",
+      "passed": true,
+      "expected_http_errors": [
+        500
+      ],
+      "intentional_network_failures": 0,
+      "unexpected_browser_errors": 0
+    },
+    {
+      "case": "offline",
+      "passed": true,
+      "expected_http_errors": [],
+      "intentional_network_failures": 1,
+      "unexpected_browser_errors": 0
+    },
+    {
+      "case": "submit_409",
+      "passed": true,
+      "expected_http_errors": [
+        409
+      ],
+      "intentional_network_failures": 0,
+      "unexpected_browser_errors": 0
+    },
+    {
+      "case": "submit_403",
+      "passed": true,
+      "expected_http_errors": [
+        403
+      ],
+      "intentional_network_failures": 0,
+      "unexpected_browser_errors": 0
+    },
+    {
+      "case": "load_403",
+      "passed": true,
+      "expected_http_errors": [
+        403
+      ],
+      "intentional_network_failures": 0,
+      "unexpected_browser_errors": 0
+    },
+    {
+      "case": "already_initialized",
+      "passed": true,
+      "expected_http_errors": [],
+      "intentional_network_failures": 0,
+      "unexpected_browser_errors": 0
+    }
+  ]
+}

@@ -2,6 +2,8 @@ package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Actor
+import io.github.hanumoka.zmbaton.server.permission.RecordVisibility
 import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -74,7 +76,7 @@ data class AuditQuery(
 )
 
 @Service
-class AuditService(private val jdbc: JdbcClient, private val json: ObjectMapper) {
+class AuditService(private val jdbc: JdbcClient, private val json: ObjectMapper, private val visibility: RecordVisibility) {
 
 	companion object {
 		const val DEFAULT_LIMIT = 100
@@ -92,7 +94,10 @@ class AuditService(private val jdbc: JdbcClient, private val json: ObjectMapper)
 	private val mapType = object : TypeReference<Map<String, Any?>>() {}
 
 	/** Newest first. Rows of one transaction share `at`, so the id breaks ties and pages stay stable. */
-	fun list(q: AuditQuery): List<AuditEntry> {
+	fun list(q: AuditQuery, viewer: Actor? = null): List<AuditEntry> =
+		rows(q, viewer, q.limit.coerceIn(1, MAX_LIMIT))
+
+	private fun rows(q: AuditQuery, viewer: Actor?, limit: Int): List<AuditEntry> {
 		val (where, params) = conditions(q)
 		val stmt = jdbc.sql(
 			"""
@@ -102,21 +107,31 @@ class AuditService(private val jdbc: JdbcClient, private val json: ObjectMapper)
 			         when 'mck' then (select c.work_item_id from master_checks c where c.id = a.target_id)
 			       end
 			  from audit_log a where ${where.joinToString(" and ")}
-			 order by a.at desc, a.id desc limit :limit
+			 order by a.at desc, a.id desc
 			""".trimIndent(),
-		).param("limit", q.limit.coerceIn(1, MAX_LIMIT))
+		)
 		params.forEach { (k, v) -> stmt.param(k, v) }
-		return stmt.query { rs, _ -> entry(rs) }.list()
+		val reader = viewer?.let { visibility.reader(it) }
+		return stmt.query { rs, _ -> entry(rs) }.stream().use { stream ->
+			stream.filter { row -> reader == null || reader.allows(listOf(row.actorId, row.targetId, row.targetWorkItemId, row.details)) }
+				.limit(limit.toLong()).toList()
+		}
 	}
 
 	/** One row by its id, for a screen opened on a row that is not on the page it read. */
-	fun one(id: String): AuditEntry = list(AuditQuery(limit = 1, id = id)).firstOrNull() ?: throw NotFoundException("no audit row $id")
+	fun one(id: String, viewer: Actor? = null): AuditEntry = list(AuditQuery(limit = 1, id = id), viewer).firstOrNull() ?: throw NotFoundException("no audit row $id")
 
 	/**
 	 * The counts of the screen's chips: each actor class under the other filters but not the actor
 	 * class, each target kind under the other filters but not the target kind, and the total.
 	 */
-	fun facets(q: AuditQuery): AuditFacets {
+	fun facets(q: AuditQuery, viewer: Actor? = null): AuditFacets {
+		if (viewer != null) {
+			val classes = rows(q.copy(actorClass = null), viewer, Int.MAX_VALUE).groupingBy { it.actorClass }.eachCount()
+			val kinds = rows(q.copy(targetKind = null), viewer, Int.MAX_VALUE).groupingBy { it.targetKind ?: "none" }.eachCount()
+			return AuditFacets(rows(q, viewer, Int.MAX_VALUE).size.toLong(),
+				ACTOR_CLASSES.associateWith { (classes[it] ?: 0).toLong() }, kinds.mapValues { it.value.toLong() })
+		}
 		fun counts(query: AuditQuery, column: String): Map<String, Long> {
 			val (where, params) = conditions(query)
 			val stmt = jdbc.sql(
@@ -225,8 +240,8 @@ class AuditController(private val audit: AuditService, private val permissions: 
 		@RequestParam(name = "actor_class", required = false) actorClass: String?,
 		@RequestParam(required = false) after: String?,
 	): List<AuditEntry> {
-		permissions.person(authorization, "read the audit log", Act.AUDIT_READ)
-		return audit.list(AuditQuery(targetKind, targetId, actorKind, actorId, action, before, limit, actorClass, after))
+		val me = permissions.person(authorization, "read the audit log", Act.AUDIT_READ)
+		return audit.list(AuditQuery(targetKind, targetId, actorKind, actorId, action, before, limit, actorClass, after), me)
 	}
 
 	/** `GET /api/audit/facets?after=…&actor_class=…&target_kind=…`: the counts the audit screen's chips show. */
@@ -238,13 +253,13 @@ class AuditController(private val audit: AuditService, private val permissions: 
 		@RequestParam(name = "actor_class", required = false) actorClass: String?,
 		@RequestParam(required = false) after: String?,
 	): AuditFacets {
-		permissions.person(authorization, "read the audit log", Act.AUDIT_READ)
-		return audit.facets(AuditQuery(targetKind = targetKind, targetId = targetId, actorClass = actorClass, after = after))
+		val me = permissions.person(authorization, "read the audit log", Act.AUDIT_READ)
+		return audit.facets(AuditQuery(targetKind = targetKind, targetId = targetId, actorClass = actorClass, after = after), me)
 	}
 
 	@GetMapping("/audit/{id}")
 	fun one(@PathVariable id: String, @RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): AuditEntry {
-		permissions.person(authorization, "read the audit log", Act.AUDIT_READ)
-		return audit.one(id)
+		val me = permissions.person(authorization, "read the audit log", Act.AUDIT_READ)
+		return audit.one(id, me)
 	}
 }

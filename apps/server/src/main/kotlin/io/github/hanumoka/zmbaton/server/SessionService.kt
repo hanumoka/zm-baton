@@ -284,6 +284,18 @@ class SessionService(
 		return ended.size
 	}
 
+	/** Revokes every session credential, including legacy registrations without a current device. */
+	@Transactional
+	fun endForPerson(person: String): Int {
+		val ended = jdbc.sql("update agent_sessions set ended_at = now() where user_id = :person and ended_at is null and deregistered_at is null returning id")
+			.param("person", person).query(String::class.java).list()
+		for (id in ended) {
+			closeWaits(id!!)
+			audit("system", SYSTEM_ACTOR, "session.ended", "ses", id, mapOf("reason" to "person_inactive"))
+		}
+		return ended.size
+	}
+
 	private fun apply(session: SessionRow, seq: Long, kind: String, payload: Map<String, Any?>) {
 		when (kind) {
 			// Only a newer summary replaces the current one. Each summary carries its own sharing
@@ -485,7 +497,7 @@ class SessionService(
 
 	/**
 	 * [sessionId] is the session whose report revealed the conflict: the actor of the audit row. The
-	 * people of both sessions receive the notice; its one first-screen item goes to the first of them.
+	 * people of both sessions receive their own first-screen item for the shared notice.
 	 */
 	private fun raiseConflict(dedupeKey: String, evidence: Map<String, Any?>, summary: String, sessionId: String, recipients: List<String>) {
 		val evidenceJson = json.writeValueAsString(evidence)
@@ -522,14 +534,16 @@ class SessionService(
 			if (status != "open" && status != "resolved") return
 		}
 		// "진행 중인 내 작업과 겹친 충돌" is raised at once (DEC-0092 5).
-		jdbc.sql(
-			"""
-			insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, notify)
-			values (:id, :user, 3, 'notice', 'ntc', :notice, :summary, cast(:detail as jsonb), 'immediate')
-			on conflict (source_id) where state = 'open' and kind = 'notice' do nothing
-			""".trimIndent(),
-		).param("id", Ids.inbox()).param("user", recipients.first()).param("notice", noticeId).param("summary", summary)
-			.param("detail", evidenceJson).update()
+		for (recipient in recipients.distinct()) {
+			jdbc.sql(
+				"""
+				insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, notify)
+				values (:id, :user, 3, 'notice', 'ntc', :notice, :summary, cast(:detail as jsonb), 'immediate')
+				on conflict (source_id, user_id) where state = 'open' and kind = 'notice' do nothing
+				""".trimIndent(),
+			).param("id", Ids.inbox()).param("user", recipient).param("notice", noticeId).param("summary", summary)
+				.param("detail", evidenceJson).update()
+		}
 	}
 
 	/** What an audit row keeps of a conflict: the file and the sessions, not the branch names or times. */

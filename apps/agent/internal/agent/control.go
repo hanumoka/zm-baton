@@ -127,7 +127,7 @@ func (c *control) renew(ctx context.Context) bool {
 		c.disabled = true
 		c.mu.Unlock()
 		return false
-	case errors.Is(err, api.ErrGone):
+	case errors.Is(err, api.ErrGone), errors.Is(err, api.ErrUnauthorized):
 		c.log.Warn("the server no longer holds this run for this device; stopping the executor")
 		c.requestStop(stopGone)
 		return false

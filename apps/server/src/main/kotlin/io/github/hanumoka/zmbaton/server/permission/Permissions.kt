@@ -160,7 +160,17 @@ class PermissionFacts(private val jdbc: JdbcClient) {
 					"wrk", id, rs.getString(1), Visibility.stored(rs.getString(2)), rs.getString(3), setOfNotNull(rs.getString(4)),
 					projects, teamsOf(projects), "no work item $id",
 				)
-			}.optional().orElse(null)
+			}.optional().orElse(null)?.let { work ->
+				val sources = jdbc.sql("select source.kind, source.id from master_checks mc cross join lateral (${MasterVisibility.REFERENCES}) source where mc.work_item_id = :id")
+					.param("id", id).query { rs, _ -> rs.getString(1) to rs.getString(2) }.list().distinct()
+				work.copy(requiredParents = sources.map { (kind, source) ->
+					when (kind) {
+						"doc" -> source?.let { document(it) }
+						"dcs" -> source?.let { decision(it) }
+						else -> null
+					} ?: Target("missing", source ?: "unknown", "", Visibility.PERSONAL)
+				})
+			}
 
 	fun decision(id: String): Target? =
 		jdbc.sql(
@@ -204,7 +214,7 @@ class PermissionFacts(private val jdbc: JdbcClient) {
 		val work = workItem(row.workItemId) ?: return null
 		return work.copy(
 			kind = "qst", id = id, visibility = Visibility.stored(row.visibility), owner = row.routed ?: work.owner,
-			people = work.people + setOfNotNull(work.owner, row.asker), missing = "no question $id",
+			people = work.people + setOfNotNull(work.owner, row.asker), missing = "no question $id", requiredParents = listOf(work),
 		)
 	}
 
@@ -218,7 +228,7 @@ class PermissionFacts(private val jdbc: JdbcClient) {
 		val projects = setOfNotNull(row.project) + work?.projects.orEmpty()
 		return Target(
 			"rvw", id, row.org, work?.visibility ?: Visibility.ORG, row.recipient, work?.let { it.people + setOfNotNull(it.owner) }.orEmpty(),
-			projects, teamsOf(projects), "no review $id",
+			projects, teamsOf(projects), "no review $id", requiredParents = listOfNotNull(work),
 		)
 	}
 
@@ -228,8 +238,17 @@ class PermissionFacts(private val jdbc: JdbcClient) {
 
 	/** A first-screen item is its person's own. */
 	fun inboxItem(id: String): Target? =
-		jdbc.sql("select user_id from inbox_items where id = :id").param("id", id).query(String::class.java).optional().orElse(null)
-			?.let { user -> Target("inb", id, orgOfOrNull(user) ?: "", Visibility.PERSONAL, user, missing = "no first-screen item $id") }
+		jdbc.sql("select user_id, source_kind, source_id from inbox_items where id = :id").param("id", id)
+			.query { rs, _ -> Triple(rs.getString(1), rs.getString(2), rs.getString(3)) }.optional().orElse(null)
+			?.let { (user, kind, source) ->
+				val parent = when (kind) {
+					"qst" -> question(source)
+					"rvw" -> review(source)
+					else -> null
+				}
+				if (kind in setOf("qst", "rvw") && parent == null) null else Target("inb", id, orgOfOrNull(user) ?: "", Visibility.PERSONAL, user, missing = "no first-screen item $id",
+					requiredParents = listOfNotNull(parent))
+			}
 
 	/** A notice concerns its recipients, in their organisation. */
 	fun notice(id: String): Target? =

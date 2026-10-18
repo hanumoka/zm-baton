@@ -1,5 +1,9 @@
 package io.github.hanumoka.zmbaton.server
 
+import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Permissions
+
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
@@ -43,6 +47,9 @@ class MasterCheckTests @Autowired constructor(
 	private val settings: MasterSettings,
 	transactions: PlatformTransactionManager,
 	private val org: OrgService,
+	private val facts: PermissionFacts,
+	private val people: PersonService,
+	private val permissions: Permissions,
 ) {
 	private val base = "http://localhost:" + env.getRequiredProperty("local.server.port")
 	private val http = HttpClient.newHttpClient()
@@ -160,8 +167,8 @@ class MasterCheckTests @Autowired constructor(
 		val notice = ((checkFor(versionId(b))["outcome"] as Map<*, *>)["notice_ids"] as List<*>).single() as String
 		val recipients = jdbc.sql("select array_to_string(recipients, ',') from notices where id = :id").param("id", notice).query(String::class.java).single()
 		assertEquals(setOf(other, "usr_owner"), recipients.split(',').toSet(), "the owners of both documents")
-		assertEquals(other, jdbc.sql("select user_id from inbox_items where source_id = :id").param("id", notice).query(String::class.java).single(),
-			"the first-screen item goes to the subject's owner")
+		assertEquals(setOf(other, "usr_owner"), jdbc.sql("select user_id from inbox_items where source_id = :id").param("id", notice).query(String::class.java).list().toSet(),
+			"both record owners receive an inbox item")
 		assertTrue(a.isNotEmpty())
 	}
 
@@ -273,6 +280,8 @@ class MasterCheckTests @Autowired constructor(
 		checks.sweep()
 		val notice = ((checkFor(versionId(b))["outcome"] as Map<*, *>)["notice_ids"] as List<*>).single() as String
 		ok("POST", "/api/notices/$notice/status", mapOf("status" to "resolved"))
+		val newOwner = org.addPerson("usr_owner", PersonIn("new document owner", listOf("requester", "assignee")))
+		jdbc.sql("update documents set owner_user_id = :owner where id = :id").param("owner", newOwner).param("id", a).update()
 		ok("POST", "/api/documents/$b/versions", mapOf("based_on" to 1, "body_markdown" to "# 정책\n\n감사 기록은 감사 보존 30일 뒤 지운다.\n다시 쓴 판."))
 		ok("POST", "/api/documents/$b/versions/2/approvals", mapOf("decision" to "approved"))
 		answer(checkFor(versionId(b, 2))["run_id"] as String, text)
@@ -281,6 +290,15 @@ class MasterCheckTests @Autowired constructor(
 		assertTrue(list("/api/inbox").any { it["source_id"] == notice })
 		val open = ok("GET", "/api/contradictions?about=$a")["open"] as List<*>
 		assertEquals(listOf(notice), open.map { (it as Map<*, *>)["id"] })
+		assertEquals(1, people.inbox(newOwner).count { it.sourceId == notice })
+		val recipients = jdbc.sql("select array_to_string(recipients, ',') from notices where id = :id")
+			.param("id", notice).query(String::class.java).single().split(',')
+		assertEquals(setOf("usr_owner", newOwner), recipients.toSet())
+		assertEquals(2, recipients.size)
+		permissions.require(facts.person(newOwner), Act.NOTICE_JUDGE, permissions.notice(notice))
+		people.judgeNotice(notice, NoticeStatusIn("resolved"), newOwner)
+		assertTrue(people.inbox(newOwner).none { it.sourceId == notice })
+		assertTrue(people.inbox("usr_owner").none { it.sourceId == notice })
 	}
 
 	@Test
@@ -361,7 +379,7 @@ class MasterCheckTests @Autowired constructor(
 		}
 		val made = mutableListOf<String>()
 		try {
-			subjects.forEach { v -> made += tx.execute { checks.request(ContradictionTrigger("document_version_approved", listOf(CheckSubject("document_version", v)))) }!! }
+			subjects.forEach { v -> made += tx.execute { checks.request(ContradictionTrigger("document_version_approved", listOf(CheckSubject("document_version", v)))) } }
 			limitReached(made)
 		} finally {
 			// The other tests of this class need today's room back; the checks' runs and work items stay.
@@ -379,7 +397,7 @@ class MasterCheckTests @Autowired constructor(
 		val git = ok("POST", "/api/documents", mapOf("title" to "Git 문서", "source_of_truth" to "git",
 			"git" to mapOf("repo" to "github.com/hanumoka/zm-docs", "path" to "docs/x.md", "commit" to "0123456789abcdef0123456789abcdef01234567")))
 		val gitVersion = versionId((git["document"] as Map<*, *>)["id"] as String)
-		val g = tx.execute { checks.request(ContradictionTrigger("document_version_approved", listOf(CheckSubject("document_version", gitVersion)))) }!!
+		val g = tx.execute { checks.request(ContradictionTrigger("document_version_approved", listOf(CheckSubject("document_version", gitVersion)))) }
 		made += g
 		assertContains(jdbc.sql("select reason from master_checks where id = :id").param("id", g).query(String::class.java).single(), "본문이 이 서버에 없어")
 		assertEquals(settings.dailyLimit, checks.usedToday())
@@ -426,12 +444,31 @@ class MasterCheckTests @Autowired constructor(
 		ok("POST", "/api/decisions/$linkedId/approvals", mapOf("decision" to "approved", "version" to 0))
 		val subjectDoc = approvedDocument("배포 정책", "# 정책\n\n배포 요일은 수요일이다. 배포 창은 저녁이다.", p, listOf(linkedId))
 		val subject = material.subject("document_version", versionId(subjectDoc))!!
-		val compared = material.compare(listOf(subject), 5, 6000)
+		val compared = material.compare(listOf(subject), 5, 6000, facts.person("usr_owner"))
 		assertEquals(listOf(linkedId, near), compared.map { it.id }, compared.map { it.label }.toString())
 		assertEquals(listOf(true, false), compared.map { it.linked })
 		assertEquals(listOf("C1", "C2"), compared.map { it.key })
 		assertTrue(compared.none { it.id == otherProject || it.id == (draft["document"] as Map<*, *>)["id"] })
 		assertEquals(1, compared[1].number)
+	}
+
+	@Test
+	fun `a queued local master run refuses material whose owner narrowed its scope before the claim`() {
+		device()
+		val p = project()
+		approvedDocument("scope comparison", "scopecomparison shared reference", p)
+		val source = approvedDocument("scope subject", "scopecomparison changed reference", p)
+		val check = checkFor(versionId(source))
+		val run = check["run_id"] as String
+		val person = org.addPerson("usr_owner", PersonIn("private source owner", listOf("assignee")))
+		jdbc.sql("update documents set owner_user_id = :person, visibility = 'personal' where id = :id")
+			.param("person", person).param("id", source).update()
+		val response = call("POST", "/api/runs/$run/claim", mapOf("device_id" to deviceOf(run)))
+		assertEquals(409, response.first)
+		assertContains(response.second, "열람 권한이 바뀌어")
+		assertEquals("cancelled", jdbc.sql("select end_reason from runs where id = :id").param("id", run).query(String::class.java).single())
+		checks.sweep()
+		assertEquals("failed", checkFor(versionId(source))["state"])
 	}
 
 	@Test

@@ -78,6 +78,8 @@ data class Target(
 	val projectTeams: Set<String> = emptySet(),
 	/** What a refusal says when the actor may not even know the record exists. */
 	val missing: String = "no $kind $id",
+	/** A child carrying its parent's text cannot widen the parent's visibility. */
+	val requiredParents: List<Target> = emptyList(),
 )
 
 enum class Relation {
@@ -196,6 +198,7 @@ object PermissionRules {
 
 	/** Whether [a] may see [t]: its scope, and for a narrow scope who [a] is to it. */
 	fun canSee(a: Actor, t: Target): Boolean {
+		if (t.requiredParents.any { !canSee(a, it) }) return false
 		if (t.visibility == Visibility.PUBLIC) return true
 		if (!a.member || a.orgId != t.orgId) return false
 		return when (t.visibility) {
@@ -241,6 +244,13 @@ object PermissionRules {
 	 * records would allow (PermissionRulesTests compares the two on the same rows).
 	 */
 	fun filter(a: Actor, c: ScopeColumns): SqlFilter {
+		val own = scopeFilter(a, c)
+		if (c != ScopeColumns.WORK_ITEMS) return own
+		val sources = MasterVisibility.filter(a)
+		return SqlFilter("(${own.sql} and ${sources.sql})", own.params + sources.params)
+	}
+
+	private fun scopeFilter(a: Actor, c: ScopeColumns): SqlFilter {
 		if (!a.member || a.orgId == null) return SqlFilter("(${c.visibility} = 'public')", emptyMap())
 		val who = listOfNotNull(a.person, a.manager).ifEmpty { listOf(NONE) }
 		val involved = (listOf("${c.owner} = :pv_person") + c.people.map { "$it in (:pv_who)" }).joinToString(" or ")

@@ -507,6 +507,7 @@ class UsageService(
 			values (:id, 'usage_alert', cast(:e as jsonb), :key, array[:person])
 			on conflict (dedupe_key) do update
 			   set repeat_count = notices.repeat_count + 1, last_seen_at = now(), evidence = excluded.evidence,
+			       recipients = array(select distinct recipient from unnest(notices.recipients || excluded.recipients) as recipient order by recipient),
 			       status = 'open', status_by = null, status_at = null, status_note = null
 			returning id
 			""".trimIndent(),
@@ -517,7 +518,7 @@ class UsageService(
 			"""
 			insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, notify)
 			values (:id, :user, 5, 'notice', 'ntc', :notice, :summary, cast(:detail as jsonb), :notify)
-			on conflict (source_id) where state = 'open' and kind = 'notice' do nothing
+			on conflict (source_id, user_id) where state = 'open' and kind = 'notice' do nothing
 			""".trimIndent(),
 		).param("id", Ids.inbox()).param("user", person).param("notice", id).param("summary", summary.take(300))
 			.param("detail", evidenceJson).param("notify", if (immediate) "immediate" else "digest").update()

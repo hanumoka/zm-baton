@@ -1,0 +1,3 @@
+=== RUN   TestServerWorkerRevocationExitsWithoutRestartableStatus
+--- PASS: TestServerWorkerRevocationExitsWithoutRestartableStatus (0.03s)
+PASS

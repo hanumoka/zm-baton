@@ -1,0 +1,116 @@
+{
+  "purpose": "Filtered test evidence; excludes private paths, credentials, raw database contents and session storage",
+  "actual_ai": {
+    "server_ref": "6b320d4",
+    "worker_ref": "d93074b",
+    "credential": "owner personal subscription",
+    "steps": [
+      {
+        "step": "actual_cancel",
+        "result": "PASS",
+        "state": "ended",
+        "end_reason": "cancelled"
+      },
+      {
+        "step": "actual_resume",
+        "result": "PASS",
+        "state": "ended",
+        "end_reason": "submitted"
+      },
+      {
+        "step": "actual_resume",
+        "result": "PASS",
+        "state": "ended",
+        "end_reason": "submitted"
+      },
+      {
+        "step": "actual_resume",
+        "result": "PASS",
+        "state": "ended",
+        "end_reason": "submitted"
+      },
+      {
+        "step": "api_restart_during_actual_run",
+        "result": "PASS",
+        "state": "ended",
+        "end_reason": "submitted"
+      }
+    ]
+  },
+  "worker_restart": {
+    "server_ref": "work/preview-review-fixes (uncommitted, base 6b320d4)",
+    "worker_ref": "d93074b",
+    "credential": "owner personal subscription",
+    "result": "PASS",
+    "interrupted_run": "run_01a14e28-32cb-7933-aad2-38663776e253",
+    "lost_run": "run_01a14e28-32cb-7933-aad2-38663776e253",
+    "lost_end_reason": "lost",
+    "recovered_run": "run_01a14e2d-9afe-76a0-8ca6-e90766b52045",
+    "recovered_end_reason": "submitted"
+  },
+  "authenticated_restore": {
+    "server_commit": "d8b15a6",
+    "tables": 45,
+    "identical_tables": 45,
+    "password_hashes_preserved": true,
+    "login": true,
+    "administrator": true,
+    "setup_preserved": true,
+    "actual_ai_result_preserved": true,
+    "schema_version": "16"
+  },
+  "rollback": {
+    "passed": true,
+    "restored_schema": 14,
+    "operating_schema": 14,
+    "health": "UP",
+    "auth": "local",
+    "work_items": 26,
+    "decisions": 106,
+    "documents": 0,
+    "work_api_count": 26,
+    "method": "new volume from original cold backup and original immutable image"
+  },
+  "source_sha256": {
+    "real-lifecycle.json": "d544985946f0876ee6f5e57a66e28d327c4377aadc47676c3c1b2c2eafee9959",
+    "real-worker-recovery.json": "8a1839d6037bfea4accda03365f037ca4ac0b425cfccffbdf7fab05210f5032d",
+    "authenticated-restore-results.json": "3e5e66d4b94ab23f7d836d3ea511103da7d34da75f07d12c733c9e757b386185",
+    "rollback-results.json": "60b5f3660bab29119515299a27095b1f1b4e6b45a77c6842550e230c7a9370aa",
+    "final-preview-results.json": "af717a228b164c13f86bd1a2236db1535e1ac8b1ba8234b8aaca385d5b221a3d",
+    "final-restart-results.json": "7ac5e0b705251999e759a40071efcf0ae32cffa1a6d6e7dd5d9fff5a177be005",
+    "upgrade-preserved-counts.txt": "9feb0ab67ee8f7c7abcac2862a7738ce9843b7764d503f716f1ca74bc61a2aa3"
+  },
+  "final_browser_worker": {
+    "ref": "2d8e632",
+    "server_source": "9e2915b",
+    "web_source": "f73cb9d",
+    "worker_source": "2d8e632",
+    "credential": "owner personal subscription",
+    "web_index_sha256": "f024bdba66cb8dfe27dd40831698e56711cd7114777b41825e2cb6f59bb72fdd",
+    "work_id": "wrk_01a14e62-7ed5-706a-9746-9398058b1e71",
+    "result": "PASS",
+    "run_id": "run_01a14e62-7fa0-7388-a706-576b826bf099",
+    "end_reason": "submitted",
+    "browser_closed_during_execution": true
+  },
+  "final_restart": {
+    "ref": "2d8e632",
+    "password_login": true,
+    "server_administrator": true,
+    "setup_preserved": true,
+    "actual_result_preserved": true,
+    "run_count": 1,
+    "result": "PASS"
+  },
+  "upgrade_recheck": {
+    "from_backup_schema": 14,
+    "persisted_clone_after_upgrade": {
+      "schema": 16,
+      "work_items": 26,
+      "decisions": 106,
+      "documents": 0
+    },
+    "scope": "Rechecked preserved clone database only; initial health proof was at 6b320d4",
+    "result": "PASS"
+  }
+}

@@ -115,6 +115,7 @@ class DeviceAuthService(private val jdbc: JdbcClient, private val sessions: Sess
 	/** `zm-baton login`: a new device of [person], with its first device token. */
 	@Transactional
 	fun register(body: RegisterDevice, person: String): DeviceRegistered {
+		requireActivePerson(person)
 		val id = sessions.registerDevice(body, person).deviceId
 		return DeviceRegistered(id, issue(id, person, replaced = false))
 	}
@@ -122,6 +123,7 @@ class DeviceAuthService(private val jdbc: JdbcClient, private val sessions: Sess
 	/** A new device token for a device that has none (registered before tokens) or lost its own; the old token stops. */
 	@Transactional
 	fun rekey(deviceId: String, person: String): DeviceRegistered {
+		requireActivePerson(person)
 		val had = jdbc.sql("select token_hash is not null from devices where id = :id and revoked_at is null").param("id", deviceId)
 			.query(Boolean::class.javaObjectType).optional().orElseThrow { NotFoundException("no device $deviceId; register it with zm-baton login") }
 		return DeviceRegistered(deviceId, issue(deviceId, person, replaced = had))
@@ -207,6 +209,7 @@ class DeviceAuthService(private val jdbc: JdbcClient, private val sessions: Sess
 	/** A person approves a waiting device login. A login that names a device is approved only by that device's person. */
 	@Transactional
 	fun approve(rawCode: String, person: String): DeviceLoginView {
+		requireActivePerson(person)
 		val code = normalCode(rawCode)
 		val updated = jdbc.sql(
 			"""
@@ -251,6 +254,11 @@ class DeviceAuthService(private val jdbc: JdbcClient, private val sessions: Sess
 	 */
 	@Transactional
 	fun poll(deviceCode: String): DeviceLoginOutcome {
+		// The same lock order as deactivation: person before device/login. A login approved
+		// after this read waits for the next poll, rather than taking the locks backwards.
+		val approved = jdbc.sql("select approved_by from device_logins where device_code_hash = :hash")
+			.param("hash", Tokens.hash(deviceCode.trim())).query(String::class.java).optional().orElse(null)
+		if (approved != null && !lockActivePerson(approved)) return DeviceLoginOutcome(null, "access_denied", "the approving person is inactive")
 		data class Row(
 			val id: String, val approvedBy: String?, val denied: Boolean, val consumed: Boolean, val expired: Boolean, val tooSoon: Boolean,
 			val deviceId: String?, val name: String, val os: String?,
@@ -272,6 +280,7 @@ class DeviceAuthService(private val jdbc: JdbcClient, private val sessions: Sess
 			row.consumed -> DeviceLoginOutcome(null, "invalid_grant", "this device login was used already")
 			row.denied -> DeviceLoginOutcome(null, "access_denied", "the person denied this device login")
 			row.expired -> DeviceLoginOutcome(null, "expired_token", "the code expired; run zm-baton login again")
+			row.approvedBy != approved -> DeviceLoginOutcome(null, "authorization_pending", "approval changed; poll again")
 			row.approvedBy == null && row.tooSoon -> DeviceLoginOutcome(null, "slow_down", "poll every $POLL_SECONDS seconds")
 			row.approvedBy == null -> DeviceLoginOutcome(null, "authorization_pending", "waiting for a person to approve the code")
 			else -> {
@@ -281,6 +290,14 @@ class DeviceAuthService(private val jdbc: JdbcClient, private val sessions: Sess
 				DeviceLoginOutcome(issued, null, null)
 			}
 		}
+	}
+
+	private fun lockActivePerson(person: String): Boolean =
+		jdbc.sql("select status = 'active' from users where id = :id for update").param("id", person)
+			.query(Boolean::class.javaObjectType).optional().orElse(false)
+
+	private fun requireActivePerson(person: String) {
+		if (!lockActivePerson(person)) throw UnauthorizedException("활동 중인 구성원만 기기를 승인하거나 등록할 수 있다")
 	}
 
 	/** Sets a new token on a live device; only its hash is stored. */

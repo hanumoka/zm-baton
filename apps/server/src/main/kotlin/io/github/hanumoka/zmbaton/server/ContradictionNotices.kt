@@ -2,6 +2,8 @@ package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Actor
+import io.github.hanumoka.zmbaton.server.permission.RecordVisibility
 import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -101,7 +103,8 @@ data class MasterSettingsView(
 )
 
 @Service
-class ContradictionNotices(private val jdbc: JdbcClient, private val json: ObjectMapper, private val sessions: SessionService) {
+class ContradictionNotices(private val jdbc: JdbcClient, private val json: ObjectMapper, private val sessions: SessionService,
+	private val visibility: RecordVisibility) {
 
 	companion object {
 		const val CHECKS_SHOWN = 5
@@ -120,6 +123,7 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 			"sides" to listOf(side(c.left, c.leftQuote), side(c.right, c.rightQuote)),
 		)
 		val evidenceJson = json.writeValueAsString(evidence)
+		val recipientIds = recipients(c).distinct()
 		val key = ContradictionPrompt.dedupeKey(c)
 		val existing = jdbc.sql("select id, status from notices where dedupe_key = :key for update").param("key", key)
 			.query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional().orElse(null)
@@ -132,7 +136,7 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 				insert into notices (id, kind, evidence, dedupe_key, recipients, source_run_id)
 				values (:id, 'doc_contradiction', cast(:e as jsonb), :key, cast(:to as text[]), :run)
 				""".trimIndent(),
-			).param("id", id).param("e", evidenceJson).param("key", key).param("to", "{" + recipients(c).joinToString(",") + "}")
+			).param("id", id).param("e", evidenceJson).param("key", key).param("to", "{" + recipientIds.joinToString(",") + "}")
 				.param("run", runId).update()
 			sessions.audit("system", MasterCheckService.ACTOR, "notice.raised", "ntc", id, details)
 		} else {
@@ -141,24 +145,27 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 				"""
 				update notices
 				   set repeat_count = repeat_count + 1, last_seen_at = now(), evidence = cast(:e as jsonb), source_run_id = :run,
+				       recipients = array(select distinct recipient from unnest(notices.recipients || cast(:to as text[])) as recipient order by recipient),
 				       status = case when status = 'resolved' then 'open' else status end,
 				       status_by = case when status = 'resolved' then null else status_by end,
 				       status_at = case when status = 'resolved' then null else status_at end,
 				       status_note = case when status = 'resolved' then null else status_note end
 				 where id = :id
 				""".trimIndent(),
-			).param("e", evidenceJson).param("run", runId).param("id", id).update()
+			).param("e", evidenceJson).param("run", runId).param("id", id).param("to", "{" + recipientIds.joinToString(",") + "}").update()
 			if (existing.second == "resolved") sessions.audit("system", MasterCheckService.ACTOR, "notice.reopened", "ntc", id, details)
 			if (existing.second != "open" && existing.second != "resolved") return id
 		}
-		jdbc.sql(
-			"""
-			insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, notify)
-			values (:id, :user, 5, 'notice', 'ntc', :notice, :summary, cast(:detail as jsonb), 'digest')
-			on conflict (source_id) where state = 'open' and kind = 'notice' do nothing
-			""".trimIndent(),
-		).param("id", Ids.inbox()).param("user", recipients(c).first()).param("notice", id)
-			.param("summary", "모순 후보: ${c.left.label}, ${c.right.label}".take(300)).param("detail", evidenceJson).update()
+		for (recipient in recipientIds) {
+			jdbc.sql(
+				"""
+				insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, notify)
+				values (:id, :user, 5, 'notice', 'ntc', :notice, :summary, cast(:detail as jsonb), 'digest')
+				on conflict (source_id, user_id) where state = 'open' and kind = 'notice' do nothing
+				""".trimIndent(),
+			).param("id", Ids.inbox()).param("user", recipient).param("notice", id)
+				.param("summary", "모순 후보: ${c.left.label}, ${c.right.label}".take(300)).param("detail", evidenceJson).update()
+		}
 		return id
 	}
 
@@ -170,7 +177,7 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 	/**
 	 * The owners of the two items (contract "문서 모순 후보" 4): a document's owner, a decision's driver
 	 * when the driver is a person of the organisation, else the decision's owner (V13). With neither,
-	 * the owner of the items' organisation. The first one gets the notice's first-screen item.
+	 * the owner of the items' organisation. Each gets their own first-screen item.
 	 */
 	private fun recipients(c: Candidate): List<String> {
 		val people = listOf(c.left, c.right).mapNotNull { item ->
@@ -201,17 +208,19 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 	// ---------------------------------------------------------------- reads
 
 	/** Candidates and checks about one document (`doc_`) or decision (`dcs_`). */
-	fun about(id: String, includeClosed: Boolean): ContradictionsAbout {
+	fun about(id: String, includeClosed: Boolean, viewer: Actor? = null): ContradictionsAbout {
+		val reader = viewer?.let { visibility.reader(it) }
 		val side = json.writeValueAsString(listOf(mapOf("id" to id)))
 		val all = jdbc.sql(
 			"""
 			select n.id, n.status, n.evidence::text, n.repeat_count, n.created_at, n.last_seen_at, n.status_by, n.status_at, n.status_note,
-			       (select i.id from inbox_items i where i.source_kind = 'ntc' and i.source_id = n.id and i.state = 'open' limit 1)
+			       (select i.id from inbox_items i where i.source_kind = 'ntc' and i.source_id = n.id and i.state = 'open'
+			          and (cast(:person as text) is null or i.user_id = :person) limit 1)
 			  from notices n
 			 where n.kind = 'doc_contradiction' and n.evidence -> 'sides' @> cast(:side as jsonb)
 			 order by n.last_seen_at desc, n.id desc limit 200
 			""".trimIndent(),
-		).param("side", side).query { rs, _ -> view(rs) }.list()
+		).param("side", side).param("person", viewer?.person).query { rs, _ -> view(rs) }.list().filter { reader?.allows(it.id) != false }
 		val open = all.filter { includeClosed || it.status in setOf("open", "acknowledged") }
 		val checks = jdbc.sql(
 			"""
@@ -220,7 +229,7 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 			 order by created_at desc, id desc limit :n
 			""".trimIndent(),
 		).param("side", side).param("doc", json.writeValueAsString(listOf(mapOf("document_id" to id)))).param("n", CHECKS_SHOWN)
-			.query { rs, _ -> check(rs) }.list()
+			.query { rs, _ -> check(rs) }.list().filter { reader?.allows(it.id) != false }
 		return ContradictionsAbout(open, all.count { it.status !in setOf("open", "acknowledged") }, checks)
 	}
 
@@ -270,6 +279,7 @@ class ContradictionController(
 	private val settings: MasterSettings,
 	private val api: MasterApiSettings,
 	private val permissions: Permissions,
+	private val visibility: RecordVisibility,
 ) {
 
 	/** `GET /api/contradictions?about=doc_…` (or `dcs_…`): its open candidates and its newest checks. */
@@ -283,7 +293,7 @@ class ContradictionController(
 		val id = about.trim()
 		if (!(id.startsWith("doc_") || id.startsWith("dcs_")) || id.length > 100) throw BadRequestException("about must be a document (doc_…) or decision (dcs_…)")
 		permissions.see(me, if (id.startsWith("doc_")) permissions.document(id) else permissions.decision(id))
-		return notices.about(id, includeClosed)
+		return notices.about(id, includeClosed, me)
 	}
 
 	@GetMapping("/master-checks/{id}")
@@ -291,7 +301,8 @@ class ContradictionController(
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@org.springframework.web.bind.annotation.PathVariable id: String,
 	): MasterCheckView {
-		permissions.person(authorization, "read a master check", Act.READ)
+		val me = permissions.person(authorization, "read a master check", Act.READ)
+		if (!visibility.reader(me).allows(id)) throw NotFoundException("no master check $id")
 		return notices.check(id)
 	}
 
