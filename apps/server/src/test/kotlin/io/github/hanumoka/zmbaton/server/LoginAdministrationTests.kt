@@ -124,13 +124,26 @@ class LoginAdministrationTests @Autowired constructor(
 		val admin = owner()
 		val id = member()
 		val person = web()
-		person.takeCookie(redeem(person, issue(admin, id), id))
+		val signedIn = redeem(person, issue(admin, id), id)
+		person.takeCookie(signedIn)
+		person.csrf = person.obj(signedIn.body)["csrf_token"] as String
+		val (device, deviceToken) = person.device("member-device")
+		val registration = person.send("POST", "/api/sessions",
+			"""{"protocol_version":2,"device_id":"$device","executor":"claude_code","executor_session_id":"${UUID.randomUUID()}"}""",
+			bearer = deviceToken, signedIn = false)
+		assertEquals(201, registration.status, registration.body)
+		val session = person.obj(registration.body)["session_id"] as String
+		val sessionToken = person.obj(registration.body)["token"] as String
+		assertEquals(200, person.call("GET", "/api/sessions/$session/status-card", bearer = sessionToken, signedIn = false).first)
 		val pending = issue(admin, id)
 		assertEquals(200, admin.call("PATCH", "/api/org/people/$id", """{"status":"inactive"}""").first)
+		assertEquals(401, person.call("GET", "/api/sessions/$session/status-card", bearer = sessionToken, signedIn = false).first)
 		assertEquals(false, admin.obj(admin.call("GET", path(id)).second)["can_issue"])
 		assertEquals(409, admin.call("POST", path(id) + "/setup").first)
 		assertEquals(401, redeem(web(), pending, id).status)
 		assertEquals(200, admin.call("PATCH", "/api/org/people/$id", """{"status":"active"}""").first)
+		assertEquals(401, person.call("GET", "/api/sessions/$session/status-card", bearer = sessionToken, signedIn = false).first)
+		assertEquals(401, person.call("POST", "/api/sessions", """{"protocol_version":2,"device_id":"$device","executor":"claude_code","executor_session_id":"new"}""", bearer = deviceToken, signedIn = false).first)
 		assertEquals(401, person.call("GET", "/api/me").first)
 		assertEquals(401, redeem(web(), pending, id).status)
 		assertEquals(200, redeem(web(), issue(admin, id), id).status)

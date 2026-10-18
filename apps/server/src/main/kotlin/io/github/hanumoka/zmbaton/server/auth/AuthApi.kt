@@ -1,6 +1,7 @@
 package io.github.hanumoka.zmbaton.server.auth
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import io.github.hanumoka.zmbaton.server.admin.ServerAdministration
 import io.github.hanumoka.zmbaton.server.ConflictException
 import io.github.hanumoka.zmbaton.server.DeviceRegistered
 import io.github.hanumoka.zmbaton.server.UnauthorizedException
@@ -37,6 +38,8 @@ data class AuthState(
 	@JsonProperty("csrf_token") val csrfToken: String?,
 	/** No organisation owner has a password yet: the screen offers 「처음 비밀번호 정하기」 with the setup token from the server's log. */
 	@JsonProperty("setup_pending") val setupPending: Boolean,
+	@JsonProperty("server_admin") val serverAdmin: Boolean = false,
+	@JsonProperty("server_setup_pending") val serverSetupPending: Boolean = false,
 )
 
 data class LoginIn(val login: String, val password: String)
@@ -54,6 +57,7 @@ class AuthController(
 	private val settings: AuthSettings,
 	private val jdbc: JdbcClient,
 	private val requester: Requester,
+	private val administration: ServerAdministration,
 ) {
 
 	@Access(AccessKind.PUBLIC)
@@ -110,7 +114,8 @@ class AuthController(
 		}
 		val csrf = if (settings.required && signedIn != null && token != null) logins.csrfFor(token) else null
 		val pending = settings.required && logins.ownersWithoutPassword().isNotEmpty()
-		return AuthState(settings.mode.wire, settings.secure, ref, csrf, pending)
+		val admin = person != null && administration.isAdministrator(person)
+		return AuthState(settings.mode.wire, settings.secure, ref, csrf, pending, admin, admin && administration.setupPending())
 	}
 }
 

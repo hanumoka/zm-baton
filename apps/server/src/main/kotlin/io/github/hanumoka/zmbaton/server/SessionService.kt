@@ -284,6 +284,18 @@ class SessionService(
 		return ended.size
 	}
 
+	/** Revokes every session credential, including legacy registrations without a current device. */
+	@Transactional
+	fun endForPerson(person: String): Int {
+		val ended = jdbc.sql("update agent_sessions set ended_at = now() where user_id = :person and ended_at is null and deregistered_at is null returning id")
+			.param("person", person).query(String::class.java).list()
+		for (id in ended) {
+			closeWaits(id!!)
+			audit("system", SYSTEM_ACTOR, "session.ended", "ses", id, mapOf("reason" to "person_inactive"))
+		}
+		return ended.size
+	}
+
 	private fun apply(session: SessionRow, seq: Long, kind: String, payload: Map<String, Any?>) {
 		when (kind) {
 			// Only a newer summary replaces the current one. Each summary carries its own sharing
