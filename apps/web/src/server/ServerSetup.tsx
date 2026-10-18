@@ -14,6 +14,8 @@ export function ServerSetup({ auth, onChanged }: { auth: AuthState; onChanged: (
   const [loaded, setLoaded] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const inFlight = useRef(false);
+  const changed = useRef(onChanged);
+  changed.current = onChanged;
   const organizationInput = useRef<HTMLInputElement>(null);
   const why = !loaded ? '기존 설정을 먼저 불러온다' : !organization.trim() ? '조직 이름을 입력한다' : !name.trim() ? '관리자 이름을 입력한다' : null;
 
@@ -23,17 +25,17 @@ export function ServerSetup({ auth, onChanged }: { auth: AuthState; onChanged: (
     setError(null);
     void serverApi.view(controller.signal).then((view) => {
       if (controller.signal.aborted) return;
-      if (view.initialized_at) { onChanged(); return; }
-      setOrganization(view.organization_name);
-      setName(view.administrator_name);
+      if (view.initialized_at) { changed.current(); return; }
+      setOrganization(view.organization_name === 'owner' ? '' : view.organization_name);
+      setName(view.administrator_name === 'owner' ? '' : view.administrator_name);
       setLoaded(true);
     }).catch((e: unknown) => {
       if (controller.signal.aborted) return;
       setError(e instanceof Error ? e.message : String(e));
-      if (e instanceof ApiError && e.status === 403) onChanged();
+      if (e instanceof ApiError && e.status === 403) changed.current();
     });
     return () => controller.abort();
-  }, [refresh, onChanged]);
+  }, [refresh]);
 
   useEffect(() => { if (loaded) organizationInput.current?.focus(); }, [loaded]);
 
@@ -69,7 +71,7 @@ export function ServerSetup({ auth, onChanged }: { auth: AuthState; onChanged: (
       <p className="au-brand">zm-baton</p>
       <form className="au-form wn server-setup" aria-labelledby="server-setup-title" aria-busy={busy || (!loaded && !error)} onSubmit={(event) => void submit(event)}>
         <h1 id="server-setup-title" className="dt-title">내 조직의 서버 시작하기</h1>
-        <p className="wn-lead">기존 이름을 확인하고 이 서버의 관리를 시작한다. 필요한 이름만 바꿀 수 있다.</p>
+        <p className="wn-lead">조직과 관리자 이름을 확인하고 이 서버의 관리를 시작한다. 필요한 이름만 바꿀 수 있다.</p>
         {!loaded && !error && <RowSkeleton rows={2} />}
         {loaded && <><label className="wn-label">조직 이름
           <input ref={organizationInput} className="field" value={organization} onChange={(event) => setOrganization(event.target.value)} maxLength={100} autoComplete="organization" required disabled={busy || !loaded} />
