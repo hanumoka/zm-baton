@@ -10,21 +10,23 @@ import secrets
 from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright, expect
+from setup_recovery import evidence_directory
 
 
 def main():
     base = os.environ["BATON_PREVIEW_URL"].rstrip("/")
     assert urlparse(base).hostname in {"localhost", "127.0.0.1"}, "preview must be local"
     token = os.environ["BATON_SETUP_TOKEN"]
-    out = Path(os.environ["BATON_EVIDENCE_DIR"])
-    out.mkdir(parents=True, exist_ok=True)
+    out = evidence_directory(os.environ["BATON_EVIDENCE_DIR"])
     password = secrets.token_urlsafe(24)
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
         owner = browser.new_context(viewport={"width": 1440, "height": 1000})
         page = owner.new_page()
         errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        page.on("pageerror", lambda _: errors.append('pageerror'))
+        page.on("console", lambda event: errors.append('console error') if event.type == 'error' else None)
+        page.on("requestfailed", lambda request: errors.append('network failure') if request.failure != 'net::ERR_ABORTED' else None)
 
         def call(ctx, method, path, data=None, expected=200):
             state = ctx.request.get(base + "/api/auth/state").json()
@@ -64,8 +66,10 @@ def main():
         })
         # Complete the main setup using the keyboard, starting from the auto-focused field.
         page.get_by_label("조직 이름", exact=True).focus()
+        page.keyboard.press("ControlOrMeta+A")
         page.keyboard.type("Preview Team")
         page.keyboard.press("Tab")
+        page.keyboard.press("ControlOrMeta+A")
         page.keyboard.type("Preview Administrator")
         page.keyboard.press("Tab")
         page.keyboard.press("Enter")
@@ -91,8 +95,12 @@ def main():
             "b": ".dt-grid{display:flex;flex-direction:column}.dt-aside{order:-1;border-left:0}.dt-aside .dt-sec{padding:var(--s-3) 0}.dt-main{width:100%}",
             "c": ".dt-grid{display:flex;flex-direction:row-reverse;gap:var(--s-4)}.dt-main{flex:1}.dt-aside{flex:0 1 var(--w-list);border-left:0}.dt-facts{display:grid;grid-template-columns:1fr 1fr}@media(max-width:600px){.dt-grid{flex-direction:column}.dt-aside{flex:auto}.dt-facts{grid-template-columns:1fr}}",
         })
-        page.get_by_role("checkbox").check()
-        page.get_by_role("button", name="서버 관리 넘기기", exact=True).click()
+        page.get_by_label("넘겨받을 구성원").focus()
+        page.keyboard.press("Tab")
+        page.keyboard.press("Space")
+        page.keyboard.press("Tab")
+        expect(page.get_by_role("button", name="서버 관리 넘기기", exact=True)).to_be_focused()
+        page.keyboard.press("Enter")
         expect(page.get_by_role("heading", name="서버 관리", exact=True)).not_to_be_visible()
         call(owner, "GET", "/api/server", expected=403)
         assert call(member_ctx, "GET", "/api/server")["administrator_user_id"] == member
@@ -108,4 +116,12 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as error:
+        import sys
+        import traceback
+        trace = traceback.extract_tb(error.__traceback__)
+        own = next((frame for frame in reversed(trace) if Path(frame.filename).resolve() == Path(__file__).resolve()), trace[-1])
+        print(f'FAIL: {type(error).__name__} at {own.name}:{own.lineno}', file=sys.stderr)
+        raise SystemExit(1)
