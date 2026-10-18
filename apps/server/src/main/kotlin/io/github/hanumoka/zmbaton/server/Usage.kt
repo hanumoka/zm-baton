@@ -517,7 +517,7 @@ class UsageService(
 			"""
 			insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, notify)
 			values (:id, :user, 5, 'notice', 'ntc', :notice, :summary, cast(:detail as jsonb), :notify)
-			on conflict (source_id) where state = 'open' and kind = 'notice' do nothing
+			on conflict (source_id, user_id) where state = 'open' and kind = 'notice' do nothing
 			""".trimIndent(),
 		).param("id", Ids.inbox()).param("user", person).param("notice", id).param("summary", summary.take(300))
 			.param("detail", evidenceJson).param("notify", if (immediate) "immediate" else "digest").update()

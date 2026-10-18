@@ -154,14 +154,16 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 			if (existing.second == "resolved") sessions.audit("system", MasterCheckService.ACTOR, "notice.reopened", "ntc", id, details)
 			if (existing.second != "open" && existing.second != "resolved") return id
 		}
-		jdbc.sql(
-			"""
-			insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, notify)
-			values (:id, :user, 5, 'notice', 'ntc', :notice, :summary, cast(:detail as jsonb), 'digest')
-			on conflict (source_id) where state = 'open' and kind = 'notice' do nothing
-			""".trimIndent(),
-		).param("id", Ids.inbox()).param("user", recipients(c).first()).param("notice", id)
-			.param("summary", "모순 후보: ${c.left.label}, ${c.right.label}".take(300)).param("detail", evidenceJson).update()
+		for (recipient in recipients(c).distinct()) {
+			jdbc.sql(
+				"""
+				insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, notify)
+				values (:id, :user, 5, 'notice', 'ntc', :notice, :summary, cast(:detail as jsonb), 'digest')
+				on conflict (source_id, user_id) where state = 'open' and kind = 'notice' do nothing
+				""".trimIndent(),
+			).param("id", Ids.inbox()).param("user", recipient).param("notice", id)
+				.param("summary", "모순 후보: ${c.left.label}, ${c.right.label}".take(300)).param("detail", evidenceJson).update()
+		}
 		return id
 	}
 
@@ -173,7 +175,7 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 	/**
 	 * The owners of the two items (contract "문서 모순 후보" 4): a document's owner, a decision's driver
 	 * when the driver is a person of the organisation, else the decision's owner (V13). With neither,
-	 * the owner of the items' organisation. The first one gets the notice's first-screen item.
+	 * the owner of the items' organisation. Each gets their own first-screen item.
 	 */
 	private fun recipients(c: Candidate): List<String> {
 		val people = listOf(c.left, c.right).mapNotNull { item ->
@@ -210,12 +212,13 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 		val all = jdbc.sql(
 			"""
 			select n.id, n.status, n.evidence::text, n.repeat_count, n.created_at, n.last_seen_at, n.status_by, n.status_at, n.status_note,
-			       (select i.id from inbox_items i where i.source_kind = 'ntc' and i.source_id = n.id and i.state = 'open' limit 1)
+			       (select i.id from inbox_items i where i.source_kind = 'ntc' and i.source_id = n.id and i.state = 'open'
+			          and (cast(:person as text) is null or i.user_id = :person) limit 1)
 			  from notices n
 			 where n.kind = 'doc_contradiction' and n.evidence -> 'sides' @> cast(:side as jsonb)
 			 order by n.last_seen_at desc, n.id desc limit 200
 			""".trimIndent(),
-		).param("side", side).query { rs, _ -> view(rs) }.list().filter { reader?.allows(it.id) != false }
+		).param("side", side).param("person", viewer?.person).query { rs, _ -> view(rs) }.list().filter { reader?.allows(it.id) != false }
 		val open = all.filter { includeClosed || it.status in setOf("open", "acknowledged") }
 		val checks = jdbc.sql(
 			"""
