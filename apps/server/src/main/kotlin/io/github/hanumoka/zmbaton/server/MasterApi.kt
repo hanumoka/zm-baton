@@ -165,6 +165,7 @@ class MasterApiRunner(
 	private val usage: UsageService,
 	private val settings: MasterApiSettings,
 	private val client: MasterApiClient,
+	private val masterAccess: MasterAccess,
 	transactions: PlatformTransactionManager,
 ) {
 	companion object {
@@ -235,6 +236,7 @@ class MasterApiRunner(
 	 * RunService.claim without a device. A run whose account is stopped now ends before any request.
 	 */
 	private fun claim(runId: String): Claimed? {
+		if (masterAccess.refuseClaim(runId)) return null
 		val account = jdbc.sql("select account_id from runs where id = :id and state = 'requested'").param("id", runId)
 			.query(String::class.java).optional().orElse(null)
 		val block = account?.let { usage.account(it) }?.let { usage.block(it) }

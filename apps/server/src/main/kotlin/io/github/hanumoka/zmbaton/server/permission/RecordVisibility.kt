@@ -31,23 +31,26 @@ class RecordVisibility(private val jdbc: JdbcClient, private val facts: Permissi
 			// Checks and their notices can point back to each other. The outer traversal still
 			// checks every leaf; do not memoize these composite nodes while a cycle is open.
 			if (!resolving.add(id)) return true
-			val visible = when (kind) {
-				"wrk" -> see(facts.workItem(id))
-				"dcs" -> see(facts.decision(id))
-				"doc" -> see(facts.document(id))
-				"qst" -> see(facts.question(id))
-				"rvw" -> see(facts.review(id))
-				"run" -> see(facts.run(id))
-				"mnt" -> see(facts.note(id))
-				"dvr" -> parent("document_versions", "doc_id", id)
-				"dlg" -> parent("delegations", "work_item_id", id)
-				"inp" -> parent("run_inputs", "run_id", id)
-				"apv" -> parent("approvals", "target_id", id)
-				"mck" -> evidence("master_checks", id)
-				"ntc" -> evidence("notices", id)
-				else -> false
+			val visible = try {
+				when (kind) {
+					"wrk" -> see(facts.workItem(id))
+					"dcs" -> see(facts.decision(id))
+					"doc" -> see(facts.document(id))
+					"qst" -> see(facts.question(id))
+					"rvw" -> see(facts.review(id))
+					"run" -> see(facts.run(id))
+					"mnt" -> see(facts.note(id))
+					"dvr" -> parent("document_versions", "doc_id", id)
+					"dlg" -> parent("delegations", "work_item_id", id)
+					"inp" -> parent("run_inputs", "run_id", id)
+					"apv" -> parent("approvals", "target_id", id)
+					"mck" -> evidence("master_checks", id)
+					"ntc" -> evidence("notices", id)
+					else -> false
+				}
+			} finally {
+				resolving.remove(id)
 			}
-			resolving.remove(id)
 			if (kind !in setOf("mck", "ntc")) cache[id] = visible
 			return visible
 		}

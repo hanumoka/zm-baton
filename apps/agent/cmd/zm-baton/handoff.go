@@ -213,7 +213,8 @@ func inside(path, root string) bool {
 }
 
 // agentCmd is `zm-baton agent`: runs the work items handed to this device, each in its own
-// worktree of a registered repository. Exit codes: 0 done, 1 failed, 2 bad flags, 130 Ctrl+C.
+// worktree of a registered repository. Exit codes: 0 done, 1 failed, 2 bad flags,
+// 78 server-worker credentials revoked, 130 Ctrl+C.
 func agentCmd(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	fs.SetOutput(stderr)

@@ -160,7 +160,17 @@ class PermissionFacts(private val jdbc: JdbcClient) {
 					"wrk", id, rs.getString(1), Visibility.stored(rs.getString(2)), rs.getString(3), setOfNotNull(rs.getString(4)),
 					projects, teamsOf(projects), "no work item $id",
 				)
-			}.optional().orElse(null)
+			}.optional().orElse(null)?.let { work ->
+				val sources = jdbc.sql("select source.kind, source.id from master_checks mc cross join lateral (${MasterVisibility.REFERENCES}) source where mc.work_item_id = :id")
+					.param("id", id).query { rs, _ -> rs.getString(1) to rs.getString(2) }.list().distinct()
+				work.copy(requiredParents = sources.map { (kind, source) ->
+					when (kind) {
+						"doc" -> source?.let { document(it) }
+						"dcs" -> source?.let { decision(it) }
+						else -> null
+					} ?: Target("missing", source ?: "unknown", "", Visibility.PERSONAL)
+				})
+			}
 
 	fun decision(id: String): Target? =
 		jdbc.sql(

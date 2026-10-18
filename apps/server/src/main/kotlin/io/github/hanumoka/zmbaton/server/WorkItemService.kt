@@ -345,13 +345,15 @@ class WorkItemService(
 	 * Work items a person holds: responsible for, or executing themselves or through their manager
 	 * (contract "현재 상태 카드" 1). Open ones first, work under way first, then the most recently changed.
 	 */
-	fun involving(personId: String, managerId: String?, limit: Int): List<WorkItemView> =
-		jdbc.sql(
+	fun involving(personId: String, managerId: String?, limit: Int): List<WorkItemView> {
+		val scope = PermissionRules.filter(facts.person(personId), ScopeColumns.WORK_ITEMS)
+		return jdbc.sql(
 			"""
-			$SELECT_VIEW where w.responsible_user_id = :p or w.executor_id in (:who)
+			$SELECT_VIEW where (w.responsible_user_id = :p or w.executor_id in (:who)) and ${scope.sql}
 			 order by (w.stage in ('done', 'cancelled')), (w.stage = 'in_progress') desc, w.updated_at desc, w.id desc limit :limit
 			""".trimIndent(),
-		).param("p", personId).param("who", listOfNotNull(personId, managerId)).param("limit", limit).query { rs, _ -> view(rs) }.list()
+		).param("p", personId).param("who", listOfNotNull(personId, managerId)).param("limit", limit).params(scope.params).query { rs, _ -> view(rs) }.list()
+	}
 
 	fun detail(id: String): WorkItemDetail {
 		val row = load(id) ?: throw NotFoundException("no work item $id")

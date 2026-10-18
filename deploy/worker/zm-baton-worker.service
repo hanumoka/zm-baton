@@ -16,6 +16,7 @@ ExecStart=/opt/zm-baton/bin/zm-baton agent --server-worker --claude /opt/zm-bato
 Restart=on-failure
 RestartSec=10
 RestartPreventExitStatus=2 78
+SuccessExitStatus=130
 KillSignal=SIGINT
 KillMode=control-group
 TimeoutStopSec=45

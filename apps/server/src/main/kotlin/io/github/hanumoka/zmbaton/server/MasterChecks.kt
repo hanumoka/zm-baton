@@ -1,6 +1,7 @@
 package io.github.hanumoka.zmbaton.server
 
 import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.PermissionRules
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -146,6 +147,11 @@ class MasterCheckService(
 		val forWhom = forOrg(org)
 		fun skip(reason: String) = insert(forWhom, e.trigger, subjects, project, "skipped", null, emptyList(), reason)
 		if (rows.isEmpty()) return skip("바뀐 문서나 결정을 찾지 못했다")
+		val executor = access.person(forWhom.owner)
+		if (rows.any { row ->
+			val target = if (row.kind == "decision") access.decision(row.id) else row.documentId?.let(access::document)
+			target == null || !PermissionRules.canSee(executor, target)
+		}) return skip("자동 검사를 실행할 조직 소유자가 원본 자료를 볼 수 없어 실행하지 않았다")
 		if (e.trigger == "zm_docs_import" && rows.size > settings.importLimit) {
 			return skip("가져오기 한 번에 채택된 결정 ${rows.size}건이 바뀌었다. 한 번에 묶어 비교하는 ${settings.importLimit}건을 넘어 만들지 않았다")
 		}
@@ -155,7 +161,7 @@ class MasterCheckService(
 		val used = usedToday()
 		if (used >= settings.dailyLimit) return skip("오늘 자동 모순 찾기 ${settings.dailyLimit}회를 다 썼다. 내일 0시부터 다시 센다")
 		val items = withText.mapIndexed { i, s -> material.subjectItem("S${i + 1}", s, settings.subjectChars) } +
-			material.compare(withText, settings.compareLimit, settings.comparedChars)
+			material.compare(withText, settings.compareLimit, settings.comparedChars, executor)
 		if (items.none { it.key.startsWith("C") }) {
 			return skip("비교할 문서·결정이 없다. 같은 프로젝트에 승인된 문서나 채택된 결정이 없거나 겹치는 낱말이 없다")
 		}
