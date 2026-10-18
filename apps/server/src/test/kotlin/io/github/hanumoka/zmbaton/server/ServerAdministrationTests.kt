@@ -27,13 +27,18 @@ class ServerAdministrationTests @Autowired constructor(
 	private val initialize = """{"organization_name":"시험 조직","administrator_name":"최초 관리자"}"""
 	private fun web() = AuthHttp(base, json)
 	private fun owner() = web().signIn(logins)
+	private lateinit var previousNames: Pair<String, String>
 
 	@BeforeEach fun reset() {
+		previousNames = jdbc.sql("select o.name, u.display_name from organizations o join users u on u.id = 'usr_owner' where o.id = 'org_owner'")
+			.query { rs, _ -> rs.getString(1) to rs.getString(2) }.single()
 		jdbc.sql("update server_installation set administrator_user_id = 'usr_owner', initialized_at = null, initialized_by = null where id = 1").update()
 		throttle.succeeded(listOf("setup:127.0.0.1", "setup:0:0:0:0:0:0:0:1", "setup:::1"))
 	}
 
 	@AfterEach fun restoreAdministrator() {
+		jdbc.sql("update organizations set name = :name where id = 'org_owner'").param("name", previousNames.first).update()
+		jdbc.sql("update users set display_name = :name where id = 'usr_owner'").param("name", previousNames.second).update()
 		jdbc.sql("update server_installation set administrator_user_id = 'usr_owner', initialized_at = null, initialized_by = null where id = 1").update()
 	}
 
