@@ -32,6 +32,16 @@ class AuthLocalTests @Autowired constructor(
 ) {
 	private val http = AuthHttp("http://localhost:" + env.getRequiredProperty("local.server.port"), json)
 
+	@Test fun `local mode reports login administration unavailable and refuses issuance`() {
+		val id = "usr_" + UUID.randomUUID()
+		jdbc.sql("insert into users (id, display_name) values (:id, 'local member')").param("id", id).update()
+		jdbc.sql("insert into memberships (org_id, user_id, roles) values ('org_owner', :id, '{requester}')").param("id", id).update()
+		val (code, body) = http.call("GET", "/api/org/people/$id/login")
+		assertEquals(200, code, body)
+		assertEquals(false, http.obj(body)["can_issue"])
+		assertEquals(409, http.call("POST", "/api/org/people/$id/login/setup").first)
+	}
+
 	private fun registerSession(device: String, token: String?): Int =
 		http.call(
 			"POST", "/api/sessions",

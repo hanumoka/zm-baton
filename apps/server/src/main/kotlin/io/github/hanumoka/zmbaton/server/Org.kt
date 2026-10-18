@@ -2,6 +2,8 @@ package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Actor
+import io.github.hanumoka.zmbaton.server.permission.Target
 import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
 import io.github.hanumoka.zmbaton.server.permission.PermissionRules
 import io.github.hanumoka.zmbaton.server.permission.Permissions
@@ -96,6 +98,7 @@ data class OrgView(
 	val links: List<OrgLinkView>,
 	/** Whether the person asking may change the structure (role operator). */
 	@JsonProperty("can_manage") val canManage: Boolean,
+	@JsonProperty("can_manage_logins") val canManageLogins: Boolean = false,
 )
 
 data class PersonIn(@JsonProperty("display_name") val displayName: String, val roles: List<String> = emptyList())
@@ -121,7 +124,7 @@ class OrgService(private val jdbc: JdbcClient, private val facts: PermissionFact
 
 	// ---------------------------------------------------------------- read
 
-	fun view(orgId: String, canManage: Boolean): OrgView {
+	fun view(orgId: String, canManage: Boolean, actor: Actor? = null): OrgView {
 		val (name, owner) = jdbc.sql("select name, owner_user_id from organizations where id = :org").param("org", orgId)
 			.query { rs, _ -> rs.getString(1) to rs.getString(2) }.optional().orElseThrow { NotFoundException("no organisation $orgId") }
 		val teamMembers = pairs("select tm.team_id, tm.user_id from team_members tm join teams t on t.id = tm.team_id where t.org_id = :org", orgId)
@@ -175,6 +178,7 @@ class OrgService(private val jdbc: JdbcClient, private val facts: PermissionFact
 			orgId, name, owner, people.count { it.status == "active" } <= 1,
 			Role.entries.map { LabelView(it.wire, it.label) }, Visibility.entries.map { LabelView(it.wire, it.label) }, ENVIRONMENT_KINDS,
 			people, teams, products, projects, repositories, environments, links, canManage,
+			actor != null && PermissionRules.check(actor, Act.LOGIN_MANAGE, Target("org", orgId, orgId, owner = owner)).allowed,
 		)
 	}
 
@@ -235,6 +239,10 @@ class OrgService(private val jdbc: JdbcClient, private val facts: PermissionFact
 			val status = patch["status"] as? String
 			if (status !in setOf("active", "inactive")) throw BadRequestException("status must be active or inactive")
 			jdbc.sql("update users set status = :s where id = :id").param("s", status).param("id", id).update()
+			if (status == "inactive") {
+				jdbc.sql("update web_logins set ended_at = now() where user_id = :id and ended_at is null").param("id", id).update()
+				jdbc.sql("update setup_tokens set dropped_at = now() where user_id = :id and used_at is null and dropped_at is null").param("id", id).update()
+			}
 			changed["status"] = status
 		}
 		if (changed.isEmpty()) throw BadRequestException("nothing to change")
@@ -426,7 +434,7 @@ class OrgController(private val org: OrgService, private val permissions: Permis
 	@GetMapping
 	fun view(@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): OrgView {
 		val me = permissions.person(authorization, "read the organisation", Act.READ)
-		return org.view(me.orgId!!, PermissionRules.check(me, Act.ORG_MANAGE).allowed)
+		return org.view(me.orgId!!, PermissionRules.check(me, Act.ORG_MANAGE).allowed, me)
 	}
 
 	@PatchMapping
@@ -436,7 +444,7 @@ class OrgController(private val org: OrgService, private val permissions: Permis
 	): OrgView {
 		val me = permissions.person(authorization, "rename the organisation", Act.ORG_MANAGE)
 		org.rename(me.person!!, body["name"] as? String ?: throw BadRequestException("name is required"))
-		return org.view(me.orgId!!, true)
+		return org.view(me.orgId!!, true, me)
 	}
 
 	@PostMapping("/people")
@@ -444,7 +452,7 @@ class OrgController(private val org: OrgService, private val permissions: Permis
 	fun addPerson(@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?, @RequestBody body: PersonIn): OrgView {
 		val me = permissions.person(authorization, "add a person", Act.ORG_MANAGE)
 		org.addPerson(me.person!!, body)
-		return org.view(me.orgId!!, true)
+		return org.view(me.orgId!!, true, me)
 	}
 
 	@PatchMapping("/people/{id}")
@@ -455,7 +463,7 @@ class OrgController(private val org: OrgService, private val permissions: Permis
 	): OrgView {
 		val me = permissions.person(authorization, "change a person", Act.ORG_MANAGE)
 		org.updatePerson(me.person!!, id, body)
-		return org.view(me.orgId!!, true)
+		return org.view(me.orgId!!, true, me)
 	}
 
 	/** `kind`: teams, products, projects, repositories or environments. */
@@ -468,7 +476,7 @@ class OrgController(private val org: OrgService, private val permissions: Permis
 	): OrgView {
 		val me = permissions.person(authorization, "add to the organisation", Act.ORG_MANAGE)
 		org.createItem(me.person!!, singular(kind), body)
-		return org.view(me.orgId!!, true)
+		return org.view(me.orgId!!, true, me)
 	}
 
 	@PatchMapping("/{kind}/{id}")
@@ -481,7 +489,7 @@ class OrgController(private val org: OrgService, private val permissions: Permis
 		val me = permissions.person(authorization, "change the organisation", Act.ORG_MANAGE)
 		singular(kind)
 		org.updateItem(me.person!!, id, body)
-		return org.view(me.orgId!!, true)
+		return org.view(me.orgId!!, true, me)
 	}
 
 	@PutMapping("/{kind}/{id}/members")
@@ -494,14 +502,14 @@ class OrgController(private val org: OrgService, private val permissions: Permis
 		val me = permissions.person(authorization, "change members", Act.ORG_MANAGE)
 		singular(kind)
 		org.setMembers(me.person!!, id, body.userIds)
-		return org.view(me.orgId!!, true)
+		return org.view(me.orgId!!, true, me)
 	}
 
 	@PostMapping("/links")
 	fun link(@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?, @RequestBody body: LinkIn): OrgView {
 		val me = permissions.person(authorization, "link organisation items", Act.ORG_MANAGE)
 		org.link(me.person!!, body)
-		return org.view(me.orgId!!, true)
+		return org.view(me.orgId!!, true, me)
 	}
 
 	@DeleteMapping("/links")
@@ -512,7 +520,7 @@ class OrgController(private val org: OrgService, private val permissions: Permis
 	): OrgView {
 		val me = permissions.person(authorization, "unlink organisation items", Act.ORG_MANAGE)
 		org.unlink(me.person!!, fromId, toId)
-		return org.view(me.orgId!!, true)
+		return org.view(me.orgId!!, true, me)
 	}
 
 	private fun singular(kind: String): String = when (kind) {

@@ -1,4 +1,5 @@
 import { useId, type ReactNode, type Ref } from 'react';
+import { PersonLoginControl } from './PersonLoginControl';
 import { Icon } from '../icons/Icon';
 import type { OrgPerson, OrgView } from '../orgApi';
 import { visibilityLabel, VISIBILITY_NOTES } from '../ui/visibility';
@@ -171,6 +172,7 @@ function Body({ org, id, kind, run, refusal, onOpen }: { org: OrgView; id: strin
 function PersonSections({ org, person, can, run, refusal, onOpen }: { org: OrgView; person: OrgPerson; can: boolean; run: Run; refusal: Refusal; onOpen: (id: string) => void }) {
   return (
     <>
+      {org.can_manage_logins && <PersonLoginControl personId={person.id} name={person.display_name} />}
       <section className="dt-sec">
         <h3>역할</h3>
         {can ? (
