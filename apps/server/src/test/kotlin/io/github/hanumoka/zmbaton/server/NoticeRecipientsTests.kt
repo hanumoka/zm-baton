@@ -1,10 +1,13 @@
 package io.github.hanumoka.zmbaton.server
 
+import io.github.hanumoka.zmbaton.server.auth.LoginService
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
+import org.springframework.core.env.Environment
 import org.springframework.jdbc.core.simple.JdbcClient
+import tools.jackson.databind.ObjectMapper
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -12,12 +15,28 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 @Import(TestcontainersConfiguration::class)
-@SpringBootTest
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+	properties = ["zm-baton.auth.mode=required", "zm-baton.auth.bcrypt-strength=4"])
 class NoticeRecipientsTests @Autowired constructor(
 	private val sessions: SessionService, private val org: OrgService, private val people: PersonService,
 	private val recovery: NoticeInboxRecovery, private val jdbc: JdbcClient,
 	private val usage: UsageService, private val accounts: AccountService, private val workItems: WorkItemService,
+	env: Environment, private val json: ObjectMapper, private val logins: LoginService,
 ) {
+	private val base = "http://localhost:" + env.getRequiredProperty("local.server.port")
+
+	private fun signedIn(person: String): AuthHttp {
+		val web = AuthHttp(base, json)
+		val token = logins.issueSetupToken(person, "first_password").first
+		val setup = web.send("POST", "/api/auth/setup", json.writeValueAsString(mapOf(
+			"setup_token" to token, "login" to "notice-${UUID.randomUUID()}", "password" to AuthHttp.OWNER_PASSWORD,
+		)), signedIn = false)
+		assertEquals(200, setup.status)
+		web.takeCookie(setup)
+		web.csrf = web.obj(setup.body)["csrf_token"] as String
+		return web
+	}
+
 	@Test fun `second worker on a shared account receives and can judge the repeated usage notice`() {
 		val other = org.addPerson("usr_owner", PersonIn("shared account recipient", listOf("requester", "assignee")))
 		val account = accounts.register(mapOf("name" to "shared ${UUID.randomUUID()}", "auth_kind" to "api_key"), "usr_owner").account.id
@@ -29,6 +48,9 @@ class NoticeRecipientsTests @Autowired constructor(
 			"work_item_id" to work, "cause" to "daily_budget"), "shared account limit", true)
 		raise(a)
 		val notice = people.inbox("usr_owner").single { it.detail?.get("work_item_id") == a }.sourceId
+		val otherWeb = signedIn(other)
+		assertEquals(403, otherWeb.call("POST", "/api/notices/$notice/status", """{"status":"resolved"}""").first,
+			"before receiving the repeat, the other person cannot judge the notice")
 		raise(b)
 		raise(b)
 		assertEquals(1, people.inbox(other).count { it.sourceId == notice })
@@ -36,7 +58,8 @@ class NoticeRecipientsTests @Autowired constructor(
 		val recipients = jdbc.sql("select array_to_string(recipients, ',') from notices where id = :id").param("id", notice).query(String::class.java).single().split(',')
 		assertEquals(setOf("usr_owner", other), recipients.toSet())
 		assertEquals(2, recipients.size, "repeated delivery does not duplicate judgement authority")
-		people.judgeNotice(notice, NoticeStatusIn("resolved"), other)
+		assertEquals(200, otherWeb.call("POST", "/api/notices/$notice/status", """{"status":"resolved"}""").first,
+			"the repeated notice grants judgement through the authenticated HTTP permission path")
 		assertFalse(people.inbox("usr_owner").any { it.sourceId == notice })
 		assertFalse(people.inbox(other).any { it.sourceId == notice })
 	}

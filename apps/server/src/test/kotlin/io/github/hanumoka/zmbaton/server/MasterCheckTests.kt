@@ -1,6 +1,8 @@
 package io.github.hanumoka.zmbaton.server
 
 import io.github.hanumoka.zmbaton.server.permission.PermissionFacts
+import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Permissions
 
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -47,6 +49,7 @@ class MasterCheckTests @Autowired constructor(
 	private val org: OrgService,
 	private val facts: PermissionFacts,
 	private val people: PersonService,
+	private val permissions: Permissions,
 ) {
 	private val base = "http://localhost:" + env.getRequiredProperty("local.server.port")
 	private val http = HttpClient.newHttpClient()
@@ -288,6 +291,11 @@ class MasterCheckTests @Autowired constructor(
 		val open = ok("GET", "/api/contradictions?about=$a")["open"] as List<*>
 		assertEquals(listOf(notice), open.map { (it as Map<*, *>)["id"] })
 		assertEquals(1, people.inbox(newOwner).count { it.sourceId == notice })
+		val recipients = jdbc.sql("select array_to_string(recipients, ',') from notices where id = :id")
+			.param("id", notice).query(String::class.java).single().split(',')
+		assertEquals(setOf("usr_owner", newOwner), recipients.toSet())
+		assertEquals(2, recipients.size)
+		permissions.require(facts.person(newOwner), Act.NOTICE_JUDGE, permissions.notice(notice))
 		people.judgeNotice(notice, NoticeStatusIn("resolved"), newOwner)
 		assertTrue(people.inbox(newOwner).none { it.sourceId == notice })
 		assertTrue(people.inbox("usr_owner").none { it.sourceId == notice })

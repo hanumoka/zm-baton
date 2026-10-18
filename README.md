@@ -12,7 +12,7 @@
 - 문서마다 정본 위치(제품 안 / Git)를 하나로 정하고, 제품 안 문서는 판을 쌓아 승인한다. 쓰는 방법은 [docs/stage1/documents.md](docs/stage1/documents.md)에 있다.
 - 조직(사람·역할·팀·제품·프로젝트·저장소·환경)을 서버에 두고, 「누가 무엇을 해도 되나」를 서버의 한 판정기가 역할과 공유 범위(개인·제한·팀·조직·공개)로 정한다. 사람마다 매니저 기록(상태 카드·작업·세션·개인 메모)이 있다. 기본 모드에서는 요청한 사람이 늘 소유자이고, 로그인을 요구하는 모드에서는 로그인한 사람이다. 쓰는 방법은 [docs/stage1/org-and-permissions.md](docs/stage1/org-and-permissions.md)에 있다.
 - 데이터베이스는 매일 백업되고, 손으로 백업·복원하고 백업을 먼저 뜬 뒤 업데이트하는 스크립트가 있다([docs/stage1/backup-restore-update.md](docs/stage1/backup-restore-update.md)). 감사 기록·보존 규칙·내보내기는 [docs/stage1/audit-retention-export.md](docs/stage1/audit-retention-export.md)에 있다.
-- `work/preview-final`의 독립 서버 시험판은 최초 서버 관리자·구성원·계정·백그라운드 AI 실행을 연결한다. [확인·정책 선택·반영·되돌리기 안내](docs/stage1/independent-preview-guide.md)에 검증된 범위와 남은 조직 API·OS 검증을 구분했다. 최종 소유자 확인 전에는 병합·기존 운영 적용을 하지 않는다.
+- 독립 서버 시험판은 최초 서버 관리자·구성원·계정·백그라운드 AI 실행을 연결한다. [확인·정책 선택·반영·되돌리기 안내](docs/stage1/independent-preview-guide.md)에 2026-10-18 검증 시점의 범위와 남은 조직 API·OS 검증을 구분했다. 이후 승인·반영 여부는 PR #53에서 확인한다.
 - 변경은 PR로 들어온다. 모든 PR에 CI가 돈다. 검토 기준은 [docs/review-standard.md](docs/review-standard.md)에 있다.
 
 ## 구성
