@@ -82,7 +82,10 @@ type Config struct {
 	ExecutorDir string
 	// MasterDir holds one empty working folder per master run (master.go). Empty refuses master runs.
 	MasterDir string
-	Log       *slog.Logger
+	// ServerWorker refuses personal subscription/fallback credentials and unlimited claims.
+	// Use it for a continuously running shared server process, not an interactive personal connector.
+	ServerWorker bool
+	Log          *slog.Logger
 }
 
 // Job is what one claimed run executes. The compat-test loop builds it from its flags; the
