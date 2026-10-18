@@ -507,6 +507,7 @@ class UsageService(
 			values (:id, 'usage_alert', cast(:e as jsonb), :key, array[:person])
 			on conflict (dedupe_key) do update
 			   set repeat_count = notices.repeat_count + 1, last_seen_at = now(), evidence = excluded.evidence,
+			       recipients = array(select distinct recipient from unnest(notices.recipients || excluded.recipients) as recipient order by recipient),
 			       status = 'open', status_by = null, status_at = null, status_note = null
 			returning id
 			""".trimIndent(),

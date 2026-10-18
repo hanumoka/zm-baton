@@ -16,7 +16,31 @@ import kotlin.test.assertTrue
 class NoticeRecipientsTests @Autowired constructor(
 	private val sessions: SessionService, private val org: OrgService, private val people: PersonService,
 	private val recovery: NoticeInboxRecovery, private val jdbc: JdbcClient,
+	private val usage: UsageService, private val accounts: AccountService, private val workItems: WorkItemService,
 ) {
+	@Test fun `second worker on a shared account receives and can judge the repeated usage notice`() {
+		val other = org.addPerson("usr_owner", PersonIn("shared account recipient", listOf("requester", "assignee")))
+		val account = accounts.register(mapOf("name" to "shared ${UUID.randomUUID()}", "auth_kind" to "api_key"), "usr_owner").account.id
+		fun work(person: String) = workItems.create(CreateWorkItem("shared account work", person, acceptance = "checked", executorKind = "human"), "usr_owner").id
+		val a = work("usr_owner")
+		val b = work(other)
+		val key = "usage_alert|account|daily_budget|$account|2026-10-18"
+		fun raise(work: String) = usage.raise(key, mapOf("notice_kind" to "usage_alert", "account_id" to account,
+			"work_item_id" to work, "cause" to "daily_budget"), "shared account limit", true)
+		raise(a)
+		val notice = people.inbox("usr_owner").single { it.detail?.get("work_item_id") == a }.sourceId
+		raise(b)
+		raise(b)
+		assertEquals(1, people.inbox(other).count { it.sourceId == notice })
+		assertEquals(1, people.inbox("usr_owner").count { it.sourceId == notice })
+		val recipients = jdbc.sql("select array_to_string(recipients, ',') from notices where id = :id").param("id", notice).query(String::class.java).single().split(',')
+		assertEquals(setOf("usr_owner", other), recipients.toSet())
+		assertEquals(2, recipients.size, "repeated delivery does not duplicate judgement authority")
+		people.judgeNotice(notice, NoticeStatusIn("resolved"), other)
+		assertFalse(people.inbox("usr_owner").any { it.sourceId == notice })
+		assertFalse(people.inbox(other).any { it.sourceId == notice })
+	}
+
 	private data class Fixture(val person: String, val key: String, val a: SessionRegistered, val b: SessionRegistered, val notice: String)
 
 	private fun touch(s: SessionRegistered, key: String, seq: Long) = sessions.ingest(s.sessionId, s.token,
