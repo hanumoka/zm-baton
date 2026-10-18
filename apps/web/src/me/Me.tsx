@@ -51,6 +51,7 @@ export function Me({ onError, onRead, auth = LOCAL_FALLBACK, onAuthChanged = () 
   const access = (
     <>
       {required && <SignedIn auth={auth} onAuthChanged={onAuthChanged} />}
+      {auth.server_admin && <section className="dt-sec"><h2 className="me-h">서버 관리자</h2><a className="btn" href="#server">서버 관리 열기</a></section>}
       <MyDevices
         auth={auth}
         onEnterCode={(c) => {
