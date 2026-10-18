@@ -7,3 +7,8 @@
   cursor: pointer;
 }
 .server-confirm input { flex: none; margin-top: var(--s-1); }
+
+.server-setup .au-switch .btn { min-height: var(--h-ctl); }
+@media (max-width: 600px) {
+  .server-setup .btn, .server-setup .au-switch .btn, .server-setup .field { min-height: var(--h-touch); }
+}
