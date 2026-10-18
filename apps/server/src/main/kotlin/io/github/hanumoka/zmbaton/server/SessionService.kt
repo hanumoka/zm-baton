@@ -497,7 +497,7 @@ class SessionService(
 
 	/**
 	 * [sessionId] is the session whose report revealed the conflict: the actor of the audit row. The
-	 * people of both sessions receive the notice; its one first-screen item goes to the first of them.
+	 * people of both sessions receive their own first-screen item for the shared notice.
 	 */
 	private fun raiseConflict(dedupeKey: String, evidence: Map<String, Any?>, summary: String, sessionId: String, recipients: List<String>) {
 		val evidenceJson = json.writeValueAsString(evidence)
@@ -534,14 +534,16 @@ class SessionService(
 			if (status != "open" && status != "resolved") return
 		}
 		// "진행 중인 내 작업과 겹친 충돌" is raised at once (DEC-0092 5).
-		jdbc.sql(
-			"""
-			insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, notify)
-			values (:id, :user, 3, 'notice', 'ntc', :notice, :summary, cast(:detail as jsonb), 'immediate')
-			on conflict (source_id) where state = 'open' and kind = 'notice' do nothing
-			""".trimIndent(),
-		).param("id", Ids.inbox()).param("user", recipients.first()).param("notice", noticeId).param("summary", summary)
-			.param("detail", evidenceJson).update()
+		for (recipient in recipients.distinct()) {
+			jdbc.sql(
+				"""
+				insert into inbox_items (id, user_id, bucket, kind, source_kind, source_id, summary, detail, notify)
+				values (:id, :user, 3, 'notice', 'ntc', :notice, :summary, cast(:detail as jsonb), 'immediate')
+				on conflict (source_id, user_id) where state = 'open' and kind = 'notice' do nothing
+				""".trimIndent(),
+			).param("id", Ids.inbox()).param("user", recipient).param("notice", noticeId).param("summary", summary)
+				.param("detail", evidenceJson).update()
+		}
 	}
 
 	/** What an audit row keeps of a conflict: the file and the sessions, not the branch names or times. */

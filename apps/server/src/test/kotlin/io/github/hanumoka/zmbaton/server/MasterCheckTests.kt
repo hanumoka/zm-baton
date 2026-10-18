@@ -160,8 +160,8 @@ class MasterCheckTests @Autowired constructor(
 		val notice = ((checkFor(versionId(b))["outcome"] as Map<*, *>)["notice_ids"] as List<*>).single() as String
 		val recipients = jdbc.sql("select array_to_string(recipients, ',') from notices where id = :id").param("id", notice).query(String::class.java).single()
 		assertEquals(setOf(other, "usr_owner"), recipients.split(',').toSet(), "the owners of both documents")
-		assertEquals(other, jdbc.sql("select user_id from inbox_items where source_id = :id").param("id", notice).query(String::class.java).single(),
-			"the first-screen item goes to the subject's owner")
+		assertEquals(setOf(other, "usr_owner"), jdbc.sql("select user_id from inbox_items where source_id = :id").param("id", notice).query(String::class.java).list().toSet(),
+			"both record owners receive an inbox item")
 		assertTrue(a.isNotEmpty())
 	}
 
