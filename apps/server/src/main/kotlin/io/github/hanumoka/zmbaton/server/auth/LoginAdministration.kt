@@ -50,7 +50,7 @@ class LoginAdministration(
 	fun issue(@PathVariable id: String, @RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?): ResponseEntity<LoginSetupView> {
 		val me = owner(authorization)
 		val state = state(me, id)
-		if (!state.canIssue) throw ConflictException(state.reason!!)
+		if (!state.canIssue) throw ConflictException(state.reason ?: "설정 코드를 발급할 수 없다")
 		val (token, until) = logins.issueSetupToken(id, if (state.login == null) "first_password" else "reset", me.person)
 		return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(LoginSetupView(token, until))
 	}

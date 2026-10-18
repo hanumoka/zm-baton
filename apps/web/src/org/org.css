@@ -59,6 +59,8 @@
 .org-refused { margin-top: var(--s-2); }
 
 .org-login > .btn, .org-login-confirm { margin-top: var(--s-3); }
+.org-login-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s-2); }
+.org-login-header h3 { margin: 0; }
 .org-login-code { margin-top: var(--s-4); padding-top: var(--s-3); border-top: var(--rule) solid var(--c-rule); }
 .org-login-code label { display: grid; gap: var(--s-2); font-size: var(--fs-sm); }
 .org-login-code textarea { width: 100%; min-width: 0; overflow-wrap: anywhere; resize: vertical; }

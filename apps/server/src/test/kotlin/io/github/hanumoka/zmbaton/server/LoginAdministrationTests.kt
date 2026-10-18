@@ -15,7 +15,6 @@ import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 @Import(TestcontainersConfiguration::class)
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
@@ -53,7 +52,10 @@ class LoginAdministrationTests @Autowired constructor(
 		val admin = owner()
 		val id = member()
 		assertEquals(true, admin.obj(admin.call("GET", "/api/org").second)["can_manage_logins"])
-		val before = admin.obj(admin.call("GET", path(id)).second)
+		val read = admin.send("GET", path(id))
+		assertEquals(200, read.status, read.body)
+		assertContains(read.headers["cache-control"].toString(), "no-store")
+		val before = admin.obj(read.body)
 		assertNull(before["login"])
 		assertNull(before["pending_until"])
 		assertEquals(true, before["can_issue"])
@@ -91,8 +93,15 @@ class LoginAdministrationTests @Autowired constructor(
 		assertEquals(409, admin.call("POST", path("usr_owner") + "/setup").first)
 		assertEquals(403, admin.send("POST", path(id) + "/setup", csrfHeader = "wrong").status)
 		assertEquals(401, web().call("POST", path(id) + "/setup").first)
-		val device = admin.device("login-administration-test").second
-		assertTrue(web().call("POST", path(id) + "/setup", bearer = device).first in setOf(401, 403))
+		val (deviceId, deviceToken) = admin.device("login-administration-test")
+		assertEquals(403, web().call("POST", path(id) + "/setup", bearer = deviceToken).first)
+		val (registered, sessionBody) = admin.call("POST", "/api/sessions",
+			"""{"protocol_version":2,"device_id":"$deviceId","executor":"claude_code","executor_session_id":"${UUID.randomUUID()}"}""",
+			bearer = deviceToken, signedIn = false)
+		assertEquals(201, registered, sessionBody)
+		val sessionToken = admin.obj(sessionBody)["token"] as String
+		assertEquals(403, admin.call("GET", path(id), bearer = sessionToken).first)
+		assertEquals(403, admin.call("POST", path(id) + "/setup", bearer = sessionToken).first)
 	}
 
 	@Test fun `reissue expires previous token and a used reset ends old logins`() {

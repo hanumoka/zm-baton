@@ -128,6 +128,7 @@ enum class Act(
 	ACCOUNTS("accounts", "AI 계정 관리", setOf(Role.OPERATOR), personOnly = true),
 	DEVICE("device", "기기 저장소 관리", relation = Relation.INVOLVED, override = Role.OPERATOR),
 	ORG_MANAGE("org.manage", "조직 구조 관리", setOf(Role.OPERATOR), personOnly = true),
+	// The target is the organisation: SELF means its owner, not the member whose password is being set.
 	LOGIN_MANAGE("login.manage", "구성원 로그인 관리", relation = Relation.SELF, personOnly = true),
 	AUDIT_READ("audit.read", "감사 기록 보기", setOf(Role.OPERATOR), personOnly = true),
 	EXPORT("export", "내보내기", setOf(Role.OPERATOR), personOnly = true),

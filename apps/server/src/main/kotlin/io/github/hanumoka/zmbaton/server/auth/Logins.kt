@@ -129,8 +129,8 @@ class LoginService(
 	}
 
 	/**
-	 * Sets a password with a one-time setup token (a first password, or a reset the server's operator
-	 * asked for) and signs the person in. The token is used up in the same transaction that stores the
+	 * Sets a password with a one-time code issued by the organisation owner or server recovery,
+	 * and signs the person in. The token is used up in the same transaction that stores the
 	 * password, so a refused password leaves the token usable.
 	 */
 	fun setup(setupToken: String, login: String, password: String, remote: String?): SignedIn {
@@ -169,7 +169,7 @@ class LoginService(
 		if (signedIn == null) {
 			throttle.failed(keys)
 			sessions.audit("system", SessionService.SYSTEM_ACTOR, "auth.setup_refused", "usr", null, emptyMap())
-			throw UnauthorizedException("설정 코드가 유효하지 않다. 이미 사용했거나 기한이 지났을 수 있다. 조직 소유자에게 새 코드를 요청한다")
+			throw UnauthorizedException("설정 코드가 유효하지 않다. 이미 사용했거나 기한이 지났을 수 있다. 구성원은 조직 소유자에게 새 코드를 요청하고, 최초 소유자는 서버를 다시 시작해 새 코드를 확인한다")
 		}
 		throttle.succeeded(keys)
 		return signedIn
@@ -182,7 +182,7 @@ class LoginService(
 		data class Row(val login: String, val hash: String)
 		val row = jdbc.sql("select login, password_hash from person_passwords where user_id = :p").param("p", person)
 			.query { rs, _ -> Row(rs.getString(1), rs.getString(2)) }.optional().orElse(null)
-			?: throw ConflictException("아직 비밀번호가 없다. 처음 비밀번호는 서버 기록의 설정 토큰으로 정한다")
+			?: throw ConflictException("아직 비밀번호가 없다. 조직 소유자에게 받은 설정 코드로 첫 비밀번호를 정한다. 최초 소유자는 서버 시작 기록을 확인한다")
 		if (!encoder.matches(current, row.hash)) {
 			throttle.failed(keys)
 			sessions.audit("person", person, "auth.password_change_refused", "usr", person, emptyMap())
@@ -202,7 +202,7 @@ class LoginService(
 
 	/**
 	 * A one-time setup token for [person], valid [SETUP_HOURS] hours or until used. Earlier unused tokens
-	 * of the person are dropped. Only the hash is stored; the caller shows the token once (AuthStartup).
+	 * of the person are dropped. Only the hash is stored; the Web response or AuthStartup shows it once.
 	 */
 	fun issueSetupToken(person: String, reason: String, issuer: String? = null): Pair<String, OffsetDateTime> {
 		val token = Tokens.new(Tokens.SETUP)
@@ -259,7 +259,7 @@ class LoginService(
 		).param("id", id).param("p", person).param("hash", Tokens.hash(token)).param("idle", IDLE_DAYS).update()
 		sessions.audit("person", person, action, "usr", person, mapOf("login_id" to id))
 		SignedIn(token, person, id)
-	}!!
+	}
 
 	private fun hash(password: String): String = encoder.encode(password) ?: error("BCrypt gave no hash")
 

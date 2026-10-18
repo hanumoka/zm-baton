@@ -37,7 +37,7 @@ describe('the sign-in screen', () => {
     expect(html).toContain('type="password"');
     expect(html).toMatch(/<button type="submit" class="btn btn-primary" disabled="">로그인<\/button>/);
     expect(html).toContain('아이디를 넣는다');
-    expect(html).toContain('설정 토큰으로 비밀번호 정하기');
+    expect(html).toContain('설정 코드로 비밀번호 정하기');
   });
 
   it('opens on the first password while no owner has one, and says where the setup token is', () => {
@@ -46,7 +46,7 @@ describe('the sign-in screen', () => {
     expect(html).toContain('zmbt_');
     expect(html).toContain('조직 소유자에게 받은 설정 코드');
     expect(html).toContain('최초 소유자는 서버 시작 기록');
-    expect(html).toContain('설정 토큰을 넣는다');
+    expect(html).toContain('설정 코드를 넣는다');
     expect(html).toContain('로그인으로 돌아가기');
   });
 

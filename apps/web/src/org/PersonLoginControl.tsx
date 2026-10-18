@@ -1,5 +1,6 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { orgApi, type LoginSetup, type PersonLogin } from '../orgApi';
+import { at } from '../workModel';
 
 /** 코드 원문은 이 화면의 메모리에만 둔다. 사람을 바꾸거나 화면을 닫으면 다시 표시하지 않는다. */
 export function PersonLoginControl({ personId, name }: { personId: string; name: string }) {
@@ -11,6 +12,9 @@ export function PersonLoginControl({ personId, name }: { personId: string; name:
   const [copied, setCopied] = useState(false);
   const [revision, setRevision] = useState(0);
   const noteId = useId();
+  const codeRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => { if (issued) codeRef.current?.focus(); }, [issued]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -54,14 +58,17 @@ export function PersonLoginControl({ personId, name }: { personId: string; name:
 
   return (
     <section className="dt-sec org-login" aria-busy={busy || (!state && !error) || undefined}>
-      <h3>로그인 계정</h3>
+      <div className="org-login-header">
+        <h3>로그인 계정</h3>
+        <button type="button" className="btn btn-quiet" disabled={busy} onClick={() => { setIssued(null); setRevision((r) => r + 1); }}>로그인 상태 새로고침</button>
+      </div>
       {state ? (
         <>
           <p className="org-note">{state.login ? <>아이디 <strong>{state.login}</strong></> : '아직 첫 비밀번호를 설정하지 않았다.'}</p>
-          {state.pending_until && <p className="org-note">설정 코드 사용 대기 · <time dateTime={state.pending_until}>{date(state.pending_until)}</time>까지</p>}
+          {state.pending_until && <p className="org-note">설정 코드 사용 대기: <time dateTime={state.pending_until}>{at(state.pending_until)}</time>까지</p>}
           {state.can_issue ? (
             <>
-              <p className="org-note" id={noteId}>코드는 24시간 동안 한 번 사용할 수 있다. 새로 발급하면 이전 코드는 만료된다. {state.login ? '본인이 코드를 사용하면 비밀번호가 바뀌고 기존 웹 로그인이 종료된다.' : `${name} 님이 로그인 화면의 ‘처음 비밀번호 정하기’에서 아이디와 비밀번호를 정한다.`}</p>
+              <p className="org-note" id={noteId}>코드는 24시간 동안 한 번 사용할 수 있다. 새로 발급하면 이전 코드는 만료된다. {state.login ? '본인이 코드를 사용하면 비밀번호가 바뀌고 기존 웹 로그인이 종료된다.' : `${name} 님이 로그인 화면의 ‘설정 코드로 비밀번호 정하기’에서 아이디와 비밀번호를 정한다.`} {(state.login || state.pending_until) && '아래 확인란을 선택하면 발급할 수 있다.'}</p>
               {(state.login || state.pending_until) && (
                 <label className="check org-login-confirm">
                   <input type="checkbox" checked={confirmed} disabled={busy} onChange={(e) => setConfirmed(e.target.checked)} />
@@ -78,9 +85,9 @@ export function PersonLoginControl({ personId, name }: { personId: string; name:
       {issued && (
         <div className="org-login-code">
           <label>한 번만 표시하는 설정 코드
-            <textarea className="field" readOnly rows={3} value={issued.setup_token} spellCheck={false} onFocus={(e) => e.target.select()} />
+            <textarea ref={codeRef} className="field mono" readOnly rows={3} value={issued.setup_token} spellCheck={false} onFocus={(e) => e.target.select()} />
           </label>
-          <p className="org-note" role="status">{name} 님에게 이 서버 주소와 코드를 직접 전달한다. <time dateTime={issued.expires_at}>{date(issued.expires_at)}</time>까지 사용할 수 있다. 화면을 닫으면 코드를 다시 볼 수 없다.</p>
+          <p className="org-note" role="status">{name} 님에게 이 서버 주소와 코드를 직접 전달한다. <time dateTime={issued.expires_at}>{at(issued.expires_at)}</time>까지 사용할 수 있다. 화면을 닫으면 코드를 다시 볼 수 없다.</p>
           <div className="org-login-actions">
             <button type="button" className="btn" onClick={() => void copyCode()}>{copied ? '복사함' : '코드 복사'}</button>
             <button type="button" className="btn btn-quiet" onClick={() => setIssued(null)}>코드 숨기기</button>
@@ -88,11 +95,6 @@ export function PersonLoginControl({ personId, name }: { personId: string; name:
         </div>
       )}
       {error && <p className="org-note org-refused" role="alert">{error}</p>}
-      <button type="button" className="btn btn-quiet" disabled={busy} onClick={() => { setIssued(null); setRevision((r) => r + 1); }}>로그인 상태 새로고침</button>
     </section>
   );
-}
-
-function date(value: string) {
-  return new Date(value).toLocaleString('ko-KR');
 }

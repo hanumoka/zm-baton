@@ -70,7 +70,7 @@ class AuthController(
 		return stateFor(request, signed.person, signed.token)
 	}
 
-	/** The first password (or a reset), with the one-time setup token from the server's log. Signs in too. */
+	/** The first password or reset, with a one-time code from the organisation owner or server recovery. Signs in too. */
 	@Access(AccessKind.PUBLIC)
 	@PostMapping("/setup")
 	fun setup(@RequestBody body: SetupIn, request: HttpServletRequest, response: HttpServletResponse): AuthState {
