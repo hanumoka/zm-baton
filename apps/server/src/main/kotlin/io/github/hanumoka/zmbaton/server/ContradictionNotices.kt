@@ -2,6 +2,8 @@ package io.github.hanumoka.zmbaton.server
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import io.github.hanumoka.zmbaton.server.permission.Act
+import io.github.hanumoka.zmbaton.server.permission.Actor
+import io.github.hanumoka.zmbaton.server.permission.RecordVisibility
 import io.github.hanumoka.zmbaton.server.permission.Permissions
 import org.springframework.http.HttpHeaders
 import org.springframework.jdbc.core.simple.JdbcClient
@@ -101,7 +103,8 @@ data class MasterSettingsView(
 )
 
 @Service
-class ContradictionNotices(private val jdbc: JdbcClient, private val json: ObjectMapper, private val sessions: SessionService) {
+class ContradictionNotices(private val jdbc: JdbcClient, private val json: ObjectMapper, private val sessions: SessionService,
+	private val visibility: RecordVisibility) {
 
 	companion object {
 		const val CHECKS_SHOWN = 5
@@ -201,7 +204,8 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 	// ---------------------------------------------------------------- reads
 
 	/** Candidates and checks about one document (`doc_`) or decision (`dcs_`). */
-	fun about(id: String, includeClosed: Boolean): ContradictionsAbout {
+	fun about(id: String, includeClosed: Boolean, viewer: Actor? = null): ContradictionsAbout {
+		val reader = viewer?.let { visibility.reader(it) }
 		val side = json.writeValueAsString(listOf(mapOf("id" to id)))
 		val all = jdbc.sql(
 			"""
@@ -211,7 +215,7 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 			 where n.kind = 'doc_contradiction' and n.evidence -> 'sides' @> cast(:side as jsonb)
 			 order by n.last_seen_at desc, n.id desc limit 200
 			""".trimIndent(),
-		).param("side", side).query { rs, _ -> view(rs) }.list()
+		).param("side", side).query { rs, _ -> view(rs) }.list().filter { reader?.allows(it.id) != false }
 		val open = all.filter { includeClosed || it.status in setOf("open", "acknowledged") }
 		val checks = jdbc.sql(
 			"""
@@ -220,7 +224,7 @@ class ContradictionNotices(private val jdbc: JdbcClient, private val json: Objec
 			 order by created_at desc, id desc limit :n
 			""".trimIndent(),
 		).param("side", side).param("doc", json.writeValueAsString(listOf(mapOf("document_id" to id)))).param("n", CHECKS_SHOWN)
-			.query { rs, _ -> check(rs) }.list()
+			.query { rs, _ -> check(rs) }.list().filter { reader?.allows(it.id) != false }
 		return ContradictionsAbout(open, all.count { it.status !in setOf("open", "acknowledged") }, checks)
 	}
 
@@ -270,6 +274,7 @@ class ContradictionController(
 	private val settings: MasterSettings,
 	private val api: MasterApiSettings,
 	private val permissions: Permissions,
+	private val visibility: RecordVisibility,
 ) {
 
 	/** `GET /api/contradictions?about=doc_…` (or `dcs_…`): its open candidates and its newest checks. */
@@ -283,7 +288,7 @@ class ContradictionController(
 		val id = about.trim()
 		if (!(id.startsWith("doc_") || id.startsWith("dcs_")) || id.length > 100) throw BadRequestException("about must be a document (doc_…) or decision (dcs_…)")
 		permissions.see(me, if (id.startsWith("doc_")) permissions.document(id) else permissions.decision(id))
-		return notices.about(id, includeClosed)
+		return notices.about(id, includeClosed, me)
 	}
 
 	@GetMapping("/master-checks/{id}")
@@ -291,7 +296,8 @@ class ContradictionController(
 		@RequestHeader(HttpHeaders.AUTHORIZATION, required = false) authorization: String?,
 		@org.springframework.web.bind.annotation.PathVariable id: String,
 	): MasterCheckView {
-		permissions.person(authorization, "read a master check", Act.READ)
+		val me = permissions.person(authorization, "read a master check", Act.READ)
+		if (!visibility.reader(me).allows(id)) throw NotFoundException("no master check $id")
 		return notices.check(id)
 	}
 
